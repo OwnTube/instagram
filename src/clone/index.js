@@ -25,7 +25,12 @@ const busboy = require('busboy');
 const { createPasswordCodec } = require('./passwordEncryption');
 const { createMediaStore, MAX_BYTES } = require('./media');
 const { createGraphql } = require('./graphql');
+const fs = require('node:fs');
 const { attachViewer, csrfCheck, ensureCsrfCookie } = require('./session');
+const { resolveSession } = require('../backend/lib/auth');
+const users = require('../backend/services/users');
+
+const RUNTIME_SOURCE = fs.readFileSync(path.join(__dirname, '..', 'shell', 'runtime.js'), 'utf8');
 const { igOk, igFail, errorHandler, privateHeaders } = require('./respond');
 const { auth: authLimiter, general: generalLimiter, middleware: limit } = require('../backend/lib/ratelimit');
 const { unauthorized, badRequest } = require('../backend/lib/errors');
@@ -184,6 +189,11 @@ function createClone({ db, dataDir = '.data', logger = console, env = process.en
       signup: { requireEmailCode: config.requireEmailCode, mailTransport: mailer.transport },
     })
   );
+  router.get('/__clone/runtime.js', (req, res) => {
+    res.setHeader('cache-control', 'no-cache');
+    res.type('application/javascript').send(RUNTIME_SOURCE);
+  });
+  router.all('/__clone/dropped', (req, res) => res.status(204).end());
   router.get('/__clone/static/default-avatar.svg', (req, res) => {
     res.setHeader('cache-control', 'public, max-age=86400');
     res.type('image/svg+xml').send(DEFAULT_AVATAR_SVG);
@@ -226,7 +236,24 @@ function createClone({ db, dataDir = '.data', logger = console, env = process.en
   });
   router.use(errorHandler(logger));
 
-  return { router, codec, media, graphql, config, classify };
+  /** The signed-in clone viewer for a document request, or null. */
+  function viewerFor(req) {
+    const resolved = resolveSession(db, req);
+    const user = resolved ? users.getById(db, resolved.session.user_id) : null;
+    return user && user.status === 'active' ? { user, session: resolved.session } : null;
+  }
+
+  /** What a page needs to be personalised for this browser. */
+  function documentContext(req, res) {
+    const found = viewerFor(req);
+    return {
+      viewer: found ? found.user : null,
+      csrfToken: found ? found.session.csrf_secret : ensureCsrfCookie(req, res),
+      encryption: codec.clientConfig(),
+    };
+  }
+
+  return { router, codec, media, graphql, config, classify, viewerFor, documentContext };
 }
 
 module.exports = { createClone, classify };

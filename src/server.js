@@ -7,7 +7,13 @@ const { fetchUpstream, UpstreamError } = require('./upstream');
 const backendApp = require('./backend');
 const backendConfig = require('./backend/config');
 const { createClone, classify } = require('./clone');
-const { ensureCsrfCookie } = require('./clone/session');
+const { personalize } = require('./shell/personalize');
+const { routeKind, createTemplateStore } = require('./shell/templates');
+const { createPatcher } = require('./shell/bundlePatches');
+
+const templates = createTemplateStore({ dir: process.env.SHELL_TEMPLATE_DIR || '.cache/shell' });
+const patcher = createPatcher();
+const dropPrefetches = process.env.SHELL_DROP_PREFETCHES !== '0';
 const {
   rewriteHtml,
   rewriteCss,
@@ -211,6 +217,12 @@ app.get('/__ig/:host/*', async (req, res) => {
     let body = upstream.body;
     if (type.includes('text/css')) {
       body = Buffer.from(rewriteCss(body.toString('utf8')), 'utf8');
+    } else if (patcher.count && /javascript|ecmascript/.test(type)) {
+      const patched = patcher.apply(body.toString('utf8'));
+      if (patched.applied.length) {
+        body = Buffer.from(patched.source, 'utf8');
+        res.setHeader('x-clone-patches', patched.applied.join(','));
+      }
     }
 
     const entry = {
@@ -264,6 +276,7 @@ app.get('/__loader/health', (req, res) => {
       ? { mounted: true, prefix: backendApp.prefix, health: `${backendApp.prefix}/api/v1/health` }
       : { mounted: false },
     clone: cloneInstance ? { mounted: true, health: '/__clone/health' } : { mounted: false },
+    shell: { templates: templates.available(), dropPrefetches, bundlePatches: patcher.report() },
     recentFailures: failures.slice(0, 25),
   });
 });
@@ -291,6 +304,18 @@ app.all('*', async (req, res) => {
   }
   const target = `${config.upstream}${req.originalUrl}`;
   const isDocumentGet = req.method === 'GET' || req.method === 'HEAD';
+
+  // A signed-in clone viewer on an app route gets the signed-in shell from a
+  // captured template, personalised for them. Upstream is not contacted.
+  if (isDocumentGet && cloneInstance) {
+    const kind = routeKind(req.path);
+    const viewer = kind ? cloneInstance.viewerFor(req) : null;
+    const template = viewer ? templates.load(kind) : null;
+    if (template) {
+      res.setHeader('x-clone-shell', `template:${kind}`);
+      return sendHtml(req, res, 200, template, { fromTemplate: true });
+    }
+  }
 
   // Upstream documents are always fetched anonymously: no browser cookie is
   // ever relayed to Instagram (src/upstream.js strips them), so the upstream
@@ -330,7 +355,9 @@ app.all('*', async (req, res) => {
   };
   // The client sends an app-id header on its own API calls; pass it through
   // when present so those calls are shaped the way the origin expects.
-  for (const name of ['x-ig-app-id', 'x-csrftoken', 'x-requested-with', 'x-asbd-id', 'x-ig-www-claim']) {
+  // X-CSRFToken is deliberately absent: on this origin it is a clone
+  // session's CSRF secret and must never reach Instagram.
+  for (const name of ['x-ig-app-id', 'x-requested-with', 'x-asbd-id']) {
     const value = req.get(name);
     if (value) forwarded[name] = value;
   }
@@ -386,10 +413,7 @@ app.all('*', async (req, res) => {
       res.setHeader('x-loader-upstream', target);
       res.setHeader('x-loader-status', String(upstream.status));
       const isHtmlBody = contentTypeOf(upstream.headers).includes('text/html');
-      if (isHtmlBody) {
-        const rewrittenError = rewriteHtml(upstream.body.toString('utf8'));
-        return res.status(upstream.status).type('text/html; charset=utf-8').end(Buffer.from(rewrittenError, 'utf8'));
-      }
+      if (isHtmlBody) return sendHtml(req, res, upstream.status, rewriteHtml(upstream.body.toString('utf8')));
       return res.status(upstream.status).end(upstream.body);
     }
 
@@ -409,7 +433,6 @@ app.all('*', async (req, res) => {
       ? Buffer.from(rewriteHtml(upstream.body.toString('utf8')), 'utf8')
       : upstream.body;
 
-    if (isHtml) ensureCsrfCookie(req, res);
     if (cacheable) {
       docCache.set(documentKey(req), {
         body,
@@ -422,6 +445,7 @@ app.all('*', async (req, res) => {
       res.setHeader('x-loader-cache', 'miss');
     }
 
+    if (isHtml) return sendHtml(req, res, upstream.status, body.toString('utf8'));
     return res.status(upstream.status).end(body);
   } catch (error) {
     const status = error instanceof UpstreamError ? error.status : 502;
@@ -459,8 +483,22 @@ function documentKey(req) {
   return `doc:${variant}:${req.originalUrl}`;
 }
 
+/**
+ * Send an HTML document after per-request personalisation (our encryption key,
+ * this browser's CSRF token, the clone viewer). The result is specific to one
+ * browser, so it is never cacheable by anyone else.
+ */
+function sendHtml(req, res, status, html, { fromTemplate = false } = {}) {
+  const ctx = cloneInstance ? cloneInstance.documentContext(req, res) : { viewer: null, csrfToken: null, encryption: null };
+  const out = personalize(html, { ...ctx, dropPrefetches: fromTemplate || dropPrefetches });
+  markPrivate(res);
+  res.removeHeader('etag');
+  res.removeHeader('last-modified');
+  return res.status(status).type('text/html; charset=utf-8').end(Buffer.from(out, 'utf8'));
+}
+
 function sendDocument(res, entry) {
-  if (res.req && /text\/html/.test(entry.contentType)) ensureCsrfCookie(res.req, res);
+  if (/text\/html/.test(entry.contentType)) return sendHtml(res.req, res, 200, entry.body.toString('utf8'));
   res.setHeader('content-type', entry.contentType);
   if (entry.etag) res.setHeader('etag', entry.etag);
   if (!res.getHeader('cache-control')) {
