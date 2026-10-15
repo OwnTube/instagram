@@ -82,7 +82,8 @@ function csrfProtection() {
 
     const cookies = parseCookies(req.get('cookie'));
     const cookieValue = cookies[backend.csrfCookieName];
-    const headerValue = req.get('x-csrf-token');
+    // X-CSRFToken is the header the original Instagram client sends.
+    const headerValue = req.get('x-csrf-token') || req.get('x-csrftoken');
 
     // The header is the ONLY accepted source. Falling back to the cookie would
     // defeat the mechanism entirely: the browser attaches the cookie to a

@@ -31,12 +31,9 @@ const HOP_BY_HOP = new Set([
 /**
  * Headers we intentionally do NOT forward to the origin.
  *
- * `cookie` and `authorization` are dropped: this loader must never carry the
- * viewer's credentials upstream on its own behalf. A viewer's own session, when
- * viewer sessions are enabled, is passed explicitly through the `cookie` option
- * instead, so what reaches the origin is deliberate rather than incidental. The
- * origin otherwise sees an anonymous request, which is why the default fetch is
- * the logged-out variant.
+ * `cookie` and `authorization` are dropped unconditionally: browser cookies on
+ * this origin are clone sessions (`sessionid`, `csrftoken`, `ds_user_id`) and
+ * must never reach Instagram. The origin always sees an anonymous request.
  */
 const STRIPPED_REQUEST_HEADERS = new Set([
   ...HOP_BY_HOP,
@@ -78,20 +75,11 @@ function retryAfterMs(headers) {
  */
 async function fetchUpstream(
   url,
-  { method = 'GET', headers = {}, body, timeoutMs = config.requestTimeoutMs, cookie } = {},
+  { method = 'GET', headers = {}, body, timeoutMs = config.requestTimeoutMs } = {},
 ) {
   const canRetry = IDEMPOTENT_METHODS.has(method.toUpperCase());
   const attempts = canRetry ? Math.max(1, config.maxRetries + 1) : 1;
   let lastResponse = null;
-
-  // `cookie` carries a per-viewer session when one was supplied by that viewer
-  // (see viewerSessionCookie() in src/server.js). It is never a server-side
-  // credential: there is
-  // no configured account. When present the shared anonymous jar is bypassed,
-  // both because mixing an anonymous csrftoken with a session cookie produces a
-  // request the origin rejects, and because the origin's session-bearing
-  // Set-Cookie responses must not enter a jar that other viewers read from.
-  const viewerCookie = typeof cookie === 'string' && cookie.length ? cookie : null;
 
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     const controller = new AbortController();
@@ -105,13 +93,10 @@ async function fetchUpstream(
     }
     if (!outbound.has('user-agent')) outbound.set('user-agent', config.userAgent);
     if (!outbound.has('accept')) outbound.set('accept', '*/*');
-    if (viewerCookie) {
-      // The viewer's own session is used for that viewer's request only.
-      outbound.set('cookie', viewerCookie);
-    } else if (!outbound.has('cookie')) {
-      const cookie = cookieJar.header();
-      if (cookie) outbound.set('cookie', cookie);
-    }
+    // Only the loader's own anonymous jar is ever sent upstream; browser
+    // cookies were already dropped by STRIPPED_REQUEST_HEADERS.
+    const jarCookie = cookieJar.header();
+    if (jarCookie) outbound.set('cookie', jarCookie);
 
     try {
       const response = await fetch(url, {
@@ -122,9 +107,7 @@ async function fetchUpstream(
         ...(body && body.length ? { body } : {}),
       });
 
-      // Only anonymous responses feed the shared jar. A response to a
-      // session-bearing request can carry session state and must not be shared.
-      if (!viewerCookie) cookieJar.store(response.headers);
+      cookieJar.store(response.headers);
 
       if (canRetry && RETRYABLE_STATUSES.has(response.status) && attempt < attempts) {
         const advised = retryAfterMs(response.headers);

@@ -3,19 +3,11 @@
 /**
  * Viewer isolation regression tests.
  *
- * The loader once injected a single configured `IG_SESSIONID` upstream, which
- * made every visitor receive one account's personalised document. These tests
- * exist so that cannot come back, and so that the replacement mechanism —
- * per-viewer pass-through of the viewer's OWN session — cannot degrade into the
- * same bug.
- *
- * The properties under test are about what one viewer can observe of another:
- *
- *   - with no viewer session, everyone gets the same account-free document;
- *   - with viewer sessions enabled, a viewer's session is used for that
- *     viewer's request only, and never appears in another viewer's response;
- *   - personalised responses are never stored in a shared cache;
- *   - a viewer's session is never sent to asset hosts, and never echoed back.
+ * The loader once injected a single configured `IG_SESSIONID` upstream, and a
+ * later revision could relay a visitor's own Instagram cookies. Both are gone:
+ * cookies on this origin are clone sessions and must never reach Instagram.
+ * These tests pin that down, including when the legacy ALLOW_VIEWER_SESSIONS
+ * variable is still set in an old deployment's environment.
  *
  * A stand-in origin is used so the tests never contact Instagram and never need
  * a real credential. Sessions here are synthetic.
@@ -104,112 +96,47 @@ async function get(base, p = '/', cookie) {
 
 const identity = (body) => (body.match(/id="who">([^<]*)/) || [, null])[1];
 
-test('viewer isolation: anonymous by default', async (t) => {
-  await t.test('viewer sessions are off unless explicitly enabled', () => {
-    const config = loadWithEnv(path.join(SRC, 'config.js'), { ALLOW_VIEWER_SESSIONS: undefined });
-    assert.strictEqual(config.allowViewerSessions, false);
-    // The global-session mechanism is gone entirely.
+const LEGACY = { ALLOW_VIEWER_SESSIONS: '1' };
+
+test('viewer isolation: no Instagram session exists or is relayed', async (t) => {
+  await t.test('the global-session and relay mechanisms are gone from config', () => {
+    const config = loadWithEnv(path.join(SRC, 'config.js'), LEGACY);
+    assert.strictEqual(config.allowViewerSessions, undefined);
     assert.strictEqual(config.authMode, undefined);
     assert.strictEqual(config.sessionCookie, undefined);
   });
 
   await t.test('two independent viewers receive byte-identical documents', async () => {
-    const loader = await startLoader({ ALLOW_VIEWER_SESSIONS: undefined });
+    const loader = await startLoader(LEGACY);
     try {
-      const a = await get(loader.base, '/');
-      const b = await get(loader.base, '/', 'theme=dark; unrelated=1');
-      assert.strictEqual(a.body, b.body, 'an anonymous document must not vary by viewer');
+      const a = await get(loader.base, '/', `sessionid=${ALICE}; ds_user_id=111`);
+      const b = await get(loader.base, '/', `sessionid=${BOB}; ds_user_id=222`);
+      assert.strictEqual(a.body, b.body, 'the upstream document must not vary by viewer');
       assert.strictEqual(identity(a.body), 'anonymous');
     } finally {
       await loader.close();
     }
   });
 
-  await t.test('a session cookie is ignored while viewer sessions are disabled', async () => {
-    const loader = await startLoader({ ALLOW_VIEWER_SESSIONS: undefined });
+  await t.test('a browser sessionid is never forwarded upstream, even with the legacy flag', async () => {
+    const loader = await startLoader(LEGACY);
     try {
-      const res = await get(loader.base, '/', `sessionid=${ALICE}`);
-      assert.strictEqual(identity(res.body), 'anonymous');
-      const upstream = loader.received.at(-1);
-      assert.ok(!(upstream.cookie || '').includes(ALICE), 'the session must not be forwarded when disabled');
-    } finally {
-      await loader.close();
-    }
-  });
-});
-
-test('viewer isolation: one viewer never sees another', async (t) => {
-  await t.test('each viewer is served with their own session', async () => {
-    const loader = await startLoader({ ALLOW_VIEWER_SESSIONS: '1' });
-    try {
-      const alice = await get(loader.base, '/', `sessionid=${ALICE}; ds_user_id=111`);
-      const bob = await get(loader.base, '/', `sessionid=${BOB}; ds_user_id=222`);
-      assert.strictEqual(identity(alice.body), ALICE);
-      assert.strictEqual(identity(bob.body), BOB);
+      await get(loader.base, '/', `sessionid=${ALICE}; csrftoken=abc; tracking=1`);
+      for (const r of loader.received) {
+        assert.ok(!(r.cookie || '').includes(ALICE), 'a browser session must never reach the origin');
+        assert.ok(!(r.cookie || '').includes('tracking=1'), 'no browser cookie may reach the origin');
+      }
     } finally {
       await loader.close();
     }
   });
 
-  await t.test("viewer A's session never appears in viewer B's response", async () => {
-    const loader = await startLoader({ ALLOW_VIEWER_SESSIONS: '1' });
+  await t.test("viewer A's cookie never appears in viewer B's response", async () => {
+    const loader = await startLoader(LEGACY);
     try {
       await get(loader.base, '/', `sessionid=${ALICE}`);
       const bob = await get(loader.base, '/', `sessionid=${BOB}`);
-      assert.ok(!bob.body.includes(ALICE), "one viewer's session must never appear in another's response");
-    } finally {
-      await loader.close();
-    }
-  });
-
-  await t.test('an anonymous viewer is not served a personalised document', async () => {
-    const loader = await startLoader({ ALLOW_VIEWER_SESSIONS: '1' });
-    try {
-      // Prime with a personalised request first, so a cache leak would show up.
-      await get(loader.base, '/', `sessionid=${ALICE}`);
-      const anon = await get(loader.base, '/');
-      assert.strictEqual(identity(anon.body), 'anonymous', 'a personalised document must never be served anonymously');
-      assert.ok(!anon.body.includes(ALICE));
-    } finally {
-      await loader.close();
-    }
-  });
-
-  await t.test('a personalised document is never cached or shared', async () => {
-    const loader = await startLoader({ ALLOW_VIEWER_SESSIONS: '1' });
-    try {
-      const first = await get(loader.base, '/', `sessionid=${ALICE}`);
-      const second = await get(loader.base, '/', `sessionid=${ALICE}`);
-      assert.strictEqual(first.headers.get('x-loader-cache'), null, 'personalised responses must not be cached');
-      assert.strictEqual(second.headers.get('x-loader-cache'), null);
-      assert.strictEqual(first.headers.get('cache-control'), 'private, no-store, max-age=0');
-      assert.strictEqual(first.headers.get('x-loader-personalized'), 'true');
-    } finally {
-      await loader.close();
-    }
-  });
-
-  await t.test('only Instagram session cookies are relayed, not the whole header', async () => {
-    const loader = await startLoader({ ALLOW_VIEWER_SESSIONS: '1' });
-    try {
-      await get(loader.base, '/', `sessionid=${ALICE}; igloader_session=our-own-backend-cookie; tracking=abc`);
-      const upstream = loader.received.at(-1);
-      assert.match(upstream.cookie, /sessionid=/);
-      assert.ok(!upstream.cookie.includes('our-own-backend-cookie'), 'our own cookie must not leak upstream');
-      assert.ok(!upstream.cookie.includes('tracking=abc'), 'unrelated cookies must not leak upstream');
-    } finally {
-      await loader.close();
-    }
-  });
-
-  await t.test('a csrftoken alone does not make a viewer personalised', async () => {
-    // Instagram hands csrftoken to logged-out visitors; treating it as a
-    // session would mark anonymous traffic as personalised.
-    const loader = await startLoader({ ALLOW_VIEWER_SESSIONS: '1' });
-    try {
-      const res = await get(loader.base, '/', 'csrftoken=anon-token');
-      assert.strictEqual(identity(res.body), 'anonymous');
-      assert.strictEqual(res.headers.get('x-loader-personalized'), null);
+      assert.ok(!bob.body.includes(ALICE));
     } finally {
       await loader.close();
     }
@@ -217,11 +144,9 @@ test('viewer isolation: one viewer never sees another', async (t) => {
 });
 
 test('viewer isolation: a session never reaches asset hosts', async (t) => {
-  await t.test('the asset proxy does not forward a viewer session', async () => {
-    const loader = await startLoader({ ALLOW_VIEWER_SESSIONS: '1', ALLOWED_ASSET_HOSTS: 'cdn.example' });
+  await t.test('the asset proxy does not forward a browser cookie', async () => {
+    const loader = await startLoader({ ...LEGACY, ALLOWED_ASSET_HOSTS: 'cdn.example' });
     const seen = [];
-    // Capture the real fetch first: the loader and the test client must not
-    // share the mock, or the client request would be intercepted too.
     const realFetch = globalThis.fetch;
     globalThis.fetch = async (url, options) => {
       seen.push({ url: String(url), cookie: new Headers(options.headers).get('cookie') });
@@ -232,10 +157,7 @@ test('viewer isolation: a session never reaches asset hosts', async (t) => {
         headers: { cookie: `sessionid=${ALICE}` },
       });
       assert.strictEqual(res.status, 200);
-      assert.ok(
-        !seen.some((s) => (s.cookie || '').includes(ALICE)),
-        "a viewer's Instagram session must never be sent to an asset host",
-      );
+      assert.ok(!seen.some((s) => (s.cookie || '').includes(ALICE)));
     } finally {
       globalThis.fetch = realFetch;
       await loader.close();
@@ -245,30 +167,27 @@ test('viewer isolation: a session never reaches asset hosts', async (t) => {
 
 test('viewer isolation: nothing is echoed back to the browser', async (t) => {
   await t.test('the health endpoint reports no session material', async () => {
-    const loader = await startLoader({ ALLOW_VIEWER_SESSIONS: '1' });
+    const loader = await startLoader(LEGACY);
     try {
-      const res = await get(loader.base, '/__loader/health');
+      const res = await get(loader.base, '/__loader/health', `sessionid=${ALICE}`);
       const parsed = JSON.parse(res.body);
-      assert.deepStrictEqual(parsed.viewerSessions, { enabled: true });
-      assert.strictEqual(parsed.auth, undefined, 'no global session state should be reported');
-      assert.ok(!/sessionid/i.test(res.body), 'the health payload must carry no cookie material');
+      assert.deepStrictEqual(parsed.instagramSessions, { relayed: false, configured: false });
+      assert.ok(!res.body.includes(ALICE));
     } finally {
       await loader.close();
     }
   });
 
-  await t.test('an upstream Set-Cookie is stripped before reaching the browser', async () => {
+  await t.test('an upstream Set-Cookie can never overwrite clone cookies', async () => {
     const fake = await startFakeOrigin();
     const { app } = loadWithEnv(path.join(SRC, 'server.js'), {
       BACKEND_ENABLED: '0',
       UPSTREAM_ORIGIN: fake.origin,
-      ALLOW_VIEWER_SESSIONS: '1',
+      ...LEGACY,
     });
     const server = await new Promise((resolve) => {
       const s = app.listen(0, '127.0.0.1', () => resolve(s));
     });
-    // The loader's upstream call is mocked; the test client must use the real
-    // fetch, otherwise it would be answered by the mock rather than the loader.
     const realFetch = globalThis.fetch;
     globalThis.fetch = async () =>
       new Response('<html><body>ok</body></html>', {
@@ -277,9 +196,10 @@ test('viewer isolation: nothing is echoed back to the browser', async (t) => {
       });
     try {
       const res = await realFetch(`http://127.0.0.1:${server.address().port}/`, {
-        headers: { cookie: `sessionid=${ALICE}` },
+        headers: { cookie: `sessionid=${BOB}` },
       });
-      assert.strictEqual(res.headers.get('set-cookie'), null, 'no session cookie may reach the browser');
+      const setCookies = res.headers.getSetCookie();
+      assert.ok(!setCookies.some((c) => c.includes(ALICE)), 'an upstream cookie must never reach the browser');
       assert.ok(!(await res.text()).includes(`sessionid=${ALICE}`));
     } finally {
       globalThis.fetch = realFetch;

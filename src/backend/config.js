@@ -28,10 +28,15 @@ const backend = {
 
   databaseFile: process.env.BACKEND_DB || '.data/backend.db',
 
-  // Session cookies belong to this application only. They are never sent to
-  // Instagram, and they carry no Instagram credential of any kind.
-  cookieName: process.env.BACKEND_COOKIE || 'igloader_session',
-  csrfCookieName: process.env.BACKEND_CSRF_COOKIE || 'igloader_csrf',
+  // Clone session cookies, issued on OUR origin with the names the original
+  // client already understands: it echoes `csrftoken` as X-CSRFToken and reads
+  // `ds_user_id` for the viewer id. The values are ours; no Instagram credential
+  // exists anywhere in this system, and the loader never forwards browser
+  // cookies upstream (src/upstream.js strips them unconditionally).
+  cookieName: process.env.BACKEND_COOKIE || 'sessionid',
+  csrfCookieName: process.env.BACKEND_CSRF_COOKIE || 'csrftoken',
+  viewerCookieName: process.env.BACKEND_VIEWER_COOKIE || 'ds_user_id',
+  cookiePath: '/',
   sessionTtlMs: int(process.env.SESSION_TTL_MS, 7 * 24 * 60 * 60 * 1000),
   sessionRotateMs: int(process.env.SESSION_ROTATE_MS, 60 * 60 * 1000),
 

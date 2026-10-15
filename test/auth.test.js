@@ -18,11 +18,11 @@ test('auth lifecycle, sessions, CSRF and isolation', async (t) => {
     assert.ok(res.body.data.token);
     assert.ok(res.body.data.csrfToken);
     assert.strictEqual(res.body.data.user.username, 'alice');
-    // The session cookie is HttpOnly and scoped to the backend prefix.
+    // The session cookie is HttpOnly and scoped to the whole clone origin.
     const sessionCookie = res.setCookie.find((c) => c.startsWith(`${backend.cookieName}=`));
     assert.ok(sessionCookie, 'session cookie must be set');
     assert.match(sessionCookie, /HttpOnly/i);
-    assert.match(sessionCookie, /Path=\/__backend/i);
+    assert.match(sessionCookie, /Path=\/;/i);
   });
 
   await t.test('duplicate username is a 409', async () => {

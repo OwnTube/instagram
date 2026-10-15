@@ -66,33 +66,17 @@ const config = {
 };
 
 /*
- * There is deliberately no server-side Instagram session here.
+ * There is deliberately no Instagram session anywhere in this system.
  *
- * The loader is a logged-out mirror of the public client. It does not hold an
- * account, and it never presents one account's identity to every viewer. An
- * earlier revision injected a configured `IG_SESSIONID` upstream, which made
- * every visitor receive one account's personalised document; that is removed.
- *
- * Personalisation, when it exists at all, is per-viewer and comes from the
- * viewer's own browser session; see viewerSessionCookie() in src/server.js.
- * Nothing about a viewer is configured globally.
+ * An earlier revision injected a configured `IG_SESSIONID` upstream, and a later
+ * one could relay a visitor's own Instagram cookies. Both are removed. Upstream
+ * is used only to fetch the original client's code and anonymous documents;
+ * every clone user authenticates against our own backend (src/backend), and
+ * every clone-owned API call is answered by src/clone, never by Instagram.
  */
 
 // Prefix that rewritten asset URLs are served under, e.g.
 // https://<our-host>/__ig/static.cdninstagram.com/rsrc.php/v4/yC/r/x.js
 config.assetPrefix = '/__ig';
-
-/*
- * Per-viewer personalisation.
- *
- * When enabled, a viewer's own Instagram session cookies are relayed upstream
- * for that viewer's own requests, so each viewer sees their own account rather
- * than a shared one. Off by default: the loader is an anonymous mirror, and
- * turning this on means accepting traffic that carries credentials.
- *
- * This is not authentication. The loader has no login and no accounts of its
- * own; it only passes through a session the viewer already holds.
- */
-config.allowViewerSessions = bool(process.env.ALLOW_VIEWER_SESSIONS, false);
 
 module.exports = config;

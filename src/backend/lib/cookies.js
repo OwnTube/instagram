@@ -4,9 +4,10 @@
  * Cookie helpers.
  *
  * Only this application's own session cookies are handled here. They are scoped
- * to the backend prefix, HttpOnly (session) / readable (CSRF), SameSite=Lax, and
- * optionally Secure. No Instagram cookie is read, written, or forwarded, and the
- * session cookie never leaves this origin.
+ * to the whole origin (documents and the original client's API calls must both
+ * see the session), HttpOnly (session) / readable (CSRF, viewer id),
+ * SameSite=Lax, and optionally Secure. The session cookie never leaves this
+ * origin: the upstream fetcher drops every browser cookie.
  */
 
 const backend = require('../config');
@@ -39,7 +40,7 @@ function setSessionCookie(res, token, maxAgeMs = backend.sessionTtlMs) {
     'set-cookie',
     serializeCookie(backend.cookieName, token, {
       httpOnly: true,
-      path: backend.prefix,
+      path: backend.cookiePath,
       maxAge: maxAgeMs,
       sameSite: 'Lax',
     })
@@ -49,7 +50,7 @@ function setSessionCookie(res, token, maxAgeMs = backend.sessionTtlMs) {
 function clearSessionCookie(res) {
   res.append(
     'set-cookie',
-    serializeCookie(backend.cookieName, '', { httpOnly: true, path: backend.prefix, maxAge: 0 })
+    serializeCookie(backend.cookieName, '', { httpOnly: true, path: backend.cookiePath, maxAge: 0 })
   );
 }
 
@@ -62,7 +63,7 @@ function setCsrfCookie(res, secret) {
     'set-cookie',
     serializeCookie(backend.csrfCookieName, secret, {
       httpOnly: false,
-      path: backend.prefix,
+      path: backend.cookiePath,
       maxAge: backend.sessionTtlMs,
       sameSite: 'Lax',
     })
@@ -72,11 +73,32 @@ function setCsrfCookie(res, secret) {
 function clearCsrfCookie(res) {
   res.append(
     'set-cookie',
-    serializeCookie(backend.csrfCookieName, '', { httpOnly: false, path: backend.prefix, maxAge: 0 })
+    serializeCookie(backend.csrfCookieName, '', { httpOnly: false, path: backend.cookiePath, maxAge: 0 })
+  );
+}
+
+function setViewerCookie(res, pk) {
+  res.append(
+    'set-cookie',
+    serializeCookie(backend.viewerCookieName, String(pk), {
+      httpOnly: false,
+      path: backend.cookiePath,
+      maxAge: backend.sessionTtlMs,
+      sameSite: 'Lax',
+    })
+  );
+}
+
+function clearViewerCookie(res) {
+  res.append(
+    'set-cookie',
+    serializeCookie(backend.viewerCookieName, '', { httpOnly: false, path: backend.cookiePath, maxAge: 0 })
   );
 }
 
 module.exports = {
+  setViewerCookie,
+  clearViewerCookie,
   parseCookies,
   serializeCookie,
   setSessionCookie,

@@ -239,10 +239,9 @@ app.get('/__loader/health', (req, res) => {
     upstream: config.upstream,
     allowedAssetHosts: [...ALLOWED_HOSTS],
     cache: { size: cache.size(), ttlMs: config.cacheTtlMs, ...cache.stats },
-    // Personalisation is per-viewer and always opt-in. There is no configured
-    // account, so there is no credential to report or leak here: the flag says
-    // only whether the loader will honour a viewer's own session.
-    viewerSessions: { enabled: config.allowViewerSessions },
+    // No Instagram session exists anywhere in this system, configured or
+    // relayed. Clone users authenticate against our own backend only.
+    instagramSessions: { relayed: false, configured: false },
     inflight: inflight.size,
     backend: backendInstance
       ? { mounted: true, prefix: backendApp.prefix, health: `${backendApp.prefix}/api/v1/health` }
@@ -269,25 +268,11 @@ app.all('*', async (req, res) => {
   const target = `${config.upstream}${req.originalUrl}`;
   const isDocumentGet = req.method === 'GET' || req.method === 'HEAD';
 
-  /*
-   * Per-viewer personalisation.
-   *
-   * There is no server-side account. When (and only when) viewer sessions are
-   * enabled, a viewer's OWN Instagram session cookies are relayed to the
-   * upstream origin for that viewer's own requests, so each viewer sees their
-   * own feed. Every other viewer is anonymous.
-   *
-   * Only the Instagram session cookies from the viewer's request are relayed,
-   * never the whole cookie header, and they are used for the upstream origin
-   * only: the asset proxy never sends them (see the /__ig route). Nothing is
-   * stored.
-   */
-  const viewerCookie = viewerSessionCookie(req);
-  const personalized = Boolean(viewerCookie);
-  // Personalised documents are never cached. A per-viewer cache would still be
-  // one bug away from serving one viewer's page to another; not caching makes
-  // that impossible rather than merely unlikely.
-  const docCache = personalized ? null : cache;
+  // Upstream documents are always fetched anonymously: no browser cookie is
+  // ever relayed to Instagram (src/upstream.js strips them), so the upstream
+  // document is identical for every viewer and safe to share in the cache.
+  // Per-viewer state is added afterwards, on our side, by the shell layer.
+  const docCache = cache;
 
   // Serve a fresh cached document without touching the origin. Only anonymous
   // documents are ever in this cache.
@@ -334,7 +319,6 @@ app.all('*', async (req, res) => {
       method: req.method,
       headers: { ...forwarded, ...conditional },
       body: requestBody,
-      cookie: viewerCookie || undefined,
     });
 
     // 304: the cached copy is still current. Serve it; do not re-download.
@@ -377,7 +361,6 @@ app.all('*', async (req, res) => {
       copyResponseHeaders(upstream.headers, res, { maxAgeSeconds: 0 });
       res.setHeader('x-loader-upstream', target);
       res.setHeader('x-loader-status', String(upstream.status));
-      if (personalized) markPrivate(res);
       const isHtmlBody = contentTypeOf(upstream.headers).includes('text/html');
       if (isHtmlBody) {
         const rewrittenError = rewriteHtml(upstream.body.toString('utf8'));
@@ -392,16 +375,10 @@ app.all('*', async (req, res) => {
     copyResponseHeaders(upstream.headers, res, { maxAgeSeconds: 0 });
     res.setHeader('x-loader-upstream', target);
     res.setHeader('x-loader-rewritten', isHtml ? 'html' : 'none');
-    if (personalized) {
-      // A personalised page is one viewer's view. Never let a shared cache or
-      // an intermediary reuse it, and mark it so the distinction is visible.
-      markPrivate(res);
-      res.setHeader('x-loader-personalized', 'true');
-    }
     if (upstream.redirected) res.setHeader('x-loader-final-url', upstream.finalUrl);
 
-    // Only successful anonymous HTML documents are cached. Personalised
-    // documents are never cached, and the origin's own redirects and errors are
+    // Only successful HTML documents are cached (they are all anonymous). The
+    // origin's own redirects and errors are
     // relayed as-is, so a transient state is not frozen into the mirror.
     const cacheable = isDocumentGet && isHtml && upstream.status === 200 && docCache;
     const body = isHtml
@@ -435,45 +412,9 @@ app.all('*', async (req, res) => {
       }
     }
 
-    if (personalized) markPrivate(res);
     res.status(status).type('text/plain').send(`Upstream fetch failed: ${error.message}\n`);
   }
 });
-
-/*
- * Extract the viewer's own Instagram session cookies from their request.
- *
- * This is the whole of the personalisation mechanism, and it is deliberately
- * narrow:
- *   - only these cookie names are ever relayed upstream, never the full header,
- *     so unrelated cookies (including our own backend session) cannot leak to
- *     Instagram;
- *   - nothing is stored, so there is no jar to leak from;
- *   - returns null when disabled or absent, which is the normal anonymous case.
- *
- * The loader never authenticates anyone: a viewer is personalised only if they
- * already hold a valid Instagram session of their own.
- */
-const VIEWER_SESSION_COOKIES = ['sessionid', 'ds_user_id', 'csrftoken'];
-
-function viewerSessionCookie(req) {
-  if (!config.allowViewerSessions) return null;
-  const raw = req.get('cookie');
-  if (!raw) return null;
-  const wanted = [];
-  for (const part of raw.split(';')) {
-    const eq = part.indexOf('=');
-    if (eq < 0) continue;
-    const name = part.slice(0, eq).trim();
-    if (VIEWER_SESSION_COOKIES.includes(name)) {
-      wanted.push(`${name}=${part.slice(eq + 1).trim()}`);
-    }
-  }
-  // A sessionid is required: csrftoken alone is an anonymous cookie that
-  // Instagram issues to logged-out visitors, and forwarding it as though it
-  // were a session would be meaningless.
-  return wanted.some((c) => c.startsWith('sessionid=')) ? wanted.join('; ') : null;
-}
 
 /**
  * Mark a response as private and uncacheable by shared caches.
