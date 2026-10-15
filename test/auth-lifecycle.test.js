@@ -14,164 +14,107 @@ const { encryptLikeClient } = require('../src/clone/passwordEncryption');
 
 const PASSWORD = 'correct horse 42';
 
-test('signup and email verification', async (t) => {
+test('signup with a username and password', async (t) => {
   const server = await startCloneServer({ CLONE_MAIL_TRANSPORT: 'outbox' });
   t.after(() => server.close());
   const db = server.openDb();
   t.after(() => db.close());
-  const outboxCode = async (email) => {
-    const res = await fetch(`${server.base}/__clone/dev/outbox`, { signal: AbortSignal.timeout(15000) });
-    const body = await res.json();
-    return body.messages.find((m) => m.to === email).code;
-  };
 
-  await t.test('the development outbox delivers the code, and the code is never logged', async () => {
+  async function create(b, fields) {
+    await b.visit();
+    return b.post('/api/v1/web/accounts/web_create_ajax/', { ...fields, enc_password: await b.encPassword(fields.password || PASSWORD) });
+  }
+
+  await t.test('username and password alone create an account, with no email and no code', async () => {
     const b = new Browser(server.base);
-    const { pk } = await b.signup(server, { username: 'outbox_user', codeFor: outboxCode });
+    const { pk } = await b.signup(server, { username: 'plain_user' });
     assert.match(pk, /^\d+$/);
-    const code = (await (await fetch(`${server.base}/__clone/dev/outbox`)).json()).messages[0].code;
-    assert.ok(!server.logs.some((line) => line.includes(code)), 'a signup code must not appear in the logs');
-    const proxied = await fetch(`${server.base}/__clone/dev/outbox`, { headers: { 'x-forwarded-for': '203.0.113.9' } });
-    assert.strictEqual(proxied.status, 404, 'the outbox is not reachable through a proxy');
-  });
-
-  await t.test('the account is stored with a hashed password, lowercased email and no plaintext code', async () => {
-    const row = db.prepare("SELECT * FROM users WHERE username_ci = 'outbox_user'").get();
-    assert.ok(row);
-    assert.strictEqual(row.email_ci, 'outbox_user@example.test');
+    const row = db.prepare("SELECT * FROM users WHERE username_ci = 'plain_user'").get();
+    assert.strictEqual(row.email, null);
     assert.ok(row.password_hash && !row.password_hash.includes(PASSWORD));
     assert.match(row.password_params, /^\d+:\d+:\d+:\d+$/);
-    for (const c of db.prepare("SELECT code_hash FROM signup_codes WHERE email_ci = 'outbox_user@example.test'").all()) {
-      assert.match(c.code_hash, /^[0-9a-f]{64}$/, 'codes are stored hashed');
-    }
-    const settings = db.prepare('SELECT * FROM user_settings WHERE user_id = ?').get(row.id);
-    assert.ok(settings, 'settings row created in the same transaction');
+    assert.ok(db.prepare('SELECT 1 FROM user_settings WHERE user_id = ?').get(row.id), 'settings row created in the same transaction');
+    assert.strictEqual(db.prepare('SELECT COUNT(*) AS n FROM signup_codes').get().n, 0, 'no verification code was involved');
+    assert.strictEqual((await b.get('/api/v1/accounts/current_user/')).body.user.username, 'plain_user', 'signed in on creation');
   });
 
-  await t.test('invalid inputs are rejected per field', async () => {
+  await t.test('many accounts can have no email', async () => {
+    for (const name of ['no_email_1', 'no_email_2']) assert.strictEqual((await create(new Browser(server.base), { username: name })).body.account_created, true);
+    assert.ok(db.prepare('SELECT COUNT(*) AS n FROM users WHERE email IS NULL').get().n >= 3);
+  });
+
+  await t.test('an email is optional; when given it is stored lowercased and can log in', async () => {
+    const b = new Browser(server.base);
+    await b.signup(server, { username: 'with_email', email: 'With.Email@Example.Test' });
+    assert.strictEqual(db.prepare("SELECT email_ci FROM users WHERE username_ci = 'with_email'").get().email_ci, 'with.email@example.test');
+    const other = new Browser(server.base);
+    await other.visit();
+    const login = await other.post('/api/v1/web/accounts/login/ajax/', { username: 'with.email@example.test', enc_password: await other.encPassword(PASSWORD) });
+    assert.strictEqual(login.body.authenticated, true);
+  });
+
+  await t.test('invalid inputs are rejected per field; a blank email is not an error', async () => {
     const b = new Browser(server.base);
     await b.visit();
-    const res = await b.post('/api/v1/web/accounts/web_create_ajax/attempt/', {
+    const bad = await b.post('/api/v1/web/accounts/web_create_ajax/attempt/', {
       username: 'no spaces allowed',
       email: 'not-an-email',
       enc_password: await b.encPassword('short'),
     });
-    assert.strictEqual(res.body.dryrun_passed, false);
-    assert.deepStrictEqual(Object.keys(res.body.errors).sort(), ['email', 'password', 'username']);
+    assert.strictEqual(bad.body.dryrun_passed, false);
+    assert.deepStrictEqual(Object.keys(bad.body.errors).sort(), ['email', 'password', 'username']);
+    const blank = await b.post('/api/v1/web/accounts/web_create_ajax/attempt/', { username: 'blank_ok', email: '', enc_password: await b.encPassword(PASSWORD) });
+    assert.strictEqual(blank.body.dryrun_passed, true);
+    const rejected = await create(b, { username: 'x' });
+    assert.strictEqual(rejected.status, 400);
+    assert.strictEqual(rejected.body.account_created, false);
   });
 
-  await t.test('duplicate username and duplicate email are rejected, case-insensitively', async () => {
+  await t.test('duplicate username (any case) and duplicate email are rejected', async () => {
     const b = new Browser(server.base);
     await b.visit();
     const res = await b.post('/api/v1/web/accounts/web_create_ajax/attempt/', {
-      username: 'OUTBOX_USER',
-      email: 'Outbox_User@Example.Test',
+      username: 'PLAIN_USER',
+      email: 'WITH.EMAIL@example.test',
       enc_password: await b.encPassword(PASSWORD),
     });
     assert.strictEqual(res.body.errors.username[0].code, 'username_is_taken');
     assert.strictEqual(res.body.errors.email[0].code, 'email_is_taken');
+    assert.strictEqual((await create(b, { username: 'Plain_User' })).body.account_created, false);
   });
 
-  await t.test('a wrong code fails, a used code cannot be reused, and a resend invalidates the old code', async () => {
+  await t.test('concurrent and repeated submissions create exactly one account', async () => {
     const b = new Browser(server.base);
     await b.visit();
-    const email = 'codes@example.test';
-    await b.post('/api/v1/accounts/send_verify_email/', { email });
-    const first = await outboxCode(email);
-    await b.post('/api/v1/accounts/send_verify_email/', { email });
-    const second = await outboxCode(email);
-    if (first !== second) {
-      const stale = await b.post('/api/v1/accounts/check_confirmation_code/', { email, code: first });
-      assert.strictEqual(stale.status, 400, 'an earlier code stops working after a resend');
-    }
-    const wrong = await b.post('/api/v1/accounts/check_confirmation_code/', { email, code: second === '123456' ? '654321' : '123456' });
-    assert.strictEqual(wrong.status, 400);
-    const ok = await b.post('/api/v1/accounts/check_confirmation_code/', { email, code: second });
-    assert.strictEqual(ok.status, 200);
-    assert.ok(ok.body.signup_code);
-    const reused = await b.post('/api/v1/accounts/check_confirmation_code/', { email, code: second });
-    assert.strictEqual(reused.status, 400, 'a code works once');
+    const form = async () => ({ username: 'racer', enc_password: await b.encPassword(PASSWORD) });
+    const results = await Promise.all([b.post('/api/v1/web/accounts/web_create_ajax/', await form()), b.post('/api/v1/web/accounts/web_create_ajax/', await form())]);
+    assert.strictEqual(results.filter((r) => r.body.account_created).length, 1);
+    assert.strictEqual((await b.post('/api/v1/web/accounts/web_create_ajax/', await form())).body.account_created, false);
+    assert.strictEqual(db.prepare("SELECT COUNT(*) AS n FROM users WHERE username_ci = 'racer'").get().n, 1);
   });
 
-  await t.test('too many wrong guesses lock the code, even the right one', async () => {
+  await t.test('the confirmation-code endpoints still answer, but nothing depends on them', async () => {
     const b = new Browser(server.base);
     await b.visit();
-    const email = 'guesses@example.test';
-    await b.post('/api/v1/accounts/send_verify_email/', { email });
-    const code = await outboxCode(email);
-    const wrongCode = code === '000000' ? '111111' : '000000';
-    for (let i = 0; i < 5; i += 1) await b.post('/api/v1/accounts/check_confirmation_code/', { email, code: wrongCode });
-    const right = await b.post('/api/v1/accounts/check_confirmation_code/', { email, code });
-    assert.strictEqual(right.status, 400);
+    const email = 'optional-code@example.test';
+    assert.strictEqual((await b.post('/api/v1/accounts/send_verify_email/', { email })).status, 200);
+    const box = await (await fetch(`${server.base}/__clone/dev/outbox`)).json();
+    const code = box.messages.find((m) => m.to === email).code;
+    assert.ok(!server.logs.some((line) => line.includes(code)), 'a code is never logged');
+    assert.strictEqual((await b.post('/api/v1/accounts/check_confirmation_code/', { email, code })).status, 200);
+    assert.strictEqual((await b.post('/api/v1/accounts/check_confirmation_code/', { email, code })).status, 400, 'a code works once');
+    const proxied = await fetch(`${server.base}/__clone/dev/outbox`, { headers: { 'x-forwarded-for': '203.0.113.9' } });
+    assert.strictEqual(proxied.status, 404, 'the outbox is not reachable through a proxy');
+    const health = await (await fetch(`${server.base}/__clone/health`)).json();
+    assert.deepStrictEqual([health.signup.emailRequired, health.signup.verificationRequired], [false, false]);
   });
 
-  await t.test('an expired code is rejected', async () => {
-    const b = new Browser(server.base);
-    await b.visit();
-    const email = 'expired@example.test';
-    await b.post('/api/v1/accounts/send_verify_email/', { email });
-    const code = await outboxCode(email);
-    db.prepare('UPDATE signup_codes SET expires_at = ? WHERE email_ci = ?').run(new Date(Date.now() - 1000).toISOString(), email);
-    const res = await b.post('/api/v1/accounts/check_confirmation_code/', { email, code });
-    assert.strictEqual(res.status, 400);
-  });
-
-  await t.test('resends are rate limited per email', async () => {
-    const b = new Browser(server.base);
-    await b.visit();
-    const statuses = [];
-    for (let i = 0; i < 7; i += 1) statuses.push((await b.post('/api/v1/accounts/send_verify_email/', { email: 'spam@example.test' })).status);
-    assert.ok(statuses.includes(429), `expected a 429 among ${statuses}`);
-  });
-
-  await t.test('a signup token creates exactly one account and is spent afterwards', async () => {
-    const b = new Browser(server.base);
-    await b.visit();
-    const email = 'once@example.test';
-    await b.post('/api/v1/accounts/send_verify_email/', { email });
-    const checked = await b.post('/api/v1/accounts/check_confirmation_code/', { email, code: await outboxCode(email) });
-    const form = async (username) => ({
-      username,
-      email,
-      enc_password: await b.encPassword(PASSWORD),
-      day: 1,
-      month: 1,
-      year: 1990,
-      force_sign_up_code: checked.body.signup_code,
-    });
-    const [a, c] = await Promise.all([
-      b.post('/api/v1/web/accounts/web_create_ajax/', await form('once_a')),
-      b.post('/api/v1/web/accounts/web_create_ajax/', await form('once_b')),
-    ]);
-    const created = [a, c].filter((r) => r.body.account_created);
-    assert.strictEqual(created.length, 1, 'concurrent submissions create one account');
-    assert.strictEqual(db.prepare('SELECT COUNT(*) AS n FROM users WHERE email_ci = ?').get(email).n, 1);
-    const again = await b.post('/api/v1/web/accounts/web_create_ajax/', await form('once_c'));
-    assert.strictEqual(again.body.account_created, false);
-  });
-
-  await t.test('a code for one email does not verify another', async () => {
-    const b = new Browser(server.base);
-    await b.visit();
-    await b.post('/api/v1/accounts/send_verify_email/', { email: 'mine@example.test' });
-    const checked = await b.post('/api/v1/accounts/check_confirmation_code/', { email: 'mine@example.test', code: await outboxCode('mine@example.test') });
-    const res = await b.post('/api/v1/web/accounts/web_create_ajax/', {
-      username: 'theirs_user',
-      email: 'theirs@example.test',
-      enc_password: await b.encPassword(PASSWORD),
-      force_sign_up_code: checked.body.signup_code,
-    });
-    assert.strictEqual(res.body.account_created, false);
-  });
-
-  await t.test('in production with no email provider, sending a code fails clearly', async () => {
+  await t.test('in production, signup works with no email provider at all', async () => {
     const prod = await startCloneServer({ NODE_ENV: 'production', CLONE_MAIL_TRANSPORT: '' });
     try {
       const b = new Browser(prod.base);
-      await b.visit();
-      const res = await b.post('/api/v1/accounts/send_verify_email/', { email: 'prod@example.test' });
-      assert.strictEqual(res.status, 503);
-      assert.strictEqual(res.body.status, 'fail');
+      await b.signup(prod, { username: 'prod_user' });
+      assert.strictEqual((await b.get('/api/v1/accounts/current_user/')).body.user.username, 'prod_user');
       assert.strictEqual((await fetch(`${prod.base}/__clone/dev/outbox`)).status, 404);
     } finally {
       await prod.close();
@@ -187,8 +130,8 @@ test('login, sessions and isolation', async (t) => {
 
   const alice = new Browser(server.base);
   const bob = new Browser(server.base);
-  const alicePk = (await alice.signup(server, { username: 'alice', fullName: 'Alice' })).pk;
-  const bobPk = (await bob.signup(server, { username: 'bob' })).pk;
+  const alicePk = (await alice.signup(server, { username: 'alice', fullName: 'Alice', email: 'alice@example.test' })).pk;
+  const bobPk = (await bob.signup(server, { username: 'bob', email: 'bob@example.test' })).pk;
 
   async function login(b, username, password = PASSWORD) {
     await b.visit();

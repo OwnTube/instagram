@@ -65,27 +65,22 @@ test('the original client flows, answered by our backend', async (t) => {
     assert.strictEqual(me.body.user.full_name, 'Alice A');
   });
 
-  await t.test('signup rejects a taken username, a wrong code, and a missing code', async () => {
+  await t.test('signup needs only a username and password; a taken username is rejected', async () => {
     const eve = new Browser(server.base);
     await eve.visit();
-    const attempt = await eve.post('/api/v1/web/accounts/web_create_ajax/attempt/', {
+    const taken = await eve.post('/api/v1/web/accounts/web_create_ajax/attempt/', {
       username: 'alice',
-      email: 'eve@example.test',
       enc_password: await eve.encPassword('another pass 99'),
     });
-    assert.strictEqual(attempt.body.dryrun_passed, false);
-    assert.strictEqual(attempt.body.errors.username[0].code, 'username_is_taken');
-    await eve.post('/api/v1/accounts/send_verify_email/', { email: 'eve@example.test' });
-    const wrong = await eve.post('/api/v1/accounts/check_confirmation_code/', { email: 'eve@example.test', code: '000000' });
-    const real = server.mail.at(-1).code;
-    assert.strictEqual(wrong.status, real === '000000' ? 200 : 400);
-    const noCode = await eve.post('/api/v1/web/accounts/web_create_ajax/', {
+    assert.strictEqual(taken.body.dryrun_passed, false);
+    assert.strictEqual(taken.body.errors.username[0].code, 'username_is_taken');
+    const created = await eve.post('/api/v1/web/accounts/web_create_ajax/', {
       username: 'eve',
-      email: 'eve@example.test',
       enc_password: await eve.encPassword('another pass 99'),
     });
-    assert.strictEqual(noCode.status, 400);
-    assert.strictEqual(noCode.body.account_created, false);
+    assert.strictEqual(created.status, 200);
+    assert.strictEqual(created.body.account_created, true, 'no email and no code are needed');
+    assert.strictEqual((await eve.get('/api/v1/accounts/current_user/')).body.user.email, '');
   });
 
   await t.test('login, wrong password, CSRF and logout behave like the original contract', async () => {

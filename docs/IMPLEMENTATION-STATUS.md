@@ -27,14 +27,14 @@ is no Instagram session anywhere.
 
 ## Verified
 
-Automated, `npm test`: 183 tests, 183 pass, 0 fail, 0 skipped (clean `.scratch`).
+Automated, `npm test`: 180 tests, 180 pass, 0 fail, 0 skipped (clean `.scratch`).
 
 - Database: clean install, idempotent migrations, persistence across restart,
   hashed passwords/tokens/codes, unique races mapped to 409, FK cascades.
-- Signup: field validation, duplicates (case-insensitive), email codes (wrong,
-  reused, expired, locked after 5 guesses, resend invalidates, per-email limit),
-  single-use signup token under concurrent submission, production without email
-  fails clearly, outbox is local-only and codes are not logged.
+- Signup: username + password only (email optional, no code), field validation,
+  duplicate username/email (case-insensitive), concurrent and repeated
+  submissions create one account, works in production with no email provider.
+  The optional confirmation-code endpoints still answer for the original form.
 - Login/logout: username/email, uniform failure, enc_password v10, foreign key
   rejected with a reason, logout revokes in DB, expired/revoked sessions refused,
   password change revokes other sessions, re-login, restart keeps sessions.
@@ -46,9 +46,9 @@ Automated, `npm test`: 183 tests, 183 pass, 0 fail, 0 skipped (clean `.scratch`)
 - Shell: key/CSRF/viewer substitution, per-user output, HTML escaping, prefetch
   dropping, scrubbing incl. escaped and double-escaped Unicode, template serving.
 
-Real browser, `npm run verify:browser-auth` (headless Chromium, CDP): 17/17. It
-serves a SYNTHETIC page through the document path and runs signup (password
-encrypted in the browser), code, session cookies, personalised reload, logout,
+Real browser, `npm run verify:browser-auth` (headless Chromium, CDP): 15/15. It
+serves a SYNTHETIC page through the document path and runs signup (username and
+password encrypted in the browser), session cookies, personalised reload, logout,
 re-login. It does not involve the genuine Instagram client.
 
 ## Not verified
@@ -65,7 +65,8 @@ re-login. It does not involve the genuine Instagram client.
 - Route definitions are answered with empty entries; client navigation may then
   load route code differently than on instagram.com.
 - Realtime DM delivery (MQTT) is not reproduced; DMs work over REST.
-- No email provider; the development outbox stands in.
+- The original signup form may still require its contact field or show a code
+  step; removing those needs a client patch once the live form can be inspected.
 - Commits are local only: pushing to vibecodeforever/instagram is refused (403).
 
 ## Next tasks

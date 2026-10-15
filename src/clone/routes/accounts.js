@@ -21,7 +21,6 @@ const present = require('../present');
 const CODE_TTL_MS = 10 * 60 * 1000;
 const CODE_MAX_ATTEMPTS = 5;
 const CODE_MAX_SENDS = 5;
-const SIGNUP_TOKEN_TTL_MS = 30 * 60 * 1000;
 
 /** Validation results in the `errors` map the signup form renders under each field. */
 function fieldErrors(fn) {
@@ -89,6 +88,11 @@ function register(router, ctx) {
 
   /* -------------------------------- signup -------------------------------- */
 
+  function optionalEmail(p) {
+    const raw = p.email === undefined || p.email === null ? '' : String(p.email).trim();
+    return raw ? raw : null;
+  }
+
   function validateSignup(p, password) {
     const errors = {};
     const add = (field, message, code) => {
@@ -98,9 +102,14 @@ function register(router, ctx) {
       add('username', 'Usernames can only use letters, numbers, underscores and periods, and must be 3 to 30 characters.', 'username_invalid');
     }
     if (!errors.username && users.getByUsername(db, p.username)) add('username', `A user with that username already exists.`, 'username_is_taken');
-    if (fieldErrors(() => v.email(String(p.email ?? '')))) add('email', 'Enter a valid email address.', 'email_invalid');
-    if (!errors.email && db.prepare('SELECT 1 FROM users WHERE email_ci = ?').get(String(p.email).toLowerCase())) {
-      add('email', 'Another account is using the same email.', 'email_is_taken');
+    // Email is optional: an account needs only a username and a password. An
+    // email that is given must be valid and not already in use.
+    const email = optionalEmail(p);
+    if (email !== null) {
+      if (fieldErrors(() => v.email(email))) add('email', 'Enter a valid email address.', 'email_invalid');
+      else if (db.prepare('SELECT 1 FROM users WHERE email_ci = ?').get(email.toLowerCase())) {
+        add('email', 'Another account is using the same email.', 'email_is_taken');
+      }
     }
     if (fieldErrors(() => v.password(password))) {
       add('password', 'Create a password at least 10 characters long that includes a letter and a number.', 'password_too_weak');
@@ -207,22 +216,12 @@ function register(router, ctx) {
     if (Object.keys(errors).length) {
       return igFail(res, 400, 'Please correct the highlighted fields.', { account_created: false, errors, error_type: 'form_validation_error' });
     }
-    const email = String(p.email).toLowerCase();
-    let verified = null;
-    if (ctx.config.requireEmailCode) {
-      const token = String(p.force_sign_up_code || p.signup_code || '');
-      verified = token
-        ? db.prepare('SELECT id, email_ci, consumed_at FROM signup_codes WHERE signup_token_hash = ?').get(hashToken(token))
-        : null;
-      if (!verified || verified.email_ci !== email || Date.now() - Date.parse(verified.consumed_at) > SIGNUP_TOKEN_TTL_MS) {
-        return igFail(res, 400, 'Confirm your email address to finish signing up.', { account_created: false, error_type: 'signup_code_required' });
-      }
-    }
+    const email = optionalEmail(p);
     let user;
     try {
       user = await users.createUserAsync(db, {
         username: String(p.username).trim(),
-        email,
+        email: email ? email.toLowerCase() : undefined,
         password,
         displayName: p.first_name ? String(p.first_name).trim().slice(0, 100) : undefined,
       });
@@ -234,8 +233,6 @@ function register(router, ctx) {
       }
       throw error;
     }
-    // The verification is spent only once the account exists.
-    if (verified) db.prepare('UPDATE signup_codes SET signup_token_hash = NULL WHERE id = ?').run(verified.id);
     issueSession(db, req, res, user);
     return igOk(res, { account_created: true, user_id: user.pk });
   }

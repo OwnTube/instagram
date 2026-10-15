@@ -21,16 +21,21 @@ account, cookie or session anywhere in the server.
   reloaded before login works.
 - Reset everything by stopping the server and deleting `.data/`.
 
-## Signup and the verification code
+## Signup
 
-No email provider exists. In development the code is not emailed and not
-logged; open **http://localhost:12000/__clone/dev/outbox** in a browser on the
-same machine to read it. The outbox is unavailable in production
-(`NODE_ENV=production`), through a reverse proxy, and from other machines.
+An account needs only a **username and a password**. No email and no
+verification code are required; the account is created and signed in at once.
+An email is optional: if one is given it must be valid and not already used,
+and it can then be used to log in.
 
 Passwords must be at least 10 characters with a letter and a number. This is
 stricter than the form's own check, so a shorter password passes the form and
 is then rejected with our message.
+
+Instagram's own signup form may still insist on its "mobile number or email"
+field or show a confirmation-code screen; that is the form's behaviour, not a
+server requirement. If it shows a code screen, the code is at
+**http://localhost:12000/__clone/dev/outbox** (same machine, development only).
 
 ## What to expect after logging in
 
@@ -69,7 +74,6 @@ Your Instagram session is never given to the server: the tool reads a saved file
 | --- | --- | --- |
 | `PORT` / `HOST` | `12000` / `0.0.0.0` | |
 | `BACKEND_SECURE_COOKIES` | off | set `1` when served over HTTPS |
-| `SIGNUP_REQUIRE_EMAIL_CODE` | on | `0` skips the code check on account creation |
 | `CLONE_MAIL_TRANSPORT` | `outbox` (dev), `disabled` (prod) | `log` prints codes to the console |
 | `SHELL_TEMPLATE_DIR` | `.cache/shell` | |
 | `AUTH_RATE_LIMIT_MAX` | 20 per minute per IP | raise if testing hits 429 |

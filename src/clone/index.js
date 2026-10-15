@@ -80,6 +80,10 @@ const DEFAULT_AVATAR_SVG =
 /**
  * Signup-code delivery.
  *
+ * Accounts need only a username and a password; no code is ever required to
+ * create one. These codes exist only so the original signup form can finish
+ * its own confirmation step if it shows one after an email was typed.
+ *
  *   outbox    development default: codes are held in memory (never logged,
  *             never stored in plaintext) and shown at /__clone/dev/outbox to
  *             requests from this machine only.
@@ -193,7 +197,6 @@ function catchAsync(router) {
 
 function createClone({ db, dataDir = '.data', logger = console, env = process.env } = {}) {
   const config = {
-    requireEmailCode: env.SIGNUP_REQUIRE_EMAIL_CODE !== '0',
     mailTransport: env.CLONE_MAIL_TRANSPORT || (env.NODE_ENV === 'production' ? 'disabled' : 'outbox'),
     allowPlaintextPasswords: env.ALLOW_PLAINTEXT_ENC_PASSWORD !== '0',
   };
@@ -260,7 +263,7 @@ function createClone({ db, dataDir = '.data', logger = console, env = process.en
       graphql: { supported: graphql.supported(), unsupported: graphql.unsupported() },
       rest: { unsupported: [...unsupportedRest].map(([route, count]) => ({ route, count })).sort((a, b) => b.count - a.count) },
       passwordEncryption: { keyId: codec.keyId, version: 10 },
-      signup: { requireEmailCode: config.requireEmailCode, mailTransport: mailer.transport, devOutbox: outbox.enabled },
+      signup: { emailRequired: false, verificationRequired: false, mailTransport: mailer.transport, devOutbox: outbox.enabled },
       passwordDecryptFailures: { ...decryptFailures },
       // Visited paths can name users, so the per-document list is local-only.
       documents: isLoopback(req) ? recentDocuments : undefined,
@@ -269,7 +272,7 @@ function createClone({ db, dataDir = '.data', logger = console, env = process.en
   router.get('/__clone/dev/outbox', (req, res) => {
     if (!outbox.enabled || !isLoopback(req)) return igFail(res, 404, 'Not found');
     return res.json({
-      notice: 'Development outbox: no email provider is configured, so signup codes are shown here instead of being emailed.',
+      notice: 'Development outbox. Signup does not require an email or a code; codes appear here only if the signup form asks for one.',
       messages: outbox.list(),
     });
   });

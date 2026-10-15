@@ -177,24 +177,22 @@ class Browser {
     return encryptLikeClient({ keyId: enc.key_id, publicKeyHex: enc.public_key, password, time: Math.floor(Date.now() / 1000) });
   }
 
-  /** The full signup flow of the original form. */
-  async signup(server, { username, email = `${username}@example.test`, password = 'correct horse 42', fullName = '', codeFor }) {
+  /**
+   * Signup through the original form's endpoints: a dry run, then creation.
+   * Only a username and password are needed; an email is sent only if given.
+   */
+  async signup(server, { username, email, password = 'correct horse 42', fullName = '' }) {
     await this.visit();
-    const enc_password = await this.encPassword(password);
-    const fields = { email, enc_password, username, first_name: fullName, opt_into_one_tap: 'false' };
+    const fields = { username, enc_password: await this.encPassword(password), first_name: fullName, opt_into_one_tap: 'false' };
+    if (email) fields.email = email;
     const attempt = await this.post('/api/v1/web/accounts/web_create_ajax/attempt/', fields);
     if (!attempt.body.dryrun_passed) throw new Error(`signup attempt failed: ${JSON.stringify(attempt.body)}`);
-    await this.post('/api/v1/web/consent/check_age_eligibility/', { day: 1, month: 1, year: 1990 });
-    await this.post('/api/v1/accounts/send_verify_email/', { email, device_id: 'test' });
-    const code = codeFor ? await codeFor(email.toLowerCase()) : server.mail.filter((m) => m.email === email.toLowerCase()).at(-1).code;
-    const checked = await this.post('/api/v1/accounts/check_confirmation_code/', { code, email, device_id: 'test' });
     const created = await this.post('/api/v1/web/accounts/web_create_ajax/', {
       ...fields,
       enc_password: await this.encPassword(password),
       day: 1,
       month: 1,
       year: 1990,
-      force_sign_up_code: checked.body.signup_code,
     });
     if (!created.body.account_created) throw new Error(`signup failed: ${JSON.stringify(created.body)}`);
     return { pk: created.body.user_id, username, password };

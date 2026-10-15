@@ -13,9 +13,9 @@
  *     to this origin, and drops a telemetry request;
  *   - reads the page's encryption config and checks it is OUR key;
  *   - checks csrftoken is readable and sessionid is not (HttpOnly);
- *   - signs up through the original endpoints with enc_password v10 encrypted
- *     in the browser (tweetnacl sealed box + WebCrypto AES-GCM), using the code
- *     from the development outbox;
+ *   - signs up through the original endpoints with only a username and an
+ *     enc_password v10 encrypted in the browser (tweetnacl sealed box +
+ *     WebCrypto AES-GCM); no email, no code;
  *   - reloads and checks the page is personalised for the new user;
  *   - logs out, checks the session is gone, logs in again.
  *
@@ -149,20 +149,13 @@ async function main() {
     check('csrftoken is readable by the page', await evaluate(session, "Boolean(window.__t.cookie('csrftoken'))"));
 
     const username = `browser_${Date.now().toString(36)}`;
-    const email = `${username}@example.test`;
     const password = 'browser check 77';
     const enc = await evaluate(session, `window.__t.encPassword(${JSON.stringify(password)})`);
-    const attempt = await evaluate(session, `window.__t.post('/api/v1/web/accounts/web_create_ajax/attempt/', ${JSON.stringify({ username, email, enc_password: enc, first_name: 'Browser Check' })})`);
-    check('signup dry run passes with an in-browser encrypted password', attempt.body.dryrun_passed === true, JSON.stringify(attempt.body.errors || ''));
-    await evaluate(session, `window.__t.post('/api/v1/accounts/send_verify_email/', ${JSON.stringify({ email, device_id: 'browser' })})`);
-    const outbox = await evaluate(session, "fetch('/__clone/dev/outbox').then(r => r.json())");
-    const code = outbox.messages.find((m) => m.to === email)?.code;
-    check('the verification code is in the development outbox', Boolean(code));
-    const checked = await evaluate(session, `window.__t.post('/api/v1/accounts/check_confirmation_code/', ${JSON.stringify({ email, code, device_id: 'browser' })})`);
-    check('the code verifies', Boolean(checked.body.signup_code));
+    const attempt = await evaluate(session, `window.__t.post('/api/v1/web/accounts/web_create_ajax/attempt/', ${JSON.stringify({ username, enc_password: enc, first_name: 'Browser Check' })})`);
+    check('signup dry run passes with only a username and an in-browser encrypted password', attempt.body.dryrun_passed === true, JSON.stringify(attempt.body.errors || ''));
     const enc2 = await evaluate(session, `window.__t.encPassword(${JSON.stringify(password)})`);
-    const created = await evaluate(session, `window.__t.post('/api/v1/web/accounts/web_create_ajax/', ${JSON.stringify({ username, email, enc_password: enc2, first_name: 'Browser Check', day: '1', month: '1', year: '1990', force_sign_up_code: checked.body.signup_code })})`);
-    check('the account is created', created.body.account_created === true, `user ${created.body.user_id}`);
+    const created = await evaluate(session, `window.__t.post('/api/v1/web/accounts/web_create_ajax/', ${JSON.stringify({ username, enc_password: enc2, first_name: 'Browser Check', day: '1', month: '1', year: '1990' })})`);
+    check('the account is created with no email and no code', created.body.account_created === true, `user ${created.body.user_id}`);
     check('sessionid is HttpOnly (not visible to the page)', await evaluate(session, "window.__t.cookie('sessionid') === null"));
     check('ds_user_id names the new user', (await evaluate(session, "window.__t.cookie('ds_user_id')")) === created.body.user_id);
     const me = await evaluate(session, "fetch('/api/v1/accounts/current_user/').then(r => r.json())");
