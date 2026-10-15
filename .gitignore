@@ -1,0 +1,11 @@
+node_modules/
+npm-debug.log*
+.env
+*.log
+.cache/
+.scratch/
+.data/
+
+# Chromium profiles created by scripts/diagnostics/*
+scripts/diagnostics/.chrome-profile-*/
+scripts/diagnostics/*.json

@@ -1,0 +1,656 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-10-15",
+  "purpose": "Machine-readable inventory connecting (a) the backend endpoints THIS repository implements, and (b) the API dependencies observed in Instagram's own frontend bundles. It exists to keep the two concerns visibly separate and to record honestly which of Instagram's dependencies this backend can and cannot satisfy.",
+  "statusLevels": {
+    "implemented": "Code exists and the route is registered.",
+    "locally_verified": "Automated tests in test/ pass against the real HTTP stack.",
+    "upstream_verified": "Genuine upstream behaviour was confirmed against instagram.com.",
+    "end_to_end_verified": "The real Instagram frontend completed the interaction against this backend.",
+    "blocked": "Cannot be satisfied without Instagram authorization or infrastructure this project does not have."
+  },
+  "backendEndpoints": [
+    {
+      "method": "GET",
+      "path": "/__backend/api/v1/health",
+      "auth": "none",
+      "purpose": "Service liveness.",
+      "status": "locally_verified",
+      "test": "api.test.js: health and readiness endpoints answer"
+    },
+    {
+      "method": "GET",
+      "path": "/__backend/api/v1/readiness",
+      "auth": "none",
+      "purpose": "Database reachability and migration count.",
+      "status": "locally_verified",
+      "test": "api.test.js: readiness endpoint exposes no secrets"
+    },
+    {
+      "method": "POST",
+      "path": "/__backend/api/v1/auth/register",
+      "auth": "none",
+      "purpose": "Create an application account and session.",
+      "status": "locally_verified",
+      "test": "auth.test.js: register issues a session, token and csrf secret"
+    },
+    {
+      "method": "POST",
+      "path": "/__backend/api/v1/auth/login",
+      "auth": "none",
+      "purpose": "Authenticate to THIS backend (not Instagram).",
+      "status": "locally_verified",
+      "test": "auth.test.js: login with a wrong password is a uniform 401"
+    },
+    {
+      "method": "POST",
+      "path": "/__backend/api/v1/auth/logout",
+      "auth": "required",
+      "purpose": "Revoke the current session.",
+      "status": "locally_verified",
+      "test": "auth.test.js: logout revokes the token"
+    },
+    {
+      "method": "GET",
+      "path": "/__backend/api/v1/auth/session",
+      "auth": "optional",
+      "purpose": "Report session state and the csrf secret.",
+      "status": "locally_verified",
+      "test": "auth.test.js: a bearer token authenticates /users/me"
+    },
+    {
+      "method": "POST",
+      "path": "/__backend/api/v1/auth/session/rotate",
+      "auth": "required",
+      "purpose": "Reissue the session bearer token.",
+      "status": "locally_verified",
+      "test": "auth.test.js: session rotation invalidates the previous token"
+    },
+    {
+      "method": "GET",
+      "path": "/__backend/api/v1/auth/sessions",
+      "auth": "required",
+      "purpose": "List the caller's sessions.",
+      "status": "locally_verified",
+      "test": "auth.test.js: revoke-all invalidates every session for the user"
+    },
+    {
+      "method": "DELETE",
+      "path": "/__backend/api/v1/auth/sessions/:id",
+      "auth": "required",
+      "purpose": "Revoke one of the caller's sessions.",
+      "status": "locally_verified",
+      "test": "auth.test.js"
+    },
+    {
+      "method": "POST",
+      "path": "/__backend/api/v1/auth/sessions/revoke-all",
+      "auth": "required",
+      "purpose": "Revoke every session for the caller.",
+      "status": "locally_verified",
+      "test": "auth.test.js"
+    },
+    {
+      "method": "GET",
+      "path": "/__backend/api/v1/users/me",
+      "auth": "required",
+      "purpose": "Caller profile plus declared upstream identity.",
+      "status": "locally_verified",
+      "test": "auth.test.js"
+    },
+    {
+      "method": "PATCH",
+      "path": "/__backend/api/v1/users/me",
+      "auth": "required",
+      "purpose": "Update the caller's profile.",
+      "status": "locally_verified",
+      "test": "api.test.js: private profile hides its bio from a non-follower"
+    },
+    {
+      "method": "GET",
+      "path": "/__backend/api/v1/users/:id",
+      "auth": "optional",
+      "purpose": "Public profile; private accounts are restricted for non-followers.",
+      "status": "locally_verified",
+      "test": "api.test.js: private profile hides its bio from a non-follower"
+    },
+    {
+      "method": "GET",
+      "path": "/__backend/api/v1/users/:id/posts",
+      "auth": "optional",
+      "purpose": "A user's posts, keyset-paginated.",
+      "status": "locally_verified",
+      "test": "api.test.js: pagination walks the whole set exactly once"
+    },
+    {
+      "method": "PUT",
+      "path": "/__backend/api/v1/users/me/upstream-identity",
+      "auth": "required",
+      "purpose": "Record a DECLARED Instagram username. Stores no token; never implies authentication.",
+      "status": "locally_verified",
+      "test": "auth.test.js: the upstream identity is declared, never authenticated"
+    },
+    {
+      "method": "GET",
+      "path": "/__backend/api/v1/users/me/upstream-identity",
+      "auth": "required",
+      "purpose": "Read the declared identity.",
+      "status": "locally_verified",
+      "test": "auth.test.js"
+    },
+    {
+      "method": "POST",
+      "path": "/__backend/api/v1/posts",
+      "auth": "required",
+      "purpose": "Create a post owned by the caller.",
+      "status": "locally_verified",
+      "test": "auth.test.js: cross-user data isolation"
+    },
+    {
+      "method": "GET",
+      "path": "/__backend/api/v1/posts/:id",
+      "auth": "optional",
+      "purpose": "Read one post.",
+      "status": "locally_verified",
+      "test": "auth.test.js"
+    },
+    {
+      "method": "PATCH",
+      "path": "/__backend/api/v1/posts/:id",
+      "auth": "required",
+      "purpose": "Update own post.",
+      "status": "locally_verified",
+      "test": "auth.test.js: bob cannot modify alice's post"
+    },
+    {
+      "method": "DELETE",
+      "path": "/__backend/api/v1/posts/:id",
+      "auth": "required",
+      "purpose": "Soft-delete own post.",
+      "status": "locally_verified",
+      "test": "auth.test.js"
+    },
+    {
+      "method": "POST",
+      "path": "/__backend/api/v1/posts/:id/likes",
+      "auth": "required",
+      "purpose": "Like a post.",
+      "status": "locally_verified",
+      "test": "api.test.js"
+    },
+    {
+      "method": "DELETE",
+      "path": "/__backend/api/v1/posts/:id/likes",
+      "auth": "required",
+      "purpose": "Unlike a post.",
+      "status": "locally_verified",
+      "test": "api.test.js"
+    },
+    {
+      "method": "POST",
+      "path": "/__backend/api/v1/posts/:id/comments",
+      "auth": "required",
+      "purpose": "Comment on a post.",
+      "status": "locally_verified",
+      "test": "api.test.js"
+    },
+    {
+      "method": "GET",
+      "path": "/__backend/api/v1/posts/:id/comments",
+      "auth": "optional",
+      "purpose": "List comments, paginated.",
+      "status": "locally_verified",
+      "test": "api.test.js"
+    },
+    {
+      "method": "DELETE",
+      "path": "/__backend/api/v1/comments/:id",
+      "auth": "required",
+      "purpose": "Delete own comment.",
+      "status": "locally_verified",
+      "test": "api.test.js"
+    },
+    {
+      "method": "POST",
+      "path": "/__backend/api/v1/users/:id/follow",
+      "auth": "required",
+      "purpose": "Follow, or request to follow a private account.",
+      "status": "locally_verified",
+      "test": "api.test.js: following a private account creates a pending request"
+    },
+    {
+      "method": "DELETE",
+      "path": "/__backend/api/v1/users/:id/follow",
+      "auth": "required",
+      "purpose": "Unfollow.",
+      "status": "locally_verified",
+      "test": "api.test.js"
+    },
+    {
+      "method": "GET",
+      "path": "/__backend/api/v1/users/me/followers",
+      "auth": "required",
+      "purpose": "List followers.",
+      "status": "locally_verified",
+      "test": "api.test.js"
+    },
+    {
+      "method": "GET",
+      "path": "/__backend/api/v1/users/me/following",
+      "auth": "required",
+      "purpose": "List followed accounts.",
+      "status": "locally_verified",
+      "test": "api.test.js"
+    },
+    {
+      "method": "GET",
+      "path": "/__backend/api/v1/users/me/follow-requests",
+      "auth": "required",
+      "purpose": "List pending follow requests.",
+      "status": "locally_verified",
+      "test": "api.test.js"
+    },
+    {
+      "method": "POST",
+      "path": "/__backend/api/v1/users/:id/follow/accept",
+      "auth": "required",
+      "purpose": "Accept a follow request.",
+      "status": "locally_verified",
+      "test": "api.test.js"
+    },
+    {
+      "method": "POST",
+      "path": "/__backend/api/v1/users/:id/follow/reject",
+      "auth": "required",
+      "purpose": "Reject a follow request.",
+      "status": "locally_verified",
+      "test": "api.test.js"
+    },
+    {
+      "method": "GET",
+      "path": "/__backend/api/v1/users/me/saved",
+      "auth": "required",
+      "purpose": "List saved posts.",
+      "status": "locally_verified",
+      "test": "api.test.js: saving a post owned by another user"
+    },
+    {
+      "method": "PUT",
+      "path": "/__backend/api/v1/users/me/saved/:postId",
+      "auth": "required",
+      "purpose": "Save a post into an optional collection.",
+      "status": "locally_verified",
+      "test": "api.test.js"
+    },
+    {
+      "method": "DELETE",
+      "path": "/__backend/api/v1/users/me/saved/:postId",
+      "auth": "required",
+      "purpose": "Unsave a post.",
+      "status": "locally_verified",
+      "test": "api.test.js"
+    },
+    {
+      "method": "POST",
+      "path": "/__backend/api/v1/users/me/collections",
+      "auth": "required",
+      "purpose": "Create a collection.",
+      "status": "locally_verified",
+      "test": "api.test.js"
+    },
+    {
+      "method": "GET",
+      "path": "/__backend/api/v1/users/me/collections",
+      "auth": "required",
+      "purpose": "List own collections.",
+      "status": "locally_verified",
+      "test": "api.test.js"
+    },
+    {
+      "method": "GET",
+      "path": "/__backend/api/v1/users/me/notifications",
+      "auth": "required",
+      "purpose": "List own notifications.",
+      "status": "locally_verified",
+      "test": "api.test.js: notifications are scoped to the recipient"
+    },
+    {
+      "method": "POST",
+      "path": "/__backend/api/v1/notifications/:id/read",
+      "auth": "required",
+      "purpose": "Mark one notification read.",
+      "status": "locally_verified",
+      "test": "api.test.js"
+    },
+    {
+      "method": "POST",
+      "path": "/__backend/api/v1/notifications/read-all",
+      "auth": "required",
+      "purpose": "Mark all notifications read.",
+      "status": "locally_verified",
+      "test": "api.test.js"
+    },
+    {
+      "method": "POST",
+      "path": "/__backend/api/v1/stories",
+      "auth": "required",
+      "purpose": "Create a story with a TTL.",
+      "status": "locally_verified",
+      "test": "api.test.js: stories expire and disappear"
+    },
+    {
+      "method": "GET",
+      "path": "/__backend/api/v1/stories/:id",
+      "auth": "optional",
+      "purpose": "Read one story.",
+      "status": "locally_verified",
+      "test": "api.test.js"
+    },
+    {
+      "method": "GET",
+      "path": "/__backend/api/v1/users/:id/stories",
+      "auth": "optional",
+      "purpose": "Active stories for a user.",
+      "status": "locally_verified",
+      "test": "api.test.js"
+    },
+    {
+      "method": "DELETE",
+      "path": "/__backend/api/v1/stories/:id",
+      "auth": "required",
+      "purpose": "Delete own story.",
+      "status": "locally_verified",
+      "test": "api.test.js"
+    },
+    {
+      "method": "GET",
+      "path": "/__backend/api/v1/conversations",
+      "auth": "required",
+      "purpose": "List own conversations.",
+      "status": "locally_verified",
+      "test": "api.test.js: messaging requires membership"
+    },
+    {
+      "method": "POST",
+      "path": "/__backend/api/v1/conversations",
+      "auth": "required",
+      "purpose": "Create a conversation.",
+      "status": "locally_verified",
+      "test": "api.test.js"
+    },
+    {
+      "method": "GET",
+      "path": "/__backend/api/v1/conversations/:id/messages",
+      "auth": "required",
+      "purpose": "List messages; membership enforced.",
+      "status": "locally_verified",
+      "test": "api.test.js"
+    },
+    {
+      "method": "POST",
+      "path": "/__backend/api/v1/conversations/:id/messages",
+      "auth": "required",
+      "purpose": "Send a message.",
+      "status": "locally_verified",
+      "test": "api.test.js"
+    },
+    {
+      "method": "GET",
+      "path": "/__backend/api/v1/users/me/settings",
+      "auth": "required",
+      "purpose": "Read own settings.",
+      "status": "locally_verified",
+      "test": "api.test.js: settings round-trip"
+    },
+    {
+      "method": "PATCH",
+      "path": "/__backend/api/v1/users/me/settings",
+      "auth": "required",
+      "purpose": "Update own settings.",
+      "status": "locally_verified",
+      "test": "api.test.js"
+    },
+    {
+      "method": "GET",
+      "path": "/__backend/api/v1/feed",
+      "auth": "required",
+      "purpose": "Home feed from followed accounts plus own posts.",
+      "status": "locally_verified",
+      "test": "api.test.js"
+    },
+    {
+      "method": "GET",
+      "path": "/__backend/api/v1/explore",
+      "auth": "optional",
+      "purpose": "Public posts only.",
+      "status": "locally_verified",
+      "test": "api.test.js: a public account's post appears in explore"
+    }
+  ],
+  "frontendDependencies": [
+    {
+      "id": "graphql-query",
+      "endpoint": "/graphql/query",
+      "method": "POST",
+      "evidence": "String literal \"/graphql/query\" found in Instagram web bundles fetched through the loader.",
+      "evidenceSource": ".scratch/bundles/*.js (rsrc.php v4i*/v4* bundles)",
+      "confidence": "verified",
+      "backendSupports": false,
+      "reason": "This is Instagram's own GraphQL surface. It requires Instagram session cookies, the X-IG-App-ID header and server-side signed request parameters. This backend cannot and does not proxy it.",
+      "upstreamVerified": true
+    },
+    {
+      "id": "api-graphql",
+      "endpoint": "/api/graphql",
+      "method": "POST",
+      "evidence": "String literal \"/api/graphql\" found in Instagram web bundles.",
+      "evidenceSource": ".scratch/bundles/*.js",
+      "confidence": "verified",
+      "backendSupports": false,
+      "reason": "Same as graphql-query; an Instagram origin endpoint that stays upstream.",
+      "upstreamVerified": true
+    },
+    {
+      "id": "accounts-edit",
+      "endpoint": "/api/v1/web/accounts/edit/",
+      "method": "POST",
+      "evidence": "String literal \"/api/v1/web/accounts/edit/\" found in Instagram web bundles.",
+      "evidenceSource": ".scratch/bundles/*.js",
+      "confidence": "verified",
+      "backendSupports": false,
+      "reason": "Instagram account editing. Requires an authenticated Instagram session. The loader forwards it upstream untouched; this backend has no equivalent and does not claim one.",
+      "upstreamVerified": true
+    },
+    {
+      "id": "configure-to-story",
+      "endpoint": "/api/v1/media/configure_to_story/",
+      "method": "POST",
+      "evidence": "String literal \"/api/v1/media/configure_to_story/\" found in Instagram web bundles.",
+      "evidenceSource": ".scratch/bundles/*.js",
+      "confidence": "high",
+      "backendSupports": false,
+      "reason": "Publishing a story to Instagram. Requires Instagram authorization."
+    },
+    {
+      "id": "bloks-apps",
+      "endpoint": "/api/v1/bloks/apps/",
+      "method": "POST",
+      "evidence": "String literal \"/api/v1/bloks/apps/\" found in Instagram web bundles.",
+      "evidenceSource": ".scratch/bundles/*.js",
+      "confidence": "high",
+      "backendSupports": false,
+      "reason": "Instagram's Bloks server-driven UI. Not reimplementable and not proxied by this backend."
+    },
+    {
+      "id": "linkshim",
+      "endpoint": "/api/v1/web/linkshim/link/",
+      "method": "POST",
+      "evidence": "String literal \"/api/v1/web/linkshim/link/\" found in Instagram web bundles.",
+      "evidenceSource": ".scratch/bundles/*.js",
+      "confidence": "high",
+      "backendSupports": false,
+      "reason": "Outbound-link safety check performed by Instagram."
+    },
+    {
+      "id": "phone-confirm",
+      "endpoint": "/api/v1/web/accounts/phone_confirm_send_sms_code/ , /api/v1/web/accounts/phone_confirm_verify_sms_code/",
+      "method": "POST",
+      "evidence": "String literals found in Instagram web bundles.",
+      "evidenceSource": ".scratch/bundles/*.js",
+      "confidence": "high",
+      "backendSupports": false,
+      "reason": "Instagram phone verification. Out of scope by design; the backend never handles Instagram credentials or verification codes."
+    },
+    {
+      "id": "ajax-endpoints",
+      "endpoint": "/ajax/bootloader-endpoint/ , /ajax/relay-ef/ , /ajax/weblite_app_logging/ , /ajax/bz",
+      "method": "POST",
+      "evidence": "String literals found in Instagram web bundles; the loader already relays POST bodies verbatim to these.",
+      "evidenceSource": ".scratch/bundles/*.js and src/server.js request forwarding",
+      "confidence": "verified",
+      "backendSupports": false,
+      "reason": "Instagram internal telemetry and bootloader calls. They flow upstream through the loader's catch-all, which is the correct behaviour.",
+      "upstreamVerified": true
+    },
+    {
+      "id": "ig-app-id",
+      "endpoint": "X-IG-App-ID header value 936619743392459",
+      "method": "n/a",
+      "evidence": "The literal app id appears in Instagram web bundles alongside the X-IG-App-ID header name.",
+      "evidenceSource": ".scratch/bundles/*.js",
+      "confidence": "high",
+      "backendSupports": false,
+      "reason": "This is a public client identifier, not a credential, but this backend deliberately does not synthesise Instagram requests with it. Recorded for documentation only."
+    }
+  ],
+  "upstreamRestrictions": [
+    {
+      "id": "no-etag",
+      "observation": "Instagram document responses carry no ETag or Last-Modified and send Cache-Control: no-store, must-revalidate.",
+      "consequence": "Conditional revalidation (304) is impossible by design; the loader caches with its own TTL instead.",
+      "confidence": "high"
+    },
+    {
+      "id": "sitemaps-403",
+      "observation": "Sitemaps advertised in robots.txt (ig_seo_profile_sitemap, ig_places_sitemap) return 403 with an empty body.",
+      "consequence": "No shortcodes, usernames or location ids can be harvested from sitemaps, so /p/<shortcode>/ and /reel/<shortcode>/ cannot be probed with real identifiers.",
+      "confidence": "high"
+    },
+    {
+      "id": "captcha",
+      "observation": "Login flows can present a CAPTCHA.",
+      "consequence": "No automated Instagram login is attempted. The backend never solves, bypasses or proxies a challenge, and never asks the user for Instagram credentials.",
+      "confidence": "high"
+    }
+  ],
+  "authenticatedVerification": {
+    "method": "Headless Chromium over CDP (scripts/capture-authenticated.js) with a real session injected into the browser cookie store. Raw HTTP with the same cookie returns 302 to the homepage, so a real browser is required.",
+    "date": "2026-10-15",
+    "routesObservedAuthenticated": [
+      "/",
+      "/explore/",
+      "/direct/inbox/",
+      "/accounts/edit/",
+      "/<own-profile>/"
+    ],
+    "detail": "See docs/authenticated-observations.md",
+    "frontendCallsOurBackend": false,
+    "frontendCallsOurBackendEvidence": "0 occurrences of '__backend' and 0 of the local loader origin in captured authenticated frontend traffic.",
+    "observedEndpoints": [
+      {
+        "method": "POST",
+        "path": "/graphql/query",
+        "status": 200,
+        "op": "PolarisFeedTimelineRootV2Query",
+        "docId": "28805668309050001",
+        "transport": "form-encoded persisted query (__a=1, __d=www)",
+        "responseEnvelope": [
+          "data",
+          "extensions",
+          "status"
+        ],
+        "paginationVars": [
+          "after",
+          "before",
+          "first",
+          "last"
+        ]
+      },
+      {
+        "method": "POST",
+        "path": "/graphql/query",
+        "status": 200,
+        "op": "PolarisStoriesV3AdsPoolQuery",
+        "docId": "28678424071792947"
+      },
+      {
+        "method": "POST",
+        "path": "/api/graphql",
+        "status": 200,
+        "op": "second GraphQL entry point"
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/accounts/edit/web_form_data/",
+        "status": 200,
+        "responseKeys": [
+          "form_data",
+          "status"
+        ]
+      },
+      {
+        "method": "GET",
+        "path": "/api/v1/web/get_profile_pic_props/<username>/",
+        "status": 200
+      },
+      {
+        "method": "POST",
+        "path": "/api/v1/web/fxcal/ig_sso_users/",
+        "status": 200,
+        "responseKeys": [
+          "status"
+        ]
+      },
+      {
+        "method": "GET",
+        "path": "/ajax/bootloader-endpoint/",
+        "status": 200
+      },
+      {
+        "method": "POST",
+        "path": "/ajax/bulk-route-definitions/",
+        "status": 200
+      },
+      {
+        "method": "POST",
+        "path": "/ajax/bz",
+        "status": 200
+      },
+      {
+        "method": "POST",
+        "path": "/ajax/qm/",
+        "status": 200
+      },
+      {
+        "method": "POST",
+        "path": "/sync/instagram/",
+        "status": 200
+      },
+      {
+        "method": "POST",
+        "path": "/logging_client_events",
+        "status": 200
+      },
+      {
+        "method": "GET",
+        "path": "/btmanifest/1050469598/instagram/main",
+        "status": 200
+      },
+      {
+        "method": "GET",
+        "path": "/data/manifest.json",
+        "status": 200
+      }
+    ]
+  }
+}

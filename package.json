@@ -1,0 +1,25 @@
+{
+  "name": "instagram-runtime-loader",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Runtime fetch and proxy of the original Instagram web client (upstream: https://www.instagram.com/).",
+  "type": "commonjs",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "validate": "node scripts/validate-inventory.js",
+    "sweep": "node scripts/sweep-pages.js",
+    "sweep:retry": "RETRY_INCONCLUSIVE=1 BETWEEN_MS=20000 node scripts/sweep-pages.js",
+    "verify": "node scripts/verify.js",
+    "verify:browser": "node scripts/browser-check.js",
+    "test": "node --test test/*.test.js",
+    "test:backend": "node --test test/migrations.test.js test/auth.test.js test/api.test.js test/crypto.test.js",
+    "test:loader": "node --test test/loader.test.js test/viewer-isolation.test.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "express": "^4.21.2"
+  }
+}
