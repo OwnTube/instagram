@@ -148,6 +148,17 @@ function updateProfile(db, id, fields) {
   return getById(db, id);
 }
 
+async function setPassword(db, id, password) {
+  const derived = await hashPassword(password);
+  db.prepare('UPDATE users SET password_hash = ?, password_salt = ?, password_params = ?, updated_at = ? WHERE id = ?').run(
+    derived.hash,
+    derived.salt,
+    derived.params,
+    nowIso(),
+    id
+  );
+}
+
 function requireUser(row) {
   if (!row) throw notFound('User not found');
   return row;
@@ -188,6 +199,7 @@ module.exports = {
   getCredentials,
   authenticate,
   updateProfile,
+  setPassword,
   requireUser,
   setUpstreamIdentity,
   getUpstreamIdentity,

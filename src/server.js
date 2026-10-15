@@ -5,6 +5,9 @@ const config = require('./config');
 const { ResponseCache } = require('./cache');
 const { fetchUpstream, UpstreamError } = require('./upstream');
 const backendApp = require('./backend');
+const backendConfig = require('./backend/config');
+const { createClone, classify } = require('./clone');
+const { ensureCsrfCookie } = require('./clone/session');
 const {
   rewriteHtml,
   rewriteCss,
@@ -38,6 +41,20 @@ if (process.env.BACKEND_ENABLED !== '0') {
   } catch (error) {
     console.error(`[loader] backend disabled: ${error.message}`);
   }
+}
+
+/*
+ * Compatibility layer: the original client's own API paths, answered from our
+ * database. Mounted before the raw-body parser and the upstream catch-all, so
+ * clone-owned requests are parsed by it and never reach Instagram.
+ */
+let cloneInstance = null;
+if (backendInstance) {
+  cloneInstance = createClone({
+    db: backendInstance.db,
+    dataDir: process.env.CLONE_DATA_DIR || require('node:path').dirname(require('node:path').resolve(backendConfig.databaseFile)),
+  });
+  app.use(cloneInstance.router);
 }
 
 // Capture the raw request body so non-GET requests (the client POSTs to
@@ -246,6 +263,7 @@ app.get('/__loader/health', (req, res) => {
     backend: backendInstance
       ? { mounted: true, prefix: backendApp.prefix, health: `${backendApp.prefix}/api/v1/health` }
       : { mounted: false },
+    clone: cloneInstance ? { mounted: true, health: '/__clone/health' } : { mounted: false },
     recentFailures: failures.slice(0, 25),
   });
 });
@@ -265,6 +283,12 @@ app.get('/__loader/health', (req, res) => {
  * importantly, avoids re-requesting the same page from the origin.
  */
 app.all('*', async (req, res) => {
+  // Clone-owned paths never fall through to Instagram, even when the backend
+  // could not start: their requests carry clone users' data.
+  if (classify(req.path) !== 'other') {
+    res.setHeader('cache-control', 'no-store');
+    return res.status(503).json({ message: 'The application backend is unavailable', status: 'fail' });
+  }
   const target = `${config.upstream}${req.originalUrl}`;
   const isDocumentGet = req.method === 'GET' || req.method === 'HEAD';
 
@@ -385,6 +409,7 @@ app.all('*', async (req, res) => {
       ? Buffer.from(rewriteHtml(upstream.body.toString('utf8')), 'utf8')
       : upstream.body;
 
+    if (isHtml) ensureCsrfCookie(req, res);
     if (cacheable) {
       docCache.set(documentKey(req), {
         body,
@@ -435,6 +460,7 @@ function documentKey(req) {
 }
 
 function sendDocument(res, entry) {
+  if (res.req && /text\/html/.test(entry.contentType)) ensureCsrfCookie(res.req, res);
   res.setHeader('content-type', entry.contentType);
   if (entry.etag) res.setHeader('etag', entry.etag);
   if (!res.getHeader('cache-control')) {
