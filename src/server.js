@@ -13,7 +13,13 @@ const { createPatcher } = require('./shell/bundlePatches');
 
 const templates = createTemplateStore({ dir: process.env.SHELL_TEMPLATE_DIR || '.cache/shell' });
 const patcher = createPatcher();
-const dropPrefetches = process.env.SHELL_DROP_PREFETCHES !== '0';
+// Relay prefetches are dropped from a signed-in TEMPLATE, whose prefetched data
+// belongs to the account that captured it, not the clone viewer. An anonymous
+// upstream page is served faithfully: its prefetch is anonymous Instagram data
+// the page renders from, and removing it strands the client on a runtime query
+// we cannot answer (the loading screen then never clears). Opt in to drop on
+// every page only for debugging.
+const forceDropPrefetches = process.env.SHELL_DROP_PREFETCHES === '1';
 const {
   rewriteHtml,
   rewriteCss,
@@ -276,7 +282,7 @@ app.get('/__loader/health', (req, res) => {
       ? { mounted: true, prefix: backendApp.prefix, health: `${backendApp.prefix}/api/v1/health` }
       : { mounted: false },
     clone: cloneInstance ? { mounted: true, health: '/__clone/health' } : { mounted: false },
-    shell: { templates: templates.available(), dropPrefetches, bundlePatches: patcher.report() },
+    shell: { templates: templates.available(), forceDropPrefetches, bundlePatches: patcher.report() },
     recentFailures: failures.slice(0, 25),
   });
 });
@@ -513,7 +519,7 @@ function canonicalDocPath(req) {
 function sendHtml(req, res, status, html, { fromTemplate = false } = {}) {
   const ctx = cloneInstance ? cloneInstance.documentContext(req, res) : { viewer: null, csrfToken: null, encryption: null };
   const stats = {};
-  const out = personalize(html, { ...ctx, dropPrefetches: fromTemplate || dropPrefetches, stats });
+  const out = personalize(html, { ...ctx, dropPrefetches: fromTemplate || forceDropPrefetches, stats });
   if (cloneInstance) {
     const mentionsKey = /public_?key/i.test(html);
     cloneInstance.recordDocument({ path: req.path, status, fromTemplate, signedIn: Boolean(ctx.viewer), mentionsKey, ...stats });

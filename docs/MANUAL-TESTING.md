@@ -37,6 +37,16 @@ field or show a confirmation-code screen; that is the form's behaviour, not a
 server requirement. If it shows a code screen, the code is at
 **http://localhost:12000/__clone/dev/outbox** (same machine, development only).
 
+## Why the page should no longer hang on the loading screen
+
+The server serves Instagram's anonymous page as-is, keeping the page's own
+prefetched (anonymous) data that it renders from, and only swaps in our
+encryption key, CSRF token and the viewer. It does NOT strip that data, which
+earlier left the client waiting on a query we cannot answer. If a page still
+hangs, check `http://localhost:12000/__clone/health` (same machine) for GraphQL
+operations or REST paths the client called that are unimplemented: those return
+`501` immediately rather than hanging, and are listed there as the work queue.
+
 ## What to expect after logging in
 
 Instagram only renders the signed-in app (feed, inbox, settings) for a signed-in
@@ -76,4 +86,5 @@ Your Instagram session is never given to the server: the tool reads a saved file
 | `BACKEND_SECURE_COOKIES` | off | set `1` when served over HTTPS |
 | `CLONE_MAIL_TRANSPORT` | `outbox` (dev), `disabled` (prod) | `log` prints codes to the console |
 | `SHELL_TEMPLATE_DIR` | `.cache/shell` | |
+| `SHELL_DROP_PREFETCHES` | off | debug only: `1` strips Relay prefetches from every page |
 | `AUTH_RATE_LIMIT_MAX` | 20 per minute per IP | raise if testing hits 429 |

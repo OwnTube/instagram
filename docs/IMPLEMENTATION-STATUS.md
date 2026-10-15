@@ -27,7 +27,7 @@ is no Instagram session anywhere.
 
 ## Verified
 
-Automated, `npm test`: 180 tests, 180 pass, 0 fail, 0 skipped (clean `.scratch`).
+Automated, `npm test`: 186 tests, 186 pass, 0 fail, 0 skipped (clean `.scratch`).
 
 - Database: clean install, idempotent migrations, persistence across restart,
   hashed passwords/tokens/codes, unique races mapped to 409, FK cascades.
@@ -46,7 +46,10 @@ Automated, `npm test`: 180 tests, 180 pass, 0 fail, 0 skipped (clean `.scratch`)
 - Shell: key/CSRF/viewer substitution, per-user output, HTML escaping, prefetch
   dropping, scrubbing incl. escaped and double-escaped Unicode, template serving.
 
-Real browser, `npm run verify:browser-auth` (headless Chromium, CDP): 15/15. It
+Real browser, `npm run verify:browser-auth` (headless Chromium, CDP): 15/15, and
+`npm run verify:browser-loading` reproduces the loading-screen hang when prefetch
+dropping is forced on and confirms it is gone by default (a page that renders from
+its seeded store clears the spinner). It
 serves a SYNTHETIC page through the document path and runs signup (username and
 password encrypted in the browser), session cookies, personalised reload, logout,
 re-login. It does not involve the genuine Instagram client.
@@ -64,6 +67,8 @@ re-login. It does not involve the genuine Instagram client.
   page. Templates need a one-time save of a signed-in page (docs/MANUAL-TESTING.md).
 - Route definitions are answered with empty entries; client navigation may then
   load route code differently than on instagram.com.
+- A signed-in clone viewer without a template is served the anonymous page
+  personalised with their id; it renders the logged-out view (does not hang).
 - Realtime DM delivery (MQTT) is not reproduced; DMs work over REST.
 - The original signup form may still require its contact field or show a code
   step; removing those needs a client patch once the live form can be inspected.
