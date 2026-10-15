@@ -95,11 +95,21 @@ function personalize(html, { viewer = null, csrfToken, encryption, dropPrefetche
       return undefined;
     }
     if (node && typeof node === 'object' && !Array.isArray(node)) {
-      if (encryption && 'key_id' in node && 'public_key' in node) {
-        node.key_id = encryption.key_id;
-        node.public_key = encryption.public_key;
-        node.version = encryption.version;
-        counts.encryption += 1;
+      if (encryption) {
+        // The page's password-encryption config, in either naming style. The
+        // original value's type (number or string) is kept for key ids.
+        for (const [idKey, pubKey, verKey] of [
+          ['key_id', 'public_key', 'version'],
+          ['keyId', 'publicKey', 'version'],
+          ['keyID', 'publicKey', 'version'],
+        ]) {
+          if (idKey in node && pubKey in node && typeof node[pubKey] === 'string') {
+            node[idKey] = typeof node[idKey] === 'number' ? Number(encryption.key_id) : encryption.key_id;
+            node[pubKey] = encryption.public_key;
+            if (verKey in node) node[verKey] = typeof node[verKey] === 'number' ? Number(encryption.version) : encryption.version;
+            counts.encryption += 1;
+          }
+        }
       }
       if (csrfToken && typeof node.csrf_token === 'string') {
         node.csrf_token = csrfToken;

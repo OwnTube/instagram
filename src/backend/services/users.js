@@ -69,6 +69,14 @@ async function createUserAsync(db, { username, email, password, displayName }) {
     db.exec('COMMIT');
   } catch (error) {
     db.exec('ROLLBACK');
+    // The duplicate checks above run before the (async) hash, so a concurrent
+    // signup can still win the race; the unique index is the real guarantee.
+    if (/UNIQUE constraint failed: users\.username_ci/.test(error.message)) {
+      throw conflict('That username is already taken', { field: 'username' });
+    }
+    if (/UNIQUE constraint failed: users\.email_ci/.test(error.message)) {
+      throw conflict('That email is already registered', { field: 'email' });
+    }
     throw error;
   }
   return getById(db, id);

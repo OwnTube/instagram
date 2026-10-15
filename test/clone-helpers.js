@@ -26,7 +26,7 @@ async function startFakeOrigin() {
     let body = '';
     req.on('data', (c) => (body += c));
     req.on('end', () => {
-      received.push({ method: req.method, url: req.url, cookie: req.headers.cookie || null, body });
+      received.push({ method: req.method, url: req.url, cookie: req.headers.cookie || null, headers: req.headers, body });
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'set-cookie': 'sessionid=UPSTREAM; Path=/' });
       res.end('<!doctype html><html><head></head><body>upstream document</body></html>');
     });
@@ -35,9 +35,13 @@ async function startFakeOrigin() {
   return { origin: `http://127.0.0.1:${server.address().port}`, received, close: () => new Promise((r) => server.close(r)) };
 }
 
-async function startCloneServer(extraEnv = {}) {
+/**
+ * Start the whole server. Pass `dir` to reuse a data directory (a restart);
+ * `keepDir` leaves it on close so a second server can open it.
+ */
+async function startCloneServer(extraEnv = {}, { dir: reuseDir, keepDir = false } = {}) {
   fs.mkdirSync(TEST_ROOT, { recursive: true });
-  const dir = fs.mkdtempSync(path.join(TEST_ROOT, 'clone-'));
+  const dir = reuseDir || fs.mkdtempSync(path.join(TEST_ROOT, 'clone-'));
   const fake = await startFakeOrigin();
   const env = {
     UPSTREAM_ORIGIN: fake.origin,
@@ -58,9 +62,11 @@ async function startCloneServer(extraEnv = {}) {
   }
   clearSrcCache();
   const mail = [];
+  const logs = [];
   const realLog = console.log;
   console.log = (...args) => {
     const line = args.join(' ');
+    logs.push(line);
     const m = line.match(/signup confirmation code for (\S+): (\d{6})/);
     if (m) mail.push({ email: m[1], code: m[2] });
     else if (!/^\[(loader|backend)\]/.test(line)) realLog(...args);
@@ -77,12 +83,22 @@ async function startCloneServer(extraEnv = {}) {
     base: `http://127.0.0.1:${server.address().port}`,
     upstream: fake.received,
     mail,
+    logs,
     dir,
+    dbFile: env.BACKEND_DB,
+    /** A second connection to the server's database, for checking stored state. */
+    openDb() {
+      const { DatabaseSync } = require('node:sqlite');
+      const db = new DatabaseSync(env.BACKEND_DB);
+      db.exec('PRAGMA busy_timeout = 5000');
+      return db;
+    },
     async close() {
       console.log = realLog;
+      server.closeAllConnections?.();
       await new Promise((r) => server.close(r));
       await fake.close();
-      fs.rmSync(dir, { recursive: true, force: true });
+      if (!keepDir) fs.rmSync(dir, { recursive: true, force: true });
     },
   };
 }
@@ -127,7 +143,7 @@ class Browser {
     } else if (raw) {
       body = raw;
     }
-    const res = await fetch(`${this.base}${p}`, { method, headers: h, body, redirect: 'manual' });
+    const res = await fetch(`${this.base}${p}`, { method, headers: h, body, redirect: 'manual', signal: AbortSignal.timeout(15000) });
     this.absorb(res);
     const text = await res.text();
     let parsed = text;
@@ -162,7 +178,7 @@ class Browser {
   }
 
   /** The full signup flow of the original form. */
-  async signup(server, { username, email = `${username}@example.test`, password = 'correct horse 42', fullName = '' }) {
+  async signup(server, { username, email = `${username}@example.test`, password = 'correct horse 42', fullName = '', codeFor }) {
     await this.visit();
     const enc_password = await this.encPassword(password);
     const fields = { email, enc_password, username, first_name: fullName, opt_into_one_tap: 'false' };
@@ -170,7 +186,7 @@ class Browser {
     if (!attempt.body.dryrun_passed) throw new Error(`signup attempt failed: ${JSON.stringify(attempt.body)}`);
     await this.post('/api/v1/web/consent/check_age_eligibility/', { day: 1, month: 1, year: 1990 });
     await this.post('/api/v1/accounts/send_verify_email/', { email, device_id: 'test' });
-    const code = server.mail.filter((m) => m.email === email.toLowerCase()).at(-1).code;
+    const code = codeFor ? await codeFor(email.toLowerCase()) : server.mail.filter((m) => m.email === email.toLowerCase()).at(-1).code;
     const checked = await this.post('/api/v1/accounts/check_confirmation_code/', { code, email, device_id: 'test' });
     const created = await this.post('/api/v1/web/accounts/web_create_ajax/', {
       ...fields,

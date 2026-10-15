@@ -12,9 +12,10 @@
     "sweep:retry": "RETRY_INCONCLUSIVE=1 BETWEEN_MS=20000 node scripts/sweep-pages.js",
     "verify": "node scripts/verify.js",
     "verify:browser": "node scripts/browser-check.js",
-    "test": "node --test test/*.test.js",
-    "test:backend": "node --test test/migrations.test.js test/auth.test.js test/api.test.js test/crypto.test.js",
-    "test:loader": "node --test test/loader.test.js test/viewer-isolation.test.js"
+    "test": "node --test --test-timeout=90000 test/*.test.js",
+    "test:backend": "node --test --test-timeout=90000 test/migrations.test.js test/auth.test.js test/api.test.js test/crypto.test.js test/visibility.test.js",
+    "test:loader": "node --test --test-timeout=90000 test/loader.test.js test/viewer-isolation.test.js test/upstream-leak.test.js test/shell.test.js",
+    "test:clone": "node --test --test-timeout=90000 test/clone.test.js test/auth-lifecycle.test.js test/password-encryption.test.js"
   },
   "engines": {
     "node": ">=18"

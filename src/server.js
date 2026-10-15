@@ -302,7 +302,6 @@ app.all('*', async (req, res) => {
     res.setHeader('cache-control', 'no-store');
     return res.status(503).json({ message: 'The application backend is unavailable', status: 'fail' });
   }
-  const target = `${config.upstream}${req.originalUrl}`;
   const isDocumentGet = req.method === 'GET' || req.method === 'HEAD';
 
   // A signed-in clone viewer on an app route gets the signed-in shell from a
@@ -317,6 +316,15 @@ app.all('*', async (req, res) => {
     }
   }
 
+  // The upstream document is a route-independent app shell; the real route is
+  // resolved client-side from our API. So for an identity-bearing route we
+  // fetch a CANONICAL shell path instead of the literal one, and the clone
+  // username, shortcode or thread id in the URL never reaches Instagram. The
+  // query string is dropped with it, since it too can carry an identifier.
+  const upstreamPath = canonicalDocPath(req);
+  if (upstreamPath !== req.originalUrl) res.setHeader('x-clone-canonical', upstreamPath);
+  const target = `${config.upstream}${upstreamPath}`;
+
   // Upstream documents are always fetched anonymously: no browser cookie is
   // ever relayed to Instagram (src/upstream.js strips them), so the upstream
   // document is identical for every viewer and safe to share in the cache.
@@ -328,7 +336,7 @@ app.all('*', async (req, res) => {
   let cached = null;
   const conditional = {};
   if (isDocumentGet && docCache) {
-    cached = docCache.get(documentKey(req));
+    cached = docCache.get(documentKey(req, upstreamPath));
     if (docCache.isFresh(cached)) {
       docCache.stats.hits += 1;
       res.setHeader('x-loader-cache', 'hit');
@@ -375,7 +383,7 @@ app.all('*', async (req, res) => {
     // 304: the cached copy is still current. Serve it; do not re-download.
     if (upstream.status === 304 && cached && docCache) {
       docCache.stats.revalidated += 1;
-      docCache.touch(documentKey(req), {
+      docCache.touch(documentKey(req, upstreamPath), {
         etag: upstream.headers.get('etag'),
         'last-modified': upstream.headers.get('last-modified'),
       });
@@ -395,7 +403,7 @@ app.all('*', async (req, res) => {
       // Throttling and origin errors carry no usable page. If we have a
       // previously successful anonymous copy, serve it rather than a dead page.
       if (isDocumentGet && docCache) {
-        const stale = docCache.get(documentKey(req));
+        const stale = docCache.get(documentKey(req, upstreamPath));
         if (docCache.isServableWhenStale(stale, config.documentStaleMs)) {
           res.setHeader('x-loader-cache', 'stale');
           res.setHeader('x-loader-upstream', target);
@@ -434,7 +442,7 @@ app.all('*', async (req, res) => {
       : upstream.body;
 
     if (cacheable) {
-      docCache.set(documentKey(req), {
+      docCache.set(documentKey(req, upstreamPath), {
         body,
         contentType: 'text/html; charset=utf-8',
         status: upstream.status,
@@ -452,7 +460,7 @@ app.all('*', async (req, res) => {
     recordFailure({ kind: 'document', status, url: target, reason: error.message });
 
     if (isDocumentGet && docCache) {
-      const stale = docCache.get(documentKey(req));
+      const stale = docCache.get(documentKey(req, upstreamPath));
       if (docCache.isServableWhenStale(stale, config.documentStaleMs)) {
         res.setHeader('x-loader-cache', 'stale');
         res.setHeader('x-loader-upstream', target);
@@ -478,9 +486,23 @@ function markPrivate(res) {
 }
 
 /** Cache key for a document: method + path + the client variant it was fetched for. */
-function documentKey(req) {
+function documentKey(req, upstreamPath) {
   const variant = req.get('sec-fetch-site') ? 'nav' : 'plain';
-  return `doc:${variant}:${req.originalUrl}`;
+  return `doc:${variant}:${upstreamPath}`;
+}
+
+/**
+ * The path to fetch upstream for a document. Profiles, posts, stories and DM
+ * threads carry clone identifiers in their URL; they all render from the same
+ * route-independent app shell, so the root (or the inbox) is fetched instead
+ * and the identifier stays on our side.
+ */
+function canonicalDocPath(req) {
+  const kind = routeKind(req.path);
+  if (kind === 'profile' || kind === 'post' || kind === 'stories') return '/';
+  if (/^\/direct\/(t|thread)\//.test(req.path)) return '/direct/inbox/';
+  if (/^\/(reel|reels|tv)\/[A-Za-z0-9_-]+/.test(req.path)) return '/';
+  return req.originalUrl;
 }
 
 /**
@@ -490,7 +512,15 @@ function documentKey(req) {
  */
 function sendHtml(req, res, status, html, { fromTemplate = false } = {}) {
   const ctx = cloneInstance ? cloneInstance.documentContext(req, res) : { viewer: null, csrfToken: null, encryption: null };
-  const out = personalize(html, { ...ctx, dropPrefetches: fromTemplate || dropPrefetches });
+  const stats = {};
+  const out = personalize(html, { ...ctx, dropPrefetches: fromTemplate || dropPrefetches, stats });
+  if (cloneInstance) {
+    const mentionsKey = /public_?key/i.test(html);
+    cloneInstance.recordDocument({ path: req.path, status, fromTemplate, signedIn: Boolean(ctx.viewer), mentionsKey, ...stats });
+    if (mentionsKey && !stats.encryption) {
+      console.warn(`[clone] ${req.path}: the page mentions a public key but no encryption config was replaced; login and signup on this page will fail to decrypt`);
+    }
+  }
   markPrivate(res);
   res.removeHeader('etag');
   res.removeHeader('last-modified');

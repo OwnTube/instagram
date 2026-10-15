@@ -20,6 +20,8 @@ const present = require('../present');
 
 const CODE_TTL_MS = 10 * 60 * 1000;
 const CODE_MAX_ATTEMPTS = 5;
+const CODE_MAX_SENDS = 5;
+const SIGNUP_TOKEN_TTL_MS = 30 * 60 * 1000;
 
 /** Validation results in the `errors` map the signup form renders under each field. */
 function fieldErrors(fn) {
@@ -33,14 +35,22 @@ function fieldErrors(fn) {
 }
 
 function register(router, ctx) {
-  const { db, codec, mailer, limits, requireViewer, media } = ctx;
+  const { db, codec, mailer, limits, requireViewer, media, decryptFailures = {} } = ctx;
 
   function readPassword(p) {
     if (p.enc_password) {
       try {
         return codec.decrypt(String(p.enc_password));
       } catch (error) {
-        if (error instanceof PasswordFormatError) throw badRequest('Password could not be read. Refresh the page and try again.');
+        if (error instanceof PasswordFormatError) {
+          decryptFailures[error.message] = (decryptFailures[error.message] || 0) + 1;
+          if (error.message === 'unknown key id') {
+            // The page encrypted to a key that is not ours, i.e. the page's
+            // encryption config was not replaced when it was served.
+            throw badRequest('This page is out of date. Reload the page and try again.', { reason: 'foreign_encryption_key' });
+          }
+          throw badRequest('Your password could not be read. Reload the page and try again.', { reason: error.message });
+        }
         throw error;
       }
     }
@@ -84,13 +94,17 @@ function register(router, ctx) {
     const add = (field, message, code) => {
       if (message) errors[field] = [{ message, code }];
     };
-    add('username', fieldErrors(() => v.username(String(p.username ?? ''))), 'username_invalid');
+    if (fieldErrors(() => v.username(String(p.username ?? '')))) {
+      add('username', 'Usernames can only use letters, numbers, underscores and periods, and must be 3 to 30 characters.', 'username_invalid');
+    }
     if (!errors.username && users.getByUsername(db, p.username)) add('username', `A user with that username already exists.`, 'username_is_taken');
-    add('email', fieldErrors(() => v.email(String(p.email ?? ''))), 'email_invalid');
+    if (fieldErrors(() => v.email(String(p.email ?? '')))) add('email', 'Enter a valid email address.', 'email_invalid');
     if (!errors.email && db.prepare('SELECT 1 FROM users WHERE email_ci = ?').get(String(p.email).toLowerCase())) {
       add('email', 'Another account is using the same email.', 'email_is_taken');
     }
-    add('password', fieldErrors(() => v.password(password)), 'password_too_weak');
+    if (fieldErrors(() => v.password(password))) {
+      add('password', 'Create a password at least 10 characters long that includes a letter and a number.', 'password_too_weak');
+    }
     if (p.first_name && String(p.first_name).length > 100) add('first_name', 'Name is too long.', 'name_too_long');
     return errors;
   }
@@ -140,11 +154,31 @@ function register(router, ctx) {
 
   async function sendVerifyEmail(req, res) {
     const email = v.email(String(req.params_.email ?? ''));
-    if (!mailer.enabled) return igFail(res, 503, 'Email delivery is not configured on this server.');
+    if (!mailer.enabled) return igFail(res, 503, 'Email delivery is not configured on this server.', { error_type: 'email_unavailable' });
+    const recent = db
+      .prepare('SELECT COUNT(*) AS n FROM signup_codes WHERE email_ci = ? AND created_at > ?')
+      .get(email, new Date(Date.now() - CODE_TTL_MS).toISOString()).n;
+    if (recent >= CODE_MAX_SENDS) {
+      return igFail(res, 429, 'Too many codes were requested for this email. Wait a few minutes and try again.', { spam: true });
+    }
     const code = String(crypto.randomInt(0, 1000000)).padStart(6, '0');
-    db.prepare(
-      'INSERT INTO signup_codes (id, email_ci, code_hash, created_at, expires_at) VALUES (?, ?, ?, ?, ?)'
-    ).run(newId('code'), email, hashToken(`${email}:${code}`), nowIso(), addMs(CODE_TTL_MS));
+    const now = nowIso();
+    db.exec('BEGIN');
+    try {
+      // A new code replaces any earlier one: only the latest code works.
+      db.prepare('UPDATE signup_codes SET consumed_at = ? WHERE email_ci = ? AND consumed_at IS NULL').run(now, email);
+      db.prepare('INSERT INTO signup_codes (id, email_ci, code_hash, created_at, expires_at) VALUES (?, ?, ?, ?, ?)').run(
+        newId('code'),
+        email,
+        hashToken(`${email}:${code}`),
+        now,
+        addMs(CODE_TTL_MS)
+      );
+      db.exec('COMMIT');
+    } catch (error) {
+      db.exec('ROLLBACK');
+      throw error;
+    }
     await mailer.sendSignupCode(email, code);
     return igOk(res, { email_sent: true, require_captcha: false });
   }
@@ -174,22 +208,34 @@ function register(router, ctx) {
       return igFail(res, 400, 'Please correct the highlighted fields.', { account_created: false, errors, error_type: 'form_validation_error' });
     }
     const email = String(p.email).toLowerCase();
+    let verified = null;
     if (ctx.config.requireEmailCode) {
       const token = String(p.force_sign_up_code || p.signup_code || '');
-      const row = token
-        ? db.prepare('SELECT id, email_ci, created_at FROM signup_codes WHERE signup_token_hash = ?').get(hashToken(token))
+      verified = token
+        ? db.prepare('SELECT id, email_ci, consumed_at FROM signup_codes WHERE signup_token_hash = ?').get(hashToken(token))
         : null;
-      if (!row || row.email_ci !== email || Date.now() - Date.parse(row.created_at) > 2 * CODE_TTL_MS) {
+      if (!verified || verified.email_ci !== email || Date.now() - Date.parse(verified.consumed_at) > SIGNUP_TOKEN_TTL_MS) {
         return igFail(res, 400, 'Confirm your email address to finish signing up.', { account_created: false, error_type: 'signup_code_required' });
       }
-      db.prepare('UPDATE signup_codes SET signup_token_hash = NULL WHERE id = ?').run(row.id);
     }
-    const user = await users.createUserAsync(db, {
-      username: String(p.username).trim(),
-      email,
-      password,
-      displayName: p.first_name ? String(p.first_name).trim().slice(0, 100) : undefined,
-    });
+    let user;
+    try {
+      user = await users.createUserAsync(db, {
+        username: String(p.username).trim(),
+        email,
+        password,
+        displayName: p.first_name ? String(p.first_name).trim().slice(0, 100) : undefined,
+      });
+    } catch (error) {
+      // Lost a race with another signup for the same username or email.
+      if (error instanceof AppError && error.status === 409) {
+        const field = error.details?.field || 'username';
+        return igFail(res, 400, error.message, { account_created: false, errors: { [field]: [{ message: error.message, code: `${field}_is_taken` }] }, error_type: 'form_validation_error' });
+      }
+      throw error;
+    }
+    // The verification is spent only once the account exists.
+    if (verified) db.prepare('UPDATE signup_codes SET signup_token_hash = NULL WHERE id = ?').run(verified.id);
     issueSession(db, req, res, user);
     return igOk(res, { account_created: true, user_id: user.pk });
   }
