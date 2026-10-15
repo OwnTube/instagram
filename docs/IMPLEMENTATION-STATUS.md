@@ -1,62 +1,77 @@
 # Implementation status
 
 Checkpoint for resuming work. Verify against `git log` and `npm test` before trusting it.
+Manual testing instructions: docs/MANUAL-TESTING.md.
 
 ## Architecture
 
 ```
-original client (served by the loader from Instagram's CDN, anonymously)
+original client (page + code fetched from Instagram anonymously by the loader)
   -> src/shell      per-request edits to the page's bootstrap JSON: our password
                     encryption key, this browser's CSRF token, the clone viewer;
-                    /__clone/runtime.js transport guard; optional signed-in
-                    templates; module-scoped bundle patch registry (empty)
-  -> src/clone      the client's own API paths (/api/v1/*, /graphql/query,
-                    /api/graphql, /rupload_igphoto/*, account forms) answered in
-                    Instagram's response shapes; telemetry sunk locally;
+                    /__clone/runtime.js transport guard; signed-in templates;
+                    module-scoped bundle patch registry (empty)
+  -> src/clone      the client's own API paths answered in Instagram's shapes;
+                    route definitions answered locally; telemetry sunk locally;
                     unimplemented clone paths return 501 and are listed on
                     /__clone/health; nothing clone-owned is forwarded upstream
-  -> src/backend    services + SQLite (node:sqlite), migrations 0001, 0002
+  -> src/backend    services + SQLite (node:sqlite, WAL), migrations 0001, 0002
   -> .data/         database, media files, password-encryption keypair (0600)
 ```
 
-Sessions: `sessionid` (HttpOnly), `csrftoken` (= session CSRF secret, echoed by the
-client as X-CSRFToken), `ds_user_id`, all Path=/ on our origin. Browser cookies and
-X-CSRFToken are never forwarded upstream. There is no Instagram session anywhere.
+Sessions: `sessionid` (HttpOnly), `csrftoken` (= session CSRF secret, echoed as
+X-CSRFToken), `ds_user_id`, Path=/ on our origin. Browser cookies and X-CSRFToken
+are never forwarded upstream. Identity-bearing pages (profile, post, reel, stories,
+DM thread) fetch a canonical shell upstream so their identifiers stay here. There
+is no Instagram session anywhere.
 
-## Verified by automated tests (124 passing)
+## Verified
 
-- Signup through the original form endpoints, with email codes and enc_password v10.
-- Login/logout, uniform failure answer, CSRF bound to the session.
-- Upload (rupload + configure), stored media, media serving follows visibility.
-- GraphQL feed (`PolarisFeedTimelineRootV2Query`) per viewer, with pagination.
-- Likes, comments, saves, follows/requests, private accounts, profiles and edits.
-- Direct threads (send, idempotent retry, seen, membership), stories (tray, seen, viewers).
-- Search, activity inbox, unknown-operation reporting.
-- No clone request, cookie or telemetry reaches the upstream stand-in.
+Automated, `npm test`: 183 tests, 183 pass, 0 fail, 0 skipped (clean `.scratch`).
+
+- Database: clean install, idempotent migrations, persistence across restart,
+  hashed passwords/tokens/codes, unique races mapped to 409, FK cascades.
+- Signup: field validation, duplicates (case-insensitive), email codes (wrong,
+  reused, expired, locked after 5 guesses, resend invalidates, per-email limit),
+  single-use signup token under concurrent submission, production without email
+  fails clearly, outbox is local-only and codes are not logged.
+- Login/logout: username/email, uniform failure, enc_password v10, foreign key
+  rejected with a reason, logout revokes in DB, expired/revoked sessions refused,
+  password change revokes other sessions, re-login, restart keeps sessions.
+- Isolation: per-user responses, CSRF bound to session, private accounts, DMs.
+- Upstream: no clone username, shortcode, thread id, session, CSRF token or
+  password reaches the stand-in origin across a browsing session.
+- Feed: GraphQL and REST timeline equal an independent SQL query through follow,
+  approve, unfollow, delete, likes and pagination.
+- Shell: key/CSRF/viewer substitution, per-user output, HTML escaping, prefetch
+  dropping, scrubbing incl. escaped and double-escaped Unicode, template serving.
+
+Real browser, `npm run verify:browser-auth` (headless Chromium, CDP): 17/17. It
+serves a SYNTHETIC page through the document path and runs signup (password
+encrypted in the browser), code, session cookies, personalised reload, logout,
+re-login. It does not involve the genuine Instagram client.
 
 ## Not verified
 
-- **Nothing has run against the genuine Instagram client in this session.** The
-  container's network policy refuses every Instagram/Meta host, so no page or bundle
-  could be fetched. Response shapes come from Instagram's public v1 contract and the
-  earlier captures in docs/; they may need adjustment once the live client runs.
-- `src/shell` (personalize, templates/scrubber, runtime, bundlePatches) has no
-  dedicated tests yet; it is exercised only indirectly by the document path.
-- No browser test has been run.
+- The genuine Instagram client has not been run: this environment's network
+  policy refuses every Instagram/Meta host. Response shapes come from Instagram's
+  public v1 contract and earlier captures; the bootstrap keys the shell edits
+  (encryption config, csrf_token, CurrentUserInitialData) are assumed, not seen.
 
 ## Known gaps
 
-- Signed-in shell needs an operator-captured template (`scripts/snapshot-shell.js`);
-  without one, a signed-in clone user still receives the logged-out page.
-- `/ajax/bulk-route-definitions/` is still forwarded upstream; its body can contain
-  clone usernames in route URLs.
-- Realtime DM delivery (MQTT) is not reproduced; DMs work over REST polling only.
-- Mailer has only a development `log` transport.
+- Without a signed-in template, a logged-in clone user is served the logged-out
+  page. Templates need a one-time save of a signed-in page (docs/MANUAL-TESTING.md).
+- Route definitions are answered with empty entries; client navigation may then
+  load route code differently than on instagram.com.
+- Realtime DM delivery (MQTT) is not reproduced; DMs work over REST.
+- No email provider; the development outbox stands in.
+- Commits are local only: pushing to vibecodeforever/instagram is refused (403).
 
 ## Next tasks
 
-1. Add tests for src/shell.
-2. With network access to Instagram: load `/` through the loader in Chromium, confirm
-   the encryption/CSRF substitutions take effect, and drive the real login form.
-3. Capture a signed-in template, then iterate on `/__clone/health` unsupported lists.
-4. Answer bulk-route-definitions locally.
+1. With network access: open `/` through the loader, check `/__clone/health`
+   `documents[0].encryption >= 1`, then sign up and log in through the real form.
+2. Capture a signed-in template and work through the unsupported lists on
+   `/__clone/health`.
+3. Profile and post pages against the live client.
