@@ -185,6 +185,94 @@ const migrations = [
       `);
     },
   },
+  {
+    /*
+     * Compatibility with the original client's data model:
+     *   - numeric string `pk` on every entity the client addresses by id, and a
+     *     shortcode `code` for posts (the client builds /p/<code>/ from it);
+     *   - stored media (uploads) referenced by posts, stories and avatars;
+     *   - email confirmation codes for the client's signup flow;
+     *   - story views and per-member read state for direct threads.
+     * Existing rows are backfilled so the migration works on a populated database.
+     */
+    id: '0002_client_compat',
+    up(db) {
+      const { newPk, shortcodeFromPk } = require('../lib/ids');
+      db.exec(`
+        CREATE TABLE media (
+          id            TEXT PRIMARY KEY,
+          upload_id     TEXT NOT NULL UNIQUE,
+          owner_id      TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          storage_key   TEXT NOT NULL UNIQUE,
+          content_type  TEXT NOT NULL,
+          byte_size     INTEGER NOT NULL,
+          width         INTEGER,
+          height        INTEGER,
+          sha256        TEXT NOT NULL,
+          purpose       TEXT NOT NULL DEFAULT 'post',
+          created_at    TEXT NOT NULL,
+          attached_at   TEXT
+        );
+        CREATE INDEX idx_media_owner ON media(owner_id, created_at DESC);
+
+        ALTER TABLE users ADD COLUMN pk TEXT;
+        ALTER TABLE users ADD COLUMN external_url TEXT;
+        ALTER TABLE users ADD COLUMN avatar_media_id TEXT REFERENCES media(id) ON DELETE SET NULL;
+
+        ALTER TABLE posts ADD COLUMN pk TEXT;
+        ALTER TABLE posts ADD COLUMN code TEXT;
+        ALTER TABLE posts ADD COLUMN media_id TEXT REFERENCES media(id) ON DELETE SET NULL;
+        ALTER TABLE posts ADD COLUMN comments_disabled INTEGER NOT NULL DEFAULT 0;
+
+        ALTER TABLE comments ADD COLUMN pk TEXT;
+        ALTER TABLE stories ADD COLUMN pk TEXT;
+        ALTER TABLE stories ADD COLUMN media_id TEXT REFERENCES media(id) ON DELETE SET NULL;
+        ALTER TABLE conversations ADD COLUMN pk TEXT;
+        ALTER TABLE messages ADD COLUMN pk TEXT;
+        ALTER TABLE messages ADD COLUMN client_context TEXT;
+        ALTER TABLE conversation_members ADD COLUMN last_seen_at TEXT;
+
+        CREATE TABLE story_views (
+          story_id   TEXT NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
+          viewer_id  TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          seen_at    TEXT NOT NULL,
+          PRIMARY KEY (story_id, viewer_id)
+        );
+
+        CREATE TABLE signup_codes (
+          id            TEXT PRIMARY KEY,
+          email_ci      TEXT NOT NULL,
+          code_hash     TEXT NOT NULL,
+          attempts      INTEGER NOT NULL DEFAULT 0,
+          created_at    TEXT NOT NULL,
+          expires_at    TEXT NOT NULL,
+          consumed_at   TEXT,
+          signup_token_hash TEXT UNIQUE
+        );
+        CREATE INDEX idx_signup_codes_email ON signup_codes(email_ci, created_at DESC);
+      `);
+
+      for (const table of ['users', 'posts', 'comments', 'stories', 'conversations', 'messages']) {
+        const rows = db.prepare(`SELECT id FROM ${table} WHERE pk IS NULL`).all();
+        const set = db.prepare(`UPDATE ${table} SET pk = ? WHERE id = ?`);
+        for (const row of rows) set.run(newPk(), row.id);
+      }
+      const posts = db.prepare('SELECT id, pk FROM posts WHERE code IS NULL').all();
+      const setCode = db.prepare('UPDATE posts SET code = ? WHERE id = ?');
+      for (const row of posts) setCode.run(shortcodeFromPk(row.pk), row.id);
+
+      db.exec(`
+        CREATE UNIQUE INDEX idx_users_pk ON users(pk);
+        CREATE UNIQUE INDEX idx_posts_pk ON posts(pk);
+        CREATE UNIQUE INDEX idx_posts_code ON posts(code);
+        CREATE UNIQUE INDEX idx_comments_pk ON comments(pk);
+        CREATE UNIQUE INDEX idx_stories_pk ON stories(pk);
+        CREATE UNIQUE INDEX idx_conversations_pk ON conversations(pk);
+        CREATE UNIQUE INDEX idx_messages_pk ON messages(pk);
+        CREATE UNIQUE INDEX idx_messages_client_context ON messages(sender_id, client_context) WHERE client_context IS NOT NULL;
+      `);
+    },
+  },
 ];
 
 module.exports = { migrations };

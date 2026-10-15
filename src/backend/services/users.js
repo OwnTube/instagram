@@ -9,20 +9,22 @@
  * here is authenticated to the loader's backend and to nothing else.
  */
 
-const { newId, nowIso } = require('../lib/ids');
+const { newId, nowIso, newPk } = require('../lib/ids');
 const { hashPassword, verifyPassword } = require('../lib/passwords');
 const { conflict, notFound, unauthorized, badRequest } = require('../lib/errors');
 
-const PUBLIC_COLUMNS = `id, username, display_name, bio, avatar_url, is_private, status, created_at, updated_at`;
+const PUBLIC_COLUMNS = `id, pk, username, email, display_name, bio, avatar_url, external_url, is_private, status, created_at, updated_at`;
 
 function toPublic(row) {
   if (!row) return null;
   return {
     id: row.id,
+    pk: row.pk,
     username: row.username,
     displayName: row.display_name ?? null,
     bio: row.bio ?? null,
     avatarUrl: row.avatar_url ?? null,
+    externalUrl: row.external_url ?? null,
     isPrivate: Boolean(row.is_private),
     createdAt: row.created_at,
   };
@@ -56,9 +58,9 @@ async function createUserAsync(db, { username, email, password, displayName }) {
   db.exec('BEGIN');
   try {
     db.prepare(
-      `INSERT INTO users (id, username, username_ci, email, email_ci, password_hash, password_salt, password_params, display_name, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).run(id, username, usernameCi, email ?? null, emailCi, derived.hash, derived.salt, derived.params, displayName ?? null, now, now);
+      `INSERT INTO users (id, pk, username, username_ci, email, email_ci, password_hash, password_salt, password_params, display_name, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(id, newPk(), username, usernameCi, email ?? null, emailCi, derived.hash, derived.salt, derived.params, displayName ?? null, now, now);
 
     db.prepare(
       `INSERT INTO user_settings (user_id, locale, theme, is_private, allow_messages_from, updated_at)
@@ -76,15 +78,22 @@ function getById(db, id) {
   return db.prepare(`SELECT ${PUBLIC_COLUMNS} FROM users WHERE id = ?`).get(id) || null;
 }
 
+function getByPk(db, pk) {
+  return db.prepare(`SELECT ${PUBLIC_COLUMNS} FROM users WHERE pk = ?`).get(String(pk)) || null;
+}
+
 function getByUsername(db, username) {
   return db.prepare(`SELECT ${PUBLIC_COLUMNS} FROM users WHERE username_ci = ?`).get(String(username).toLowerCase()) || null;
 }
 
+/** Credentials by username or, as the original login form allows, by email. */
 function getCredentials(db, username) {
+  const key = String(username).toLowerCase();
+  const sql = 'SELECT id, password_hash, password_salt, password_params, status FROM users WHERE ';
   return (
-    db
-      .prepare('SELECT id, password_hash, password_salt, password_params, status FROM users WHERE username_ci = ?')
-      .get(String(username).toLowerCase()) || null
+    db.prepare(`${sql}username_ci = ?`).get(key) ||
+    (key.includes('@') ? db.prepare(`${sql}email_ci = ?`).get(key) : null) ||
+    null
   );
 }
 
@@ -105,16 +114,31 @@ async function authenticate(db, { username, password }) {
 function updateProfile(db, id, fields) {
   const sets = [];
   const values = [];
-  const map = { displayName: 'display_name', bio: 'bio', avatarUrl: 'avatar_url' };
+  const map = { displayName: 'display_name', bio: 'bio', avatarUrl: 'avatar_url', externalUrl: 'external_url' };
   for (const [key, column] of Object.entries(map)) {
     if (fields[key] !== undefined) {
       sets.push(`${column} = ?`);
       values.push(fields[key]);
     }
   }
+  if (fields.username !== undefined) {
+    const usernameCi = String(fields.username).toLowerCase();
+    const taken = db.prepare('SELECT id FROM users WHERE username_ci = ?').get(usernameCi);
+    if (taken && taken.id !== id) throw conflict('That username is already taken', { field: 'username' });
+    sets.push('username = ?', 'username_ci = ?');
+    values.push(fields.username, usernameCi);
+  }
+  if (fields.email !== undefined) {
+    const emailCi = fields.email ? String(fields.email).toLowerCase() : null;
+    const taken = emailCi && db.prepare('SELECT id FROM users WHERE email_ci = ?').get(emailCi);
+    if (taken && taken.id !== id) throw conflict('That email is already registered', { field: 'email' });
+    sets.push('email = ?', 'email_ci = ?');
+    values.push(fields.email || null, emailCi);
+  }
   if (fields.isPrivate !== undefined) {
     sets.push('is_private = ?');
     values.push(fields.isPrivate ? 1 : 0);
+    db.prepare('UPDATE user_settings SET is_private = ?, updated_at = ? WHERE user_id = ?').run(fields.isPrivate ? 1 : 0, nowIso(), id);
   }
   if (!sets.length) return getById(db, id);
   sets.push('updated_at = ?');
@@ -159,6 +183,7 @@ module.exports = {
   createUserAsync,
   createUser,
   getById,
+  getByPk,
   getByUsername,
   getCredentials,
   authenticate,

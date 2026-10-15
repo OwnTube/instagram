@@ -286,7 +286,7 @@ function createRouter(db) {
 
   router.get('/posts/:id/comments', (req, res) => {
     const { limit, cursor } = v.pagination(req.query);
-    const page = comments.list(db, req.params.id, { limit, cursor });
+    const page = comments.list(db, req.params.id, { limit, cursor }, req.user?.id ?? null);
     return ok(res, page.items, { nextCursor: page.nextCursor });
   });
 
@@ -401,7 +401,7 @@ function createRouter(db) {
     })
   );
 
-  router.get('/stories/:id', (req, res) => ok(res, stories.get(db, req.params.id)));
+  router.get('/stories/:id', (req, res) => ok(res, stories.get(db, req.params.id, req.user?.id ?? null)));
 
   router.get(
     '/users/:id/stories',
@@ -411,7 +411,7 @@ function createRouter(db) {
       if (target.is_private && !follows.canView(db, req.user?.id, target.id)) {
         return ok(res, [], { restricted: true });
       }
-      return ok(res, stories.listActiveByAuthor(db, target.id));
+      return ok(res, stories.listActiveByAuthor(db, target.id, req.user?.id ?? null));
     })
   );
 
