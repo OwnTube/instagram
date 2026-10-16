@@ -4,7 +4,7 @@
 // REA_BIN overrides the REA executable (default ~/rea-cli/node_modules/.bin/rea).
 const fs = require('node:fs'), path = require('node:path');
 const { execFile } = require('node:child_process');
-const REPO = '/home/user/instagram';
+const REPO = path.join(__dirname, '..');
 const REA = process.env.REA_BIN || require('node:path').join(require('node:os').homedir(), 'rea-cli/node_modules/.bin/rea');
 const out = process.argv[2], pagePath = process.argv[3] || '/', cmds = (process.argv[4] || 'inspect').split(',');
 const dir = path.join(REPO, '.scratch', 'rea-live');

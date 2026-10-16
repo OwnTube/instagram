@@ -29,6 +29,7 @@ const { isAllowedUpstreamUrl } = require('../src/rewrite');
 
 const ASSET_DIR = process.env.ASSET_CACHE_DIR || '.cache/assets';
 const DOC_DIR = process.env.DOCUMENT_CACHE_DIR || '.cache/documents';
+const BOOT_DIR = process.env.BOOTLOADER_CACHE_DIR || '.cache/bootloader';
 const MANIFEST = path.join('.cache', 'manifest.json');
 const STATIC = /^https:\/\/(?:static|scontent)\.cdninstagram\.com\//;
 
@@ -72,6 +73,21 @@ function collectReferences(stored) {
       });
     }
   }
+  // Stored bootloader-endpoint answers: the resource map of lazily loaded modules.
+  if (fs.existsSync(BOOT_DIR)) {
+    for (const f of fs.readdirSync(BOOT_DIR).filter((x) => x.endsWith('.body'))) {
+      try {
+        const answer = JSON.parse(fs.readFileSync(path.join(BOOT_DIR, f), 'utf8').replace(/^for \(;;\);/, ''));
+        const map = answer && answer.hrp && answer.hrp.hsrp && answer.hrp.hsrp.hblp && answer.hrp.hsrp.hblp.rsrcMap;
+        for (const e of Object.values(map || {})) if (e && e.src) add(e.src, e.type || 'js', 'bootloader');
+        const ix = answer && answer.hrp && answer.hrp.hsrp && answer.hrp.hsrp.hsdp && answer.hrp.hsrp.hsdp.ixData;
+        for (const e of Object.values(ix || {})) for (const k of ['spi', '_spi']) if (e && typeof e[k] === 'string') add(e[k], 'img', 'bootloader');
+      } catch {
+        /* not a JSON answer */
+      }
+    }
+  }
+
   // url() references in stored stylesheets, resolved against the sheet's URL.
   for (const [url, { file, meta }] of stored) {
     if (!/text\/css/.test(meta.entry.contentType || '') || !fs.existsSync(file)) continue;

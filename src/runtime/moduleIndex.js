@@ -45,27 +45,44 @@ function readStore(dir) {
   return entries;
 }
 
-function buildModuleIndex({ assetDir = '.cache/assets', documentDir = '.cache/documents' } = {}) {
+function buildModuleIndex({ assetDir = '.cache/assets', documentDir = '.cache/documents', bootloaderDir = '.cache/bootloader' } = {}) {
   const modules = new Map();
   const files = new Map();
   const rsrc = new Map();
   const comp = new Map();
   const documents = [];
+  /** Modules defined in payloads (documents' and bootloader answers' `define` lists, e.g. cr:NNN). */
+  const payloadDefines = new Map();
+  const noteSupport = (n, from) => {
+    if (!n || typeof n !== 'object' || Array.isArray(n)) return;
+    if (n.rsrcMap && typeof n.rsrcMap === 'object') {
+      for (const [hash, e] of Object.entries(n.rsrcMap)) if (e && e.src && !rsrc.has(hash)) rsrc.set(hash, { type: e.type, src: e.src, from });
+    }
+    if (n.compMap && typeof n.compMap === 'object') {
+      for (const [name, e] of Object.entries(n.compMap)) if (!comp.has(name)) comp.set(name, { ...e, from });
+    }
+    if (Array.isArray(n.define)) {
+      for (const d of n.define) if (Array.isArray(d) && typeof d[0] === 'string' && !payloadDefines.has(d[0])) payloadDefines.set(d[0], { deps: Array.isArray(d[1]) ? d[1] : [], from });
+    }
+  };
 
   for (const doc of readStore(documentDir)) {
     const html = fs.readFileSync(doc.bodyPath, 'utf8');
     documents.push(doc.key);
     editJsonBlocks(html, (n) => {
-      if (n && typeof n === 'object' && !Array.isArray(n)) {
-        if (n.rsrcMap && typeof n.rsrcMap === 'object') {
-          for (const [hash, e] of Object.entries(n.rsrcMap)) if (e && e.src && !rsrc.has(hash)) rsrc.set(hash, { type: e.type, src: e.src, from: doc.key });
-        }
-        if (n.compMap && typeof n.compMap === 'object') {
-          for (const [name, e] of Object.entries(n.compMap)) if (!comp.has(name)) comp.set(name, { ...e, from: doc.key });
-        }
-      }
+      noteSupport(n, doc.key);
       return undefined;
     });
+  }
+  for (const answer of readStore(bootloaderDir)) {
+    try {
+      const j = JSON.parse(fs.readFileSync(answer.bodyPath, 'utf8').replace(/^for \(;;\);/, ''));
+      const hrp = j.hrp || {};
+      noteSupport(hrp.hsrp && hrp.hsrp.hblp, answer.key);
+      noteSupport(hrp.jsmods, answer.key);
+    } catch {
+      /* not a JSON answer */
+    }
   }
   const hashBySrc = new Map([...rsrc].map(([hash, e]) => [e.src, hash]));
 
@@ -87,6 +104,7 @@ function buildModuleIndex({ assetDir = '.cache/assets', documentDir = '.cache/do
     rsrc,
     comp,
     documents,
+    payloadDefines,
     /** Every dependency of `name` (transitively) and those not defined locally. */
     closure(name) {
       const seen = new Set();
@@ -96,7 +114,7 @@ function buildModuleIndex({ assetDir = '.cache/assets', documentDir = '.cache/do
         const cur = stack.pop();
         if (seen.has(cur)) continue;
         seen.add(cur);
-        const mod = modules.get(cur);
+        const mod = modules.get(cur) || payloadDefines.get(cur);
         if (!mod) {
           missing.add(cur);
           continue;
