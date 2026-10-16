@@ -12,6 +12,11 @@
  *               sealed_key = crypto_box_seal(aes_key, public_key)   (80 bytes)
  *               ciphertext/tag = AES-256-GCM(aes_key, iv = 12 zero bytes, aad = time)
  *
+ * The newer CAA login and sign-up forms encrypt through FBBrowserPasswordEncryption,
+ * which writes the SAME envelope under either Instagram's tag (with the page's
+ * configured version) or Meta's default `#PWD_BROWSER:5:...`, depending on a
+ * per-page hook. Both labels are accepted for the envelope; nothing else is.
+ *
  * The page we serve carries OUR public key in place of Instagram's (see
  * src/shell), so the unmodified client encrypts to us and only this server can
  * read the password. The keypair is generated on first start and stored with
@@ -26,6 +31,8 @@ const nacl = require('tweetnacl');
 const { blake2b } = require('blakejs');
 
 const PREFIX = '#PWD_INSTAGRAM_BROWSER';
+/** Tag -> versions whose payload is the envelope above (read from FBBrowserPasswordEncryption). */
+const ENVELOPE_LABELS = { [PREFIX]: new Set(['10']), '#PWD_BROWSER': new Set(['5']) };
 const MAX_AGE_SECONDS = 24 * 60 * 60;
 
 class PasswordFormatError extends Error {}
@@ -87,17 +94,17 @@ function createPasswordCodec({ keyFile, allowPlaintext = true, now = () => Math.
   function decrypt(encPassword) {
     if (typeof encPassword !== 'string' || encPassword.length > 4096) throw new PasswordFormatError('missing enc_password');
     const parts = encPassword.split(':');
-    if (parts.length < 4 || parts[0] !== PREFIX) throw new PasswordFormatError('unrecognised enc_password');
-    const [, version, time] = parts;
+    if (parts.length < 4 || !ENVELOPE_LABELS[parts[0]]) throw new PasswordFormatError('unrecognised enc_password');
+    const [tagName, version, time] = parts;
     const payload = parts.slice(3).join(':');
     if (!/^\d{1,12}$/.test(time)) throw new PasswordFormatError('bad timestamp');
     if (Math.abs(now() - Number(time)) > MAX_AGE_SECONDS) throw new PasswordFormatError('stale enc_password');
 
-    if (version === '0') {
+    if (version === '0' && tagName === PREFIX) {
       if (!allowPlaintext) throw new PasswordFormatError('plaintext passwords are disabled');
       return payload;
     }
-    if (version !== '10') throw new PasswordFormatError('unsupported enc_password version');
+    if (!ENVELOPE_LABELS[tagName].has(version)) throw new PasswordFormatError('unsupported enc_password version');
 
     const buf = Buffer.from(payload, 'base64');
     if (buf.length < 4 + 80 + 16 || buf[0] !== 1) throw new PasswordFormatError('malformed payload');
@@ -127,7 +134,7 @@ function createPasswordCodec({ keyFile, allowPlaintext = true, now = () => Math.
  * Reference encryptor in the client's format. Used by the tests to prove the
  * server decrypts what the client produces; never used by the server itself.
  */
-function encryptLikeClient({ keyId, publicKeyHex, password, time }) {
+function encryptLikeClient({ keyId, publicKeyHex, password, time, tag: label = PREFIX, version = '10' }) {
   const aesKey = crypto.randomBytes(32);
   const sealed = sealedBoxSeal(new Uint8Array(aesKey), new Uint8Array(Buffer.from(publicKeyHex, 'hex')));
   const cipher = crypto.createCipheriv('aes-256-gcm', aesKey, Buffer.alloc(12));
@@ -136,7 +143,7 @@ function encryptLikeClient({ keyId, publicKeyHex, password, time }) {
   const tag = cipher.getAuthTag();
   const header = Buffer.from([1, Number(keyId), sealed.length & 0xff, (sealed.length >> 8) & 0xff]);
   const payload = Buffer.concat([header, Buffer.from(sealed), tag, ciphertext]).toString('base64');
-  return `${PREFIX}:10:${time}:${payload}`;
+  return `${label}:${version}:${time}:${payload}`;
 }
 
 module.exports = { createPasswordCodec, encryptLikeClient, PasswordFormatError, PREFIX };

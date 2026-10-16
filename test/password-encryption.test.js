@@ -47,4 +47,12 @@ test('enc_password decryption', async (t) => {
     const strict = createPasswordCodec({ keyFile, allowPlaintext: false });
     assert.throws(() => strict.decrypt(`#PWD_INSTAGRAM_BROWSER:0:${now}:hunter2 42`), /disabled/);
   });
+
+  await t.test("the CAA forms' envelope under Meta's default label is accepted; other labels are not", () => {
+    const mk = (tag, version) => encryptLikeClient({ keyId: cfg.key_id, publicKeyHex: cfg.public_key, password: 'caa pass 42', time: now, tag, version });
+    assert.strictEqual(codec.decrypt(mk('#PWD_BROWSER', '5')), 'caa pass 42');
+    assert.throws(() => codec.decrypt(mk('#PWD_BROWSER', '10')), /unsupported/);
+    assert.throws(() => codec.decrypt(mk('#PWD_OTHER', '10')), /unrecognised/);
+    assert.throws(() => codec.decrypt(`#PWD_BROWSER:0:${now}:plain 42`), PasswordFormatError, 'plaintext only under the Instagram tag');
+  });
 });

@@ -81,6 +81,15 @@ const cache = new ResponseCache();
 const assetStore = createAssetStore(
   process.env.ASSET_CACHE_DIR !== undefined ? process.env.ASSET_CACHE_DIR : process.env.NODE_TEST_CONTEXT ? '' : '.cache/assets',
 );
+// The same disk copy for the ANONYMOUS upstream documents the memory cache
+// already shares between visitors (nothing per-viewer is in them; the shell
+// adds viewer state on the way out). DOCUMENT_CACHE_DIR='' turns it off.
+const documentStore = createAssetStore(
+  process.env.DOCUMENT_CACHE_DIR !== undefined ? process.env.DOCUMENT_CACHE_DIR : process.env.NODE_TEST_CONTEXT ? '' : '.cache/documents',
+);
+// LOADER_PREFER_CACHE=1: serve any cached copy (memory or disk, any age)
+// without contacting the origin. For development while the origin throttles.
+const preferCache = process.env.LOADER_PREFER_CACHE === '1';
 
 // Diagnostics surface: which upstream resources failed and why. This is what
 // section 5 of the brief asks us to record, exposed for the operator.
@@ -188,7 +197,7 @@ app.get('/__ig/:host/*', async (req, res) => {
     cached = await assetStore.read(target);
     if (cached) cache.map.set(target, cached);
   }
-  if (cache.isFresh(cached)) {
+  if (cache.isFresh(cached) || (preferCache && cached)) {
     cache.stats.hits += 1;
     res.setHeader('x-loader-cache', 'hit');
     res.setHeader('x-loader-upstream', target);
@@ -294,7 +303,7 @@ app.get('/__loader/health', (req, res) => {
     ok: true,
     upstream: config.upstream,
     allowedAssetHosts: [...ALLOWED_HOSTS],
-    cache: { size: cache.size(), ttlMs: config.cacheTtlMs, ...cache.stats },
+    cache: { size: cache.size(), ttlMs: config.cacheTtlMs, ...cache.stats, diskAssets: Boolean(assetStore), diskDocuments: Boolean(documentStore), preferCache },
     // No Instagram session exists anywhere in this system, configured or
     // relayed. Clone users authenticate against our own backend only.
     instagramSessions: { relayed: false, configured: false },
@@ -363,8 +372,14 @@ app.all('*', async (req, res) => {
   let cached = null;
   const conditional = {};
   if (isDocumentGet && docCache) {
-    cached = docCache.get(documentKey(req, upstreamPath));
-    if (docCache.isFresh(cached)) {
+    const key = documentKey(req, upstreamPath);
+    cached = docCache.get(key);
+    if (!cached && documentStore) {
+      const stored = await documentStore.read(key);
+      // Freshness follows this process's configuration, not the writer's.
+      if (stored) docCache.map.set(key, (cached = { ...stored, ttlMs: config.documentCacheTtlMs }));
+    }
+    if (docCache.isFresh(cached) || (preferCache && cached)) {
       docCache.stats.hits += 1;
       res.setHeader('x-loader-cache', 'hit');
       res.setHeader('x-loader-upstream', target);
@@ -483,14 +498,16 @@ app.all('*', async (req, res) => {
       : upstream.body;
 
     if (cacheable) {
-      docCache.set(documentKey(req, upstreamPath), {
+      const entry = {
         body,
         contentType: 'text/html; charset=utf-8',
         status: upstream.status,
         ttlMs: config.documentCacheTtlMs,
-        etag: upstream.headers.get('etag'),
-        lastModified: upstream.headers.get('last-modified'),
-      });
+        etag: upstream.headers.get('etag') || undefined,
+        lastModified: upstream.headers.get('last-modified') || undefined,
+      };
+      docCache.set(documentKey(req, upstreamPath), entry);
+      if (documentStore) documentStore.write(documentKey(req, upstreamPath), entry);
       res.setHeader('x-loader-cache', 'miss');
     }
 
