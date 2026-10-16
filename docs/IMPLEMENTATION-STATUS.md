@@ -262,10 +262,21 @@ Each item: status, root cause, change, tests, screenshot (in
 - Screenshots: m08-p4-no-hydration-or-route-errors-after-3-runs.png,
   m09-rea-comet-ssr-call-sites.png (sent).
 
-### P5 Layout: OPEN (next)
-- Observed at 1280x900: the left navigation is the collapsed icon rail and,
-  on the empty feed, the footer overlaps it; the empty-feed card shows a
-  broken image. Not yet investigated.
+### P5 Layout at 1280x900: DONE (one fix, two findings)
+- Broken empty-feed illustration: FIXED. It is a plain `ixData` image
+  (`{sprited:0, uri}`) in the stored PolarisFeedEmptySULWrapper answer; the
+  asset manifest only collected sprited images (`spi`), so it was never
+  stored and the offline guard refused it. `scripts/asset-cache.js` now
+  collects both; `cache:warm` stored 51 such images (6938 of 6939 assets).
+  Test: test/asset-cache.test.js. Screenshot: m10 (sent).
+- Collapsed icon rail: GENUINE, not a defect. `PolarisNavigationSimple.react`
+  hides labels unless the rail is hovered or keyboard-focused
+  (`Ce=T!==null||!E&&!(j&&X)&&!(k&&Z)&&!fe`), widths 50/72, overlaying the
+  page. Verified: hovering expands it to labelled items (m11, sent).
+- Footer under the rail on the empty feed: the client's own layout. Every
+  atomic class used on the page (305) has a rule in the loaded stylesheets, so
+  no CSS is missing; the rail overlays a full-width page by design. Not
+  compared with a signed-in instagram.com page (no account may be used).
 
 ### P6 Core features
 - Signup, login, session, logout: verified (genuine forms; logout REST).
@@ -278,8 +289,7 @@ Each item: status, root cause, change, tests, screenshot (in
 
 ## Next tasks
 
-1. P5 layout at 1280x900 (navigation rail, footer overlap, empty-feed image).
-2. P6 in order: profile navigation, follow/unfollow, post creation, likes and
+1. P6 in order: profile navigation, follow/unfollow, post creation, likes and
    comments, search, notifications, stories viewer, Direct threads; each with a
    DB check and a screenshot.
-3. Make `SHELL_SIGNED_IN_HOME` the default once the above hold.
+2. Make `SHELL_SIGNED_IN_HOME` the default once the above hold.

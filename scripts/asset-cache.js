@@ -9,7 +9,7 @@
  *
  * References are collected from the cached anonymous documents
  * (.cache/documents): script/link tags, every `rsrcMap` entry (the code the
- * client's Bootloader may load later), image-sprite URLs (`ixData`), and the
+ * client's Bootloader may load later), image URLs (`ixData`, sprited or not), and the
  * url() references inside stored stylesheets (fonts, images), resolved against
  * each stylesheet's own URL. Only allow-listed static hosts are fetched, with
  * the loader's anonymous upstream client (no cookies), so its 429 cooldown and
@@ -68,6 +68,8 @@ function collectReferences(stored) {
             for (const e of Object.values(n.rsrcMap)) if (e && e.src) add(e.src, e.type || 'js', 'rsrcMap');
           }
           for (const k of ['spi', '_spi']) if (typeof n[k] === 'string') add(n[k], 'img', 'ixData');
+          // A non-sprited image entry ({sprited: 0, uri, width, height}).
+          if ('sprited' in n && typeof n.uri === 'string') add(n.uri, 'img', 'ixData');
         }
         return undefined;
       });
@@ -81,7 +83,10 @@ function collectReferences(stored) {
         const map = answer && answer.hrp && answer.hrp.hsrp && answer.hrp.hsrp.hblp && answer.hrp.hsrp.hblp.rsrcMap;
         for (const e of Object.values(map || {})) if (e && e.src) add(e.src, e.type || 'js', 'bootloader');
         const ix = answer && answer.hrp && answer.hrp.hsrp && answer.hrp.hsrp.hsdp && answer.hrp.hsrp.hsdp.ixData;
-        for (const e of Object.values(ix || {})) for (const k of ['spi', '_spi']) if (e && typeof e[k] === 'string') add(e[k], 'img', 'bootloader');
+        for (const e of Object.values(ix || {})) {
+          for (const k of ['spi', '_spi']) if (e && typeof e[k] === 'string') add(e[k], 'img', 'bootloader');
+          if (e && 'sprited' in e && typeof e.uri === 'string') add(e.uri, 'img', 'bootloader');
+        }
       } catch {
         /* not a JSON answer */
       }
@@ -183,7 +188,11 @@ async function main() {
   process.exit(cmd === 'check' && summary.missing ? 1 : 0);
 }
 
-main().catch((error) => {
-  console.error(error);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(error);
+    process.exit(1);
+  });
+}
+
+module.exports = { collectReferences };
