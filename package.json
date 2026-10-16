@@ -20,6 +20,7 @@
     "verify:browser-loading": "node scripts/browser-loading-check.js",
     "verify:genuine-signup": "node scripts/genuine-signup-check.js",
     "verify:genuine-login": "node scripts/genuine-login-check.js",
+    "verify:genuine-feed": "node scripts/genuine-feed-check.js",
     "cache:status": "node scripts/asset-cache.js status",
     "cache:warm": "node scripts/asset-cache.js warm"
   },

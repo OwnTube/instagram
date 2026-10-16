@@ -29,7 +29,7 @@ is no Instagram session anywhere.
 
 ## Verified
 
-Automated, `npm test`: all pass (229 at the time of writing).
+Automated, `npm test`: all pass (233 at the time of writing).
 
 - Database: clean install, idempotent migrations, persistence across restart,
   hashed passwords/tokens/codes, unique races mapped to 409, FK cascades.
@@ -91,7 +91,8 @@ Real browser, SYNTHETIC page: `npm run verify:browser-auth` 15/15 and
 - After sign-up the redirect lands on `/`, which renders the logged-out page:
   without a signed-in template the genuine client shows anonymous views even
   though the session is valid (current_user answers the new user).
-- The home feed in the genuine client (needs a signed-in client first).
+- Stories tray, suggested users, notifications, DM badges and quick promotions on
+  the signed-in home: their operations still get 501 (listed below).
 
 ## Known gaps
 
@@ -133,7 +134,9 @@ request that would leave it.
   Keys now include the origin and the synthetic checks use their own cache dirs.
 
 Verified, real browser, genuine client, `LOADER_OFFLINE=1 LOADER_PREFER_CACHE=1`:
-`npm run verify:genuine-signup` 11/11 and `npm run verify:genuine-login` 8/8, each
+`npm run verify:genuine-signup` 11/11 and `npm run verify:genuine-login` 8/8 (on
+2026-10-16 the login check gives 7/8: everything passes except "no uncaught page
+errors", React #418, see below), each
 asserting that no request was sent to any external host (requests are observed,
 not intercepted). One URL is refused by the CSP and so never sent: the logo sprite
 `Ny6hrBVLYjl.webp`, which the client paints from a CSS rule it inserts at runtime
@@ -149,47 +152,74 @@ key_id 42 and 7 stall, 219 mounts; fixed editor: all mount). The earlier
 With the fix, the logo sprite is also served locally (the `ixData` URL edit no
 longer breaks boot), so nothing is refused by the CSP any more.
 
-Open: React error #418 (hydration mismatch, recoverable) appears in about half
-of the login-page loads, with or without the sprite edit. Not yet diagnosed.
+Open: React error #418 (hydration mismatch, recoverable). Not reproduced on
+direct loads (0/4 signed-in and anonymous loads on 2026-10-16, also 0 with the
+debugger pausing on exceptions); seen in flows that sign in through the in-page
+form and then land on `/` (2026-10-16, strict offline: genuine-login check 3 of
+3 runs, one of them with `CLONE_CONTRACTS=0`, so not caused by answer
+completion; feed check every run, 4 of 4). Those flows also log `Route definition unavailable` (error 1357004) from
+the client router, whose route-definition requests are answered with empty
+entries (see Known gaps). Lead, not yet proven: the post-login soft navigation.
 
-## Signed-in initialisation (research, in progress)
+## Signed-in home and feed (genuine client)
 
-Established from the cached `/` document and bundles (offline):
+How the signed-in route is built from the anonymous `/` document plus Instagram's
+own public bootloader answer for `PolarisFeedRoot.react`: docs/REVERSE-ENGINEERING.md
+sections 2-7 (`src/shell/signedInRoute.js`, `SHELL_SIGNED_IN_HOME=1`, off by
+default). The earlier conclusion that anonymous material could not provide the
+feed root was wrong: the bootloader endpoint, asked anonymously, returns it.
 
-- The route is chosen by the server, not derived from the user id:
-  `CometPlatformRootClient.initialize` carries `initialRouteInfo.route` (root
-  view `CAAIGLoginHomepageRoot`, entry point, `actorID:"0"`) and
-  `expectedPreloaders` for actor "0". Editing only `CurrentUserInitialData.USER_ID`
-  leaves the client waiting on preloaders for another actor; that, not a tamper
-  check, is the likely reason the earlier identity edit never mounted.
-- The signed-in home is `PolarisFeedRoot.entrypoint` (in the cached bundles; its
-  preload props name PolarisFeedTimelineRootV2Query, the stories tray and
-  suggested users). `src/shell/signedInRoute.js` switches the whole route to it
-  for a signed-in viewer (SHELL_SIGNED_IN_HOME=1, experimental, OFF by default).
-- With the switch on, the mount stays hidden, with no exception (caught or
-  uncaught, checked with the debugger pausing on all exceptions) and no request.
-  The Bootloader contract, read from the cached `Bootloader` module, explains it:
-  `loadModules(ms)` proceeds only when `j(ms)` holds: every component is in the
-  component map `T` (filled from `compMap` payloads via `enableBootload`) and
-  every hash in its `r` / `rdfds.r` / `rds.r` is in the resource map `D` (from
-  `rsrcMap`). Otherwise the call is queued (`v`) and retried only when a later
-  payload adds component-map entries. An unknown component therefore waits
-  forever, silently. The bootloader endpoint is used only for components that
-  ARE in `compMap` with the `be` flag; it does not resolve unknown components.
-- `PolarisFeedRoot.react` is absent because the anonymous login page's payloads
-  carry only what the login route needs. The entries for the feed root (and its
-  dependency closure, with Instagram's resource hashes) are only in Instagram's
-  signed-in documents / route definitions. Fabricating them is not acceptable.
-- Not fully explained: in the switched run, an in-page `requireLazy(['Bootloader'])`
-  probe also never fired, while it fires on the unswitched page.
-- Conclusion: a genuine signed-in feed root cannot be produced from anonymous
-  material alone. Options needing a decision: (a) a scrubbed signed-in page saved
-  once by an operator (the existing template mechanism, docs/MANUAL-TESTING.md);
-  (b) a dedicated synthetic Instagram account used only to capture public code
-  maps, never as clone auth. Neither is done here without the owner's decision.
+Feed answers (`src/clone/graphql.js`, `src/runtime/graphqlContract.js`):
+`PolarisFeedTimelineRootV2Query` is resolved from the database, then completed
+to the selection set of the client's own compiled operation
+(`PolarisFeedTimelineRootV2Query.graphql` in the stored bundles): a selected
+field the resolver does not produce becomes an explicit null, so Relay does not
+treat the record as missing. Relay-internal fields (`__id`), client-schema
+fields (`ClientExtension`) and client resolver fields are never written.
+
+Root cause of the empty feed (B's post in the answer, glimmer on screen): the
+feed list is the client resolver `client__feedDedupedIds`
+(`polarisFeedDedupeIdsResolver`), whose fragment reads `media.view_state_item_type`
+and `media.brs_severity`. Those server fields appear only in the
+`RelayResolver.fragment` of the normalisation AST, which the contract reader did
+not visit, so they were absent; Relay's `readFragment` then throws its
+missing-data sentinel, the resolver yields nothing, `PolarisVirtualFeed` sees 0
+items and switches to the empty-feed suggested-users view (seen in the store:
+`__resolverSnapshot.isMissingData: true`). Fixed by reading resolver fragments
+(docs/REVERSE-ENGINEERING.md section 8; test/graphql-contract.test.js).
+
+Verified, real browser, genuine client, strict offline
+(`npm run verify:genuine-feed`, which sets `LOADER_OFFLINE=1
+LOADER_PREFER_CACHE=1 SHELL_SIGNED_IN_HOME=1`): 11/11.
+Local accounts A and B; A follows B (row in `follows`); B uploads a generated
+1080x1080 PNG and publishes it (rows in `media` and `posts`); A signs in through
+the genuine login form (useCDSWebLoginMutation); `/` mounts the genuine feed
+root, the client asks PolarisFeedTimelineRootV2Query, the answer carries B's
+post from the database, and the post renders: author, relative time, caption,
+and the photo loaded from `/__media` (naturalWidth 1080). No browser request to
+an external host; no outbound connection from the loader process (global fetch
+and http/https instrumented); `/__loader/health` reports offline and cache-only.
+Screenshots: `test-artifacts/screenshots/feed-0*.png` (not committed).
+
+Still reported by that run (not failures of the scenario):
+- 501, no local answer yet: PolarisStoriesV3TrayContainerQuery,
+  PolarisSuggestedUserListQuery, usePolarisNotificationsNavItemQuery,
+  IGDBadgeCountOffMsysQuery, IGDChatTabsJewelOffMsysQuery,
+  IGDOmniPickerNullStateListQuery, QuickPromotionSupportIGSchemaBatchFetchQuery
+  (stories tray and suggestions stay as glimmers);
+- 504 from the offline guard: `/ajax/bootloader-endpoint/` for
+  `PolarisImmersiveFeedPostModal.react` and `IGDChatTabsRootContentOffMsys.react`
+  (not yet stored; one anonymous endpoint request each when not throttled),
+  `www-service-worker.js`, the launcher icon;
+- the logged-out top bar ("Log In", "Sign Up") stays above the signed-in shell;
+  not yet explained;
+- React #418 (above).
 
 ## Next tasks
 
-1. Signed-in initialisation: see the research section above.
-2. Home feed against the local database in the genuine client; work through the
-   unsupported lists on `/__clone/health`.
+1. Answer the remaining signed-in home operations (stories tray, suggested
+   users, notifications, badges) from the database, completed to their
+   compiled contracts like the feed.
+2. Store the two missing bootloader-endpoint answers; explain the logged-out top
+   bar; diagnose React #418 in the post-login flow.
+3. Make `SHELL_SIGNED_IN_HOME` the default once the above hold.

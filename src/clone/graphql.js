@@ -22,6 +22,7 @@ const { badRequest, notFound, unauthorized } = require('../backend/lib/errors');
 const { isPk, pkFromShortcode } = require('../backend/lib/ids');
 const present = require('./present');
 const { createCaaRegistration, safeNext } = require('./caaRegistration');
+const { completeToContract } = require('../runtime/graphqlContract');
 
 function connection(items, nextCursor, toNode) {
   return {
@@ -37,7 +38,7 @@ function limitOf(vars, fallback = 12) {
 
 const AUTH_OPERATIONS = new Set(['useCDSWebLoginMutation', 'useCAARegistrationFormSubmitMutation']);
 
-function createGraphql({ db }) {
+function createGraphql({ db, contracts = null }) {
   const unsupported = new Map();
   let loginCore = null;
   let signupCore = null;
@@ -234,6 +235,10 @@ function createGraphql({ db }) {
     }
     try {
       const data = await resolver(vars, { viewer: req.viewer || null, req, res });
+      // Fill fields the resolver does not produce with explicit nulls, as the
+      // client's own compiled operation selects them (src/runtime/graphqlContract).
+      const tree = contracts && contracts.tree(name);
+      if (tree && data) completeToContract(tree, data);
       return res.status(200).json({ data, extensions: { is_final: true }, status: 'ok' });
     } catch (error) {
       if (error && error.status && error.status < 500) {

@@ -136,3 +136,36 @@ carry `__user=<local pk>`, and the client issues `PolarisFeedTimelineRootV2Query
 `PolarisSuggestedUserListQuery`, `usePolarisNotificationsNavItemQuery`,
 `IGDBadgeCountOffMsysQuery`, `QuickPromotionSupportIGSchemaBatchFetchQuery`, ...
 The remaining operations are the next work list.
+
+## 8. What the home feed's answer must contain (Relay contract)
+
+The client normalises a GraphQL answer with its compiled operation
+(`<Operation>.graphql`, `operation.selections`). Read from the stored bundles
+(`relay-runtime/store/*`, `PolarisFeedPage.react`, `PolarisVirtualFeed.react`,
+`polarisFeedDedupeIdsResolver`) and confirmed in the browser's Relay store:
+
+- A server field missing from the answer is left missing in the store (not
+  null). Readers that need it then report missing data, so the answer is
+  completed to the operation's selection set with explicit nulls
+  (`src/runtime/graphqlContract.js`).
+- Not server data, never written: `__id` (the record's client id; a null there
+  breaks `ClientID`/`RelayResponseNormalizer`, "reading 'indexOf'"),
+  `ClientExtension` selections (client schema, e.g. `is_hidden`,
+  `show_translation`, `unfollowed_users`; RelayReader does not count them as
+  missing), and client resolver fields themselves (`client__feedDedupedIds`).
+- `RelayResolver` nodes carry the resolver's root `fragment`; the server fields
+  a resolver reads may be selected only there. `ResolverFragments.readFragment`
+  throws a missing-data sentinel if any is absent, and the resolver yields
+  nothing.
+- The feed list: `PolarisFeedPage.react` takes
+  `xdt_api__v1__feed__timeline__connection.client__feedDedupedIds.dedupedItems`
+  (the resolver drops edges whose author is in `unfollowed_users` and de-duplicates
+  by media id), and `PolarisVirtualFeed.react` calls `setShowEmptyFeed(true)` when
+  the list is empty, which shows `PolarisFeedEmptySULWrapper` (suggested users).
+  So with `media.view_state_item_type` / `media.brs_severity` absent, a feed answer
+  with posts still rendered as an empty feed.
+- The connection is stored under the handle key
+  `__PolarisFeedPage__xdt_api__v1__feed__timeline__connection_connection(_variant:"home")`
+  (`page_info` with `end_cursor`/`has_next_page`, `edges[].cursor`, `edges[].node`).
+
+Reproduce: `npm run verify:genuine-feed` (strict offline; docs/IMPLEMENTATION-STATUS.md).

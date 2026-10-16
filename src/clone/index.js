@@ -25,6 +25,8 @@ const busboy = require('busboy');
 const { createPasswordCodec } = require('./passwordEncryption');
 const { createMediaStore, MAX_BYTES } = require('./media');
 const { createGraphql } = require('./graphql');
+const { createContractCache } = require('../runtime/graphqlContract');
+const { buildModuleIndex } = require('../runtime/moduleIndex');
 const fs = require('node:fs');
 const { attachViewer, csrfCheck, ensureCsrfCookie } = require('./session');
 const { resolveSession } = require('../backend/lib/auth');
@@ -205,7 +207,14 @@ function createClone({ db, dataDir = '.data', logger = console, env = process.en
     allowPlaintext: config.allowPlaintextPasswords,
   });
   const media = createMediaStore({ db, dir: path.join(dataDir, 'media') });
-  const graphql = createGraphql({ db });
+  // Operation contracts come from the client's own compiled artifacts in the
+  // local asset store (when present); built lazily, once per process.
+  let moduleIndex;
+  const contracts = createContractCache(() => {
+    if (moduleIndex === undefined) moduleIndex = env.CLONE_CONTRACTS === '0' ? null : buildModuleIndex({ assetDir: env.ASSET_CACHE_DIR || '.cache/assets', documentDir: env.DOCUMENT_CACHE_DIR || '.cache/documents', bootloaderDir: env.BOOTLOADER_CACHE_DIR || '.cache/bootloader' });
+    return moduleIndex;
+  });
+  const graphql = createGraphql({ db, contracts });
   if (config.mailTransport === 'outbox' && env.NODE_ENV === 'production') config.mailTransport = 'disabled';
   const mailer = createMailer({ transport: config.mailTransport, logger });
   const outbox = mailer.outbox;

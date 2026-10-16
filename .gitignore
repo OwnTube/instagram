@@ -9,3 +9,6 @@ npm-debug.log*
 # Chromium profiles created by scripts/diagnostics/*
 scripts/diagnostics/.chrome-profile-*/
 scripts/diagnostics/*.json
+
+# Screenshots and other output of the browser checks
+test-artifacts/
