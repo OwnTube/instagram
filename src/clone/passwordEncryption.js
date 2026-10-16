@@ -14,8 +14,10 @@
  *
  * The newer CAA login and sign-up forms encrypt through FBBrowserPasswordEncryption,
  * which writes the SAME envelope under either Instagram's tag (with the page's
- * configured version) or Meta's default `#PWD_BROWSER:5:...`, depending on a
- * per-page hook. Both labels are accepted for the envelope; nothing else is.
+ * configured version) or Meta's default tag `#PWD_BROWSER`, with the page's
+ * version (10) or the module default (5), depending on per-page hooks. The
+ * genuine sign-up form was observed sending `#PWD_BROWSER:10:...`. These labels
+ * are accepted for the envelope; nothing else is.
  *
  * The page we serve carries OUR public key in place of Instagram's (see
  * src/shell), so the unmodified client encrypts to us and only this server can
@@ -32,7 +34,7 @@ const { blake2b } = require('blakejs');
 
 const PREFIX = '#PWD_INSTAGRAM_BROWSER';
 /** Tag -> versions whose payload is the envelope above (read from FBBrowserPasswordEncryption). */
-const ENVELOPE_LABELS = { [PREFIX]: new Set(['10']), '#PWD_BROWSER': new Set(['5']) };
+const ENVELOPE_LABELS = { [PREFIX]: new Set(['10']), '#PWD_BROWSER': new Set(['5', '10']) };
 const MAX_AGE_SECONDS = 24 * 60 * 60;
 
 class PasswordFormatError extends Error {}
