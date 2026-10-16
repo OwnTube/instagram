@@ -42,6 +42,9 @@ const CLONE_PATHS = [
   /^\/api\/graphql\/?$/,
   /^\/graphql\//,
   /^\/graphql\/?$/,
+  // The ads GraphQL endpoint (story ads pool): its variables carry the viewer's
+  // context, so it is answered here, never forwarded.
+  /^\/ads\/igwww_ads_graphql\/?$/,
   /^\/rupload_ig(photo|video)\//,
   /^\/accounts\/(login|logout|web_create_ajax|edit)\/ajax\/?/,
   /^\/accounts\/web_create_ajax\//,
@@ -265,7 +268,15 @@ function createClone({ db, dataDir = '.data', logger = console, env = process.en
   });
   const ROUTE_DEFINITIONS = /^\/ajax\/(bulk-route-definitions|route-definition)\/?$/;
   // The telemetry sink writes nothing, so it needs no CSRF token (dropped beacons carry none).
-  router.use((req, res, next) => (ROUTE_DEFINITIONS.test(req.path) || req.path === '/__clone/dropped' ? next() : csrfCheck(req, res, next)));
+  // The ads GraphQL endpoint is called by a network layer that sends no CSRF
+  // token; only the read-only ads queries are answered there (see below).
+  const ADS_GRAPHQL = /^\/ads\/igwww_ads_graphql\/?$/;
+  const ADS_OPERATIONS = new Set(['PolarisStoriesV3AdsPoolWWWQuery']);
+  router.use((req, res, next) => (ROUTE_DEFINITIONS.test(req.path) || req.path === '/__clone/dropped' || ADS_GRAPHQL.test(req.path) ? next() : csrfCheck(req, res, next)));
+  router.post(ADS_GRAPHQL, (req, res, next) => {
+    if (ADS_OPERATIONS.has(String(req.params_.fb_api_req_friendly_name || ''))) return next();
+    return res.status(404).json({ data: null, errors: [{ message: 'Only ads queries are answered on this endpoint', code: 404 }], status: 'fail' });
+  });
 
   router.get('/__clone/health', (req, res) =>
     res.json({
@@ -320,7 +331,8 @@ function createClone({ db, dataDir = '.data', logger = console, env = process.en
   require('./routes/direct').register(router, ctx);
   require('./routes/upload').register(router, ctx);
 
-  router.post(['/graphql/query', '/graphql/query/', '/api/graphql', '/api/graphql/'], (req, res, next) => (graphql.isAuthOperation(req.params_) ? ctx.limits.auth(req, res, next) : next()), graphql.handler);
+  // /ads/igwww_ads_graphql/ carries the ads operations (e.g. PolarisStoriesV3AdsPoolWWWQuery) in the same form.
+  router.post(['/graphql/query', '/graphql/query/', '/api/graphql', '/api/graphql/', '/ads/igwww_ads_graphql', '/ads/igwww_ads_graphql/'], (req, res, next) => (graphql.isAuthOperation(req.params_) ? ctx.limits.auth(req, res, next) : next()), graphql.handler);
 
   /*
    * Route definitions are answered here with an empty map for every requested

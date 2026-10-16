@@ -27,6 +27,20 @@
  *    `last_activity_timestamp_ms`;
  *  - PolarisStoriesV3AdsPoolQuery (asked once the tray has reels):
  *    `xdt_injected_story_units.ad_media_items[]`; there are no ads locally;
+ *  - IGDOmniPickerNullStateListQuery (Direct "new message" picker, before any
+ *    search): `get_paginated_share_sheet_ranked_items.ranked_items[]`, a union
+ *    of ShareSheetUser and ShareSheetThread; answered with the viewer's group
+ *    threads and the accounts the viewer follows, most recent Direct activity
+ *    first;
+ *  - PolarisStoriesV3AdsPoolWWWQuery: same contract as the ads pool, sent to
+ *    /ads/igwww_ads_graphql/;
+ *  - IGDChatTabsContentOffMsysQuery (the opened chat tab): the same mailbox,
+ *    each thread with `slide_messages` (newest first, SlideMessageText);
+ *  - PolarisSuggestedUserListRefetchQuery: the suggestions list's refetch
+ *    (the empty feed), same response tree as PolarisSuggestedUserListQuery;
+ *  - IGPresenceUnifiedSetupQuery `xdt_api__v1__get__presence__disabled
+ *    {disabled}` and PolarisViewerSettingsQuery `viewer.user
+ *    {is_reduce_motion_setting_enabled}`;
  *  - QuickPromotionSupportIGSchemaBatchFetchQuery: one
  *    `ig_quick_promotion_batch_fetch_root` entry per requested surface, with
  *    its `eligible_promotions` connection.
@@ -82,8 +96,34 @@ function mutualName(db, viewerId, userId) {
   return row ? row.username : null;
 }
 
+/**
+ * A conversation's newest messages as a SlideMessage connection (newest first,
+ * the order of Direct's thread item lists).
+ */
+function slideMessages(db, conversationId, first) {
+  const rows = db
+    .prepare(
+      `SELECT m.pk, m.body, m.created_at, u.pk AS sender_pk FROM messages m JOIN users u ON u.id = m.sender_id
+       WHERE m.conversation_id = ? AND m.deleted_at IS NULL ORDER BY m.created_at DESC, m.pk DESC LIMIT ?`
+    )
+    .all(conversationId, first + 1);
+  const edges = rows.slice(0, first).map((m) => ({
+    node: {
+      __typename: 'SlideMessage',
+      id: String(m.pk),
+      sender_fbid: String(m.sender_pk),
+      timestamp_ms: ms(m.created_at),
+      igd_snippet: m.body,
+      text_body: m.body,
+      content: { __typename: 'SlideMessageText', text_body: m.body },
+    },
+    cursor: String(m.pk),
+  }));
+  return { edges, page_info: { end_cursor: edges.length ? edges[edges.length - 1].cursor : null, has_next_page: rows.length > first } };
+}
+
 /** The viewer's conversations as SlideThread nodes (newest activity first). */
-function mailboxThreads(db, viewer, limit) {
+function mailboxThreads(db, viewer, limit, { messages = 0 } = {}) {
   const rows = db
     .prepare(
       `SELECT c.id, c.pk, c.created_at,
@@ -117,28 +157,77 @@ function mailboxThreads(db, viewer, limit) {
       thread_title: others.map((u) => u.username).join(', '),
       thread_image_url: null,
       viewer_id: String(viewer.pk),
-      users: others.map((u) => present.user(db, u, null, { withFriendship: false })),
+      users: others.map((u) => ({ ...present.user(db, u, null, { withFriendship: false }), interop_messaging_user_fbid: String(u.pk) })),
+      usersWithoutViewer: others.map((u) => ({ id: String(u.pk), is_internal_user: false })),
+      is_group: others.length > 1,
+      thread_id: String(c.pk),
+      thread_fbid: String(c.pk),
+      nicknames: [],
+      is_pin: false,
       thread_subtype: null,
       viewer: { id: viewerUser.id, interop_messaging_user_fbid: String(viewer.pk), profile_pic_url: viewerUser.profile_pic_url },
       is_muted: false,
     };
+    if (messages > 0) thread.slide_messages = slideMessages(db, c.id, messages);
     return { node: { __typename: 'SlideThread', id: `slide_thread:${c.pk}`, as_ig_direct_thread: thread }, cursor: String(c.pk) };
   });
 }
 
+/** Ranked share-sheet items for the Direct picker's null state. */
+function shareSheetItems(db, viewer, limit) {
+  const people = db
+    .prepare(
+      `SELECT u.*,
+         (SELECT MAX(m.created_at) FROM messages m JOIN conversation_members a ON a.conversation_id = m.conversation_id
+            JOIN conversation_members b ON b.conversation_id = m.conversation_id
+            WHERE a.user_id = ? AND b.user_id = u.id AND m.deleted_at IS NULL) AS last_dm
+       FROM follows f JOIN users u ON u.id = f.followee_id
+       WHERE f.follower_id = ? AND f.state = 'accepted'
+       ORDER BY last_dm IS NULL, last_dm DESC, f.created_at DESC LIMIT ?`
+    )
+    .all(viewer.id, viewer.id, limit);
+  const groups = mailboxThreads(db, viewer, limit)
+    .map((e) => e.node.as_ig_direct_thread)
+    .filter((t) => t.users.length > 1);
+  const asUser = (u) => ({
+    __typename: 'ShareSheetUser',
+    share_sheet_item_id: String(u.pk),
+    is_meta_ai_bot: false,
+    full_name: u.display_name || '',
+    pk: String(u.pk),
+    profile_pic_url: present.user(db, u, null, { withFriendship: false }).profile_pic_url,
+    is_verified: false,
+    username: u.username,
+    interop_messaging_user_fbid: String(u.pk),
+  });
+  return [
+    ...groups.map((t) => ({
+      __typename: 'ShareSheetThread',
+      share_sheet_item_id: t.thread_key,
+      thread_id: t.thread_key,
+      thread_title: t.thread_title,
+      thread_image_url: null,
+      users: t.users.map((u) => ({ profile_pic_url: u.profile_pic_url })),
+    })),
+    ...people.map(asUser),
+  ].slice(0, limit);
+}
+
 function createHomeOperations(db) {
-  function mailbox(vars, ctx) {
+  function mailbox(vars, ctx, options) {
     const viewer = viewerOf(ctx);
     return {
       get_slide_mailbox_for_iris_subscription: {
+        __typename: 'SlideMailbox',
         id: `slide_mailbox:${viewer.pk}`,
         iris_inactive_subscription_uq_seq_id: null,
-        threads_by_folder: { edges: mailboxThreads(db, viewer, 50), page_info: EMPTY_PAGE },
+        threads_by_folder: { edges: mailboxThreads(db, viewer, 50, options), page_info: EMPTY_PAGE },
+        pinned_threads_v2: [],
       },
     };
   }
 
-  return {
+  const operations = {
     PolarisStoriesV3TrayContainerQuery(vars, ctx) {
       const viewer = viewerOf(ctx);
       const tray = stories.tray(db, viewer.id).map((t) => present.reel(db, users.getById(db, t.authorId), t.items, viewer.id));
@@ -180,13 +269,49 @@ function createHomeOperations(db) {
       return { xdt_notification_badge: { badge_count: { total_count: total, activity_badge_counts: counts } } };
     },
 
+    // The empty feed's suggestions refetch the same fragment (identical response tree).
+    PolarisSuggestedUserListRefetchQuery(vars, ctx) {
+      return operations.PolarisSuggestedUserListQuery(vars, ctx);
+    },
+
     PolarisStoriesV3AdsPoolQuery(vars, ctx) {
       viewerOf(ctx);
       return { xdt_injected_story_units: { ad_media_items: [] } };
     },
 
+    PolarisStoriesV3AdsPoolWWWQuery(vars, ctx) {
+      viewerOf(ctx);
+      return { xdt_injected_story_units: { ad_media_items: [] } };
+    },
+
+    IGDOmniPickerNullStateListQuery(vars, ctx) {
+      const viewer = viewerOf(ctx);
+      return { get_paginated_share_sheet_ranked_items: { ranked_items: shareSheetItems(db, viewer, 30) } };
+    },
+
     IGDBadgeCountOffMsysQuery: mailbox,
     IGDChatTabsJewelOffMsysQuery: mailbox,
+
+    // The open chat tab's thread list, with each thread's newest messages (up to
+    // the client's IGDMaxUnreadMessagesCount provider value). Nothing is pinned locally.
+    IGDChatTabsContentOffMsysQuery(vars, ctx) {
+      const first = Number(vars.__relay_internal__pv__IGDMaxUnreadMessagesCountrelayprovider);
+      return mailbox(vars, ctx, { messages: Number.isInteger(first) && first > 0 ? Math.min(first, 50) : 20 });
+    },
+
+    // Activity status is on for every local account (the accounts API reports
+    // presence_disabled: false as well).
+    IGPresenceUnifiedSetupQuery(vars, ctx) {
+      viewerOf(ctx);
+      return { xdt_api__v1__get__presence__disabled: { disabled: false } };
+    },
+
+    // The only viewer setting this operation reads; there is no local
+    // reduce-motion preference, so it is the default (off).
+    PolarisViewerSettingsQuery(vars, ctx) {
+      const viewer = viewerOf(ctx);
+      return { viewer: { user: { id: String(viewer.pk), is_reduce_motion_setting_enabled: false } } };
+    },
 
     QuickPromotionSupportIGSchemaBatchFetchQuery(vars) {
       // No promotions exist locally: every requested surface answers with none eligible.
@@ -196,6 +321,7 @@ function createHomeOperations(db) {
       };
     },
   };
+  return operations;
 }
 
-module.exports = { createHomeOperations, suggestions, mailboxThreads };
+module.exports = { createHomeOperations, suggestions, mailboxThreads, shareSheetItems };

@@ -383,6 +383,15 @@ app.get('/data/manifest.json', (req, res) => {
   res.json({ name: 'Instagram', short_name: 'Instagram', start_url: '/', scope: '/', display: 'standalone', background_color: '#ffffff', theme_color: '#ffffff', icons: [] });
 });
 
+// Instagram's service worker (registered for web push) is not served: at this
+// origin it would intercept every request and subscribe to Meta's push service,
+// neither of which this loader provides. The client treats a failed
+// registration as "push unavailable" and carries on.
+app.get('/www-service-worker.js', (req, res) => {
+  res.setHeader('cache-control', 'no-store');
+  res.status(404).type('text/plain').send('No service worker on this origin\n');
+});
+
 app.get('/__loader/health', (req, res) => {
   res.json({
     ok: true,
@@ -575,10 +584,14 @@ app.all('*', async (req, res) => {
     res.setHeader('x-loader-rewritten', isHtml ? 'html' : 'none');
     if (upstream.redirected) res.setHeader('x-loader-final-url', upstream.finalUrl);
 
-    // Only successful HTML documents are cached (they are all anonymous). The
-    // origin's own redirects and errors are
-    // relayed as-is, so a transient state is not frozen into the mirror.
-    const cacheable = isDocumentGet && isHtml && upstream.status === 200 && docCache;
+    // Only successful HTML documents and the origin's public images (e.g. the
+    // launcher icon the document head links, under /images/) are cached; both
+    // are anonymous and identical for every visitor. The origin's own redirects
+    // and errors are relayed as-is, so a transient state is not frozen into the
+    // mirror.
+    const upstreamType = upstream.headers.get('content-type') || '';
+    const publicImage = /^image\//.test(upstreamType) && /^\/images\//.test(req.path);
+    const cacheable = isDocumentGet && (isHtml || publicImage) && upstream.status === 200 && docCache;
     // Documents are stored as the upstream bytes and rewritten when sent, so a
     // fix to the rewrite rules also applies to copies already on disk.
     const body = upstream.body;
@@ -586,7 +599,7 @@ app.all('*', async (req, res) => {
     if (cacheable) {
       const entry = {
         body,
-        contentType: 'text/html; charset=utf-8',
+        contentType: isHtml ? 'text/html; charset=utf-8' : upstreamType,
         status: upstream.status,
         ttlMs: config.documentCacheTtlMs,
         etag: upstream.headers.get('etag') || undefined,
@@ -631,7 +644,8 @@ function markPrivate(res) {
 
 /** Cache key for a document: method + path + the client variant it was fetched for. */
 function documentKey(req, upstreamPath) {
-  const variant = req.get('sec-fetch-site') ? 'nav' : 'plain';
+  // The origin varies documents by Fetch Metadata; its public images do not.
+  const variant = /^\/images\//.test(req.path) ? 'file' : req.get('sec-fetch-site') ? 'nav' : 'plain';
   // The origin is part of the key: copies from different upstreams (a test
   // stand-in, Instagram) must never answer for each other, in memory or on disk.
   return `doc:${new URL(config.upstream).origin}:${variant}:${upstreamPath}`;

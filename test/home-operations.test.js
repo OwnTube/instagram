@@ -45,6 +45,8 @@ test('signed-in home operations', async (t) => {
     assert.deepStrictEqual(items.map((i) => i.user.username), ['cat_home'], 'self and followed accounts are never suggested');
     assert.strictEqual(items[0].social_context, 'Followed by bob_home');
     assert.strictEqual(items[0].user.friendship_status.following, false);
+    const refetch = await gql(ann, 'PolarisSuggestedUserListRefetchQuery', { data: {}, showMutualFollowersContext: true });
+    assert.deepStrictEqual(refetch.body.data.ayml.groups[0].items.map((i) => i.user.username), ['cat_home'], 'the empty feed refetch answers the same list');
   });
 
   await t.test('the notifications badge counts unread notifications by kind', async () => {
@@ -68,11 +70,37 @@ test('signed-in home operations', async (t) => {
     assert.deepStrictEqual(t0.users.map((u) => u.username), ['bob_home']);
     assert.strictEqual(unread(forAnn, a.pk), true);
     assert.strictEqual(unread((await gql(bob, 'IGDBadgeCountOffMsysQuery', {})).body, b.pk), false);
+    const tab = (await gql(ann, 'IGDChatTabsContentOffMsysQuery', { __relay_internal__pv__IGDMaxUnreadMessagesCountrelayprovider: 5 })).body;
+    const messages = tab.data.get_slide_mailbox_for_iris_subscription.threads_by_folder.edges[0].node.as_ig_direct_thread.slide_messages;
+    assert.deepStrictEqual(messages.edges.map((e) => [e.node.sender_fbid, e.node.content.text_body]), [[String(b.pk), 'hi ann']]);
+    assert.strictEqual(messages.page_info.has_next_page, false);
+  });
+
+  await t.test('presence and viewer settings report the local defaults', async () => {
+    assert.strictEqual((await gql(ann, 'IGPresenceUnifiedSetupQuery')).body.data.xdt_api__v1__get__presence__disabled.disabled, false);
+    const settings = (await gql(ann, 'PolarisViewerSettingsQuery')).body.data.viewer.user;
+    assert.deepStrictEqual([settings.id, settings.is_reduce_motion_setting_enabled], [String(a.pk), false]);
   });
 
   await t.test('the stories ads pool is empty (no ads exist locally)', async () => {
     const res = await gql(ann, 'PolarisStoriesV3AdsPoolQuery', { data: {}, is_highlight: false });
     assert.deepStrictEqual(res.body.data.xdt_injected_story_units.ad_media_items, []);
+  });
+
+  await t.test('the ads endpoint answers its operations with no ads', async () => {
+    // Its network layer sends no CSRF token; only the read-only ads queries are answered there.
+    const res = await ann.post('/ads/igwww_ads_graphql/', { doc_id: '1', fb_api_req_friendly_name: 'PolarisStoriesV3AdsPoolWWWQuery', variables: { data: {}, is_highlight: false } }, { csrf: false });
+    assert.strictEqual(res.status, 200);
+    assert.deepStrictEqual(res.body.data.xdt_injected_story_units.ad_media_items, []);
+    const mutation = await ann.post('/ads/igwww_ads_graphql/', { doc_id: '1', fb_api_req_friendly_name: 'useCDSWebLoginMutation', variables: { input: {} } }, { csrf: false });
+    assert.strictEqual(mutation.status, 404, 'no other operation runs on the token-less endpoint');
+  });
+
+  await t.test('the Direct picker lists followed accounts, most recent conversation first', async () => {
+    const res = await gql(ann, 'IGDOmniPickerNullStateListQuery', { input: {} });
+    const items = res.body.data.get_paginated_share_sheet_ranked_items.ranked_items;
+    assert.deepStrictEqual(items.map((i) => [i.__typename, i.username]), [['ShareSheetUser', 'bob_home']], 'only accounts ann follows');
+    assert.strictEqual(items[0].pk, String(b.pk));
   });
 
   await t.test('the telemetry sink accepts dropped beacons without a CSRF token', async () => {
