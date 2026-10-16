@@ -192,3 +192,27 @@ test('experimental signed-in home route switches the whole route and applies the
   assert.strictEqual(stats.feedRootResources, 2);
   assert.strictEqual(stats.feedRootUnmapped, 1, 'a hash with no resource-map entry is reported, not invented');
 });
+
+test('a signed-in viewer does not get the logged-out desktop top navigation bindings', () => {
+  const { insertFeedRoot } = require('../src/shell/signedInRoute');
+  const answer = {
+    allResources: [],
+    hsrp: { hblp: { rsrcMap: {}, compMap: {} } },
+    jsmods: {
+      define: [
+        ['cr:2696', ['PolarisDesktopNav.react'], { __rc: ['PolarisDesktopNav.react', null] }, -1],
+        ['cr:4477', ['PolarisDesktopNavLoggedOutContainer.react'], { __rc: ['PolarisDesktopNavLoggedOutContainer.react', null] }, -1],
+        ['cr:7457', ['PolarisMobileTopNavLoggedOut.react'], { __rc: ['PolarisMobileTopNavLoggedOut.react', null] }, -1],
+      ],
+      require: [],
+    },
+  };
+  const html = "<html><body><script type=\"application/json\" data-sjs>{}</script><div id='has-finished-comet-page'></div></body></html>";
+  const out = insertFeedRoot(html, answer, new Set(), (u) => u, null).html;
+  const block = [...out.matchAll(/data-sjs>(.*?)<\/script>/g)].map((m) => JSON.parse(m[1])).find((b) => b.define);
+  const byId = Object.fromEntries(block.define.map((d) => [d[0], d]));
+  assert.deepStrictEqual(byId['cr:2696'], ['cr:2696', [], { __rc: [null, null] }, -1]);
+  assert.deepStrictEqual(byId['cr:4477'], ['cr:4477', [], { __rc: [null, null] }, -1]);
+  // Gated by the client itself (useHasLoggedOutMobileTopNav): delivered as is.
+  assert.deepStrictEqual(byId['cr:7457'][2], { __rc: ['PolarisMobileTopNavLoggedOut.react', null] });
+});

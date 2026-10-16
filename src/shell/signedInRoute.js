@@ -26,6 +26,29 @@
  */
 
 const FEED_ROOT = 'PolarisFeedRoot';
+
+/**
+ * Component replacements the stored (anonymous) answer binds to the logged-out
+ * desktop top navigation. The server picks `cr:` bindings per viewer; for a
+ * signed-in viewer these slots are unbound. Evidence, from the stored bundles
+ * (docs/REVERSE-ENGINEERING.md section 9):
+ *  - `cr:2696` -> PolarisDesktopNav: rendered by PolarisShellHeader whenever
+ *    bound (PolarisFeedRoot never passes `hideHeader`); outside that slot only
+ *    the logged-out channel preview uses it. Unbound, the header falls back to
+ *    PolarisFeedMobileTopNavigation, which has its own logged-in branch and
+ *    renders nothing on wide screens;
+ *  - `cr:4477` -> PolarisDesktopNavLoggedOutContainer (the "Log In" / "Sign Up"
+ *    buttons; only consumer: PolarisDesktopNav).
+ * Each is replaced with the answer's own unbound form `{"__rc":[null,null]}`.
+ * Other logged-out bindings are gated by the client itself (cr:7457 by
+ * useHasLoggedOutMobileTopNav, cr:4197 by useShouldShowLoggedOutCallToAction)
+ * and are left as delivered.
+ */
+const LOGGED_OUT_ONLY = new Set(['cr:2696', 'cr:4477']);
+
+function forSignedInViewer(define) {
+  return LOGGED_OUT_ONLY.has(define[0]) ? [define[0], [], { __rc: [null, null] }, define[3]] : define;
+}
 const FEED_PARAMS = { create_live: false, create_long_video: false, create_post: false, from_share: false, yr: false, scs: false, flo: false, variant: null };
 
 function feedView() {
@@ -108,7 +131,7 @@ function insertFeedRoot(html, answer, docDefines, toLocal, initTuple) {
     else if (e.type === 'js') tags.push(`<script src="${src}" data-bootloader-hash="${attr(hash)}" crossorigin="anonymous"></script>`);
   }
   const jsmods = answer.jsmods || {};
-  const define = (jsmods.define || []).filter((d) => Array.isArray(d) && !docDefines.has(d[0]));
+  const define = (jsmods.define || []).filter((d) => Array.isArray(d) && !docDefines.has(d[0])).map(forSignedInViewer);
   const require = [];
   if (answer.hsrp.hsdp) require.push(['HasteSupportData', 'handle', null, [answer.hsrp.hsdp]]);
   require.push(['Bootloader', 'handlePayload', null, [hblp]]);
@@ -140,4 +163,4 @@ function insertFeedRoot(html, answer, docDefines, toLocal, initTuple) {
   return { html: html.slice(0, at) + parts.join('') + html.slice(at), inserted: tags.length, missing };
 }
 
-module.exports = { isLoginHomeInitialize, toSignedInHome, insertFeedRoot, parseAnswer, FEED_ROOT };
+module.exports = { isLoginHomeInitialize, toSignedInHome, insertFeedRoot, parseAnswer, FEED_ROOT, LOGGED_OUT_ONLY };

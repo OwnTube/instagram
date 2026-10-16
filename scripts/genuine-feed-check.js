@@ -246,6 +246,21 @@ async function main() {
     if (errors.length) console.log(`INFO  console errors: ${[...new Set(errors)].join(' | ')}`);
     if (session.exceptions.length) console.log(`INFO  uncaught page errors: ${[...new Set(session.exceptions.map((e) => e.text.split('\n')[0].slice(0, 160)))].join(' | ')}`);
 
+    // Reload: the session persists and the shell is the signed-in one (no
+    // logged-out "Log In" / "Sign Up" controls anywhere on the page).
+    await session.cdp.send('Page.navigate', { url: `${base}/` });
+    const again = await waitFor(session, article, 45000);
+    await evaluate(session, "[...document.querySelectorAll('button,[role=button]')].find((e) => (e.innerText || '').trim() === 'Not Now')?.click()");
+    await sleep(1500);
+    const authUi = JSON.parse(await evaluateIsolated(session, `JSON.stringify({
+      loggedOutControls: [...document.querySelectorAll('a,button,[role=button]')].filter((e) => /^(Log In|Sign Up|Log in|Sign up)$/.test((e.innerText || '').trim()) && e.getBoundingClientRect().width > 0).map((e) => e.innerText.trim()),
+      profileLink: Boolean(document.querySelector('a[href="/${nameA}/"]')),
+    })`));
+    const meAfter = await evaluate(session, "fetch('/api/v1/accounts/current_user/').then(async (r) => (await r.json().catch(() => ({}))).user?.username)");
+    await shot(session, 'feed-05-signed-in-header-after-reload.png');
+    check('after reload A is still signed in and B\'s post renders again', again && meAfter === nameA, meAfter);
+    check('the signed-in shell shows no logged-out controls and links to A\'s profile', authUi.loggedOutControls.length === 0 && authUi.profileLink, JSON.stringify(authUi));
+
     // The running loader's own status, as the browser sees it.
     await session.cdp.send('Page.navigate', { url: `${base}/__loader/health` });
     await sleep(1500);
