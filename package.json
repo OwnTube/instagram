@@ -18,7 +18,8 @@
     "test:clone": "node --test --test-timeout=90000 test/clone.test.js test/auth-lifecycle.test.js test/password-encryption.test.js",
     "verify:browser-auth": "node scripts/browser-auth-check.js",
     "verify:browser-loading": "node scripts/browser-loading-check.js",
-    "verify:genuine-signup": "node scripts/genuine-signup-check.js"
+    "verify:genuine-signup": "node scripts/genuine-signup-check.js",
+    "verify:genuine-login": "node scripts/genuine-login-check.js"
   },
   "engines": {
     "node": ">=18"

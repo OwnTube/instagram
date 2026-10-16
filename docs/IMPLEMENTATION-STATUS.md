@@ -53,7 +53,8 @@ Automated, `npm test`: 223 tests, 223 pass (at commit eb51d0a and later).
   client's own module: `input.identifier` + `enc_password.sensitive_string_value`
   in, `caa_login_web` out (same-site `redirect_uri`, in-band `error_message`);
   shares `authenticateAndIssue` with the REST route; rate limited; CSRF enforced;
-  a new login revokes the browser's earlier session. Automated tests only.
+  a new login revokes the browser's earlier session. Verified in the real
+  browser (below).
 - Login/logout (REST): username/email, uniform failure, enc_password v10, foreign
   key rejected with a reason, logout revokes in DB, expired/revoked sessions
   refused, password change revokes other sessions, restart keeps sessions.
@@ -74,14 +75,19 @@ and its helper text; a synthetic account is created (one row, no email), the
 browser is signed in as that user and redirected to `/`; a duplicate username is
 refused under the field with no row and no session; a short password is refused.
 
+Real browser, GENUINE client, `LOADER_PREFER_CACHE=1 npm run verify:genuine-login`:
+7/7. On the logged-out home page (`/`, which carries the genuine login form): a
+wrong password typed into the form is refused with no session; the right one
+sends useCDSWebLoginMutation and signs the browser in as the account created
+with the sign-up mutation (current_user and ds_user_id name it).
+
 Real browser, SYNTHETIC page: `npm run verify:browser-auth` 15/15 and
 `npm run verify:browser-loading` (session mechanics and the loading-screen fix).
 
 ## Not verified
 
-- The genuine LOGIN form in a browser: every attempt to load `/accounts/login/`
-  live got Instagram's HTTP 429, and that document is not cached yet. The mutation
-  contract is from the client's code and covered by automated tests only.
+- The `/accounts/login/` page itself (live loads got HTTP 429; not cached). The
+  same form and mutation were verified on `/`.
 - After sign-up the redirect lands on `/`, which renders the logged-out page:
   without a signed-in template the genuine client shows anonymous views even
   though the session is valid (current_user answers the new user).
@@ -102,11 +108,9 @@ Real browser, SYNTHETIC page: `npm run verify:browser-auth` 15/15 and
 
 ## Next tasks
 
-1. When `/accounts/login/` loads live once (it is then cached on disk): verify the
-   genuine login form with an account created through the genuine sign-up form.
-2. Signed-in initialisation: the genuine client must identify the local user
+1. Signed-in initialisation: the genuine client must identify the local user
    after login without editing tamper-checked bootstrap values. Investigate how
    the client derives the viewer (current_user / CurrentUserInitialData) and
    whether a signed-in document can be produced without an Instagram session.
-3. Home feed against the local database in the genuine client; work through the
+2. Home feed against the local database in the genuine client; work through the
    unsupported lists on `/__clone/health`.
