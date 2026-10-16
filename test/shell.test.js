@@ -153,3 +153,25 @@ test('the registered sign-up patches each name one module and say why', () => {
   assert.strictEqual(new Set(ids).size, ids.length);
   for (const p of PATCHES) assert.ok(p.module && p.find && p.why, p.id);
 });
+
+test('experimental signed-in home route switches the whole route, only for a viewer', () => {
+  const init = ['CometPlatformRootClient', 'initialize', [], [{
+    expectedPreloaders: [{ actorID: '0', preloaderID: 'adp_X', queryName: 'CAAFetaIGLoginHomepageQuery' }],
+    additional_roots: [{ __dr: 'CAAIGLoginHomepageRoot.react' }],
+    initialRouteInfo: { route: { actorID: '0', routePath: '/', url: '/', rootView: { resource: { __dr: 'CAAIGLoginHomepageRoot.react' } } } },
+    ssrEnabled: true,
+  }]];
+  const html = page([{ require: [init] }, { define: [['CurrentUserInitialData', [], { USER_ID: '0', ACCOUNT_ID: '0', NAME: '', SHORT_NAME: null }, 1], ['PolarisViewer', [], { data: null, id: null }, 2]] }]);
+  const off = personalize(html, { viewer: viewer(), encryption: OURS });
+  assert.ok(off.includes('CAAIGLoginHomepageRoot.react') && /"USER_ID":"0"/.test(off), 'off by default');
+  const anon = personalize(html, { viewer: null, encryption: OURS, signedInHome: true });
+  assert.ok(anon.includes('"actorID":"0"'), 'no viewer, no switch');
+  const on = personalize(html, { viewer: viewer(), encryption: OURS, signedInHome: true });
+  const args = JSON.parse(on.match(/<script type="application\/json" data-sjs>(.*?)<\/script>/)[1]).require[0][3][0];
+  assert.strictEqual(args.initialRouteInfo.route.actorID, '111');
+  assert.strictEqual(args.initialRouteInfo.route.rootView.resource.__dr, 'PolarisFeedRoot.react');
+  assert.deepStrictEqual(args.expectedPreloaders, []);
+  assert.strictEqual(args.ssrEnabled, false);
+  assert.match(on, /"USER_ID":"111"/);
+  assert.match(on, /"PolarisViewer",\[\],\{"data":\{"id":"111"/);
+});

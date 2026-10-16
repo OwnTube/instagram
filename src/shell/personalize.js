@@ -22,6 +22,7 @@
  */
 
 const { editJsonBlocks, isDefineTuple, prefetchKey, REMOVE } = require('./sjs');
+const { isLoginHomeInitialize, toSignedInHome } = require('./signedInRoute');
 
 const RUNTIME_TAG = '<script src="/__clone/runtime.js"></script>';
 
@@ -63,9 +64,12 @@ function replacePlaceholders(str, viewer, csrfToken, escape = (x) => x) {
   return out;
 }
 
-function personalize(html, { viewer = null, csrfToken, encryption, dropPrefetches = false, identity = false, stats } = {}) {
+function personalize(html, { viewer = null, csrfToken, encryption, dropPrefetches = false, identity = false, signedInHome = false, stats } = {}) {
   if (typeof html !== 'string' || !html) return html;
-  const counts = { encryption: 0, csrf: 0, viewer: 0, prefetchesDropped: 0, placeholders: 0 };
+  const counts = { encryption: 0, csrf: 0, viewer: 0, prefetchesDropped: 0, placeholders: 0, signedInRoute: 0 };
+  // The experimental signed-in route needs identity that agrees with it.
+  const homeSwitch = Boolean(signedInHome && viewer);
+  if (homeSwitch) identity = true;
 
   const visit = (node) => {
     if (typeof node === 'string') {
@@ -74,6 +78,11 @@ function personalize(html, { viewer = null, csrfToken, encryption, dropPrefetche
         counts.placeholders += 1;
         return replaced;
       }
+      return undefined;
+    }
+    if (homeSwitch && isLoginHomeInitialize(node)) {
+      toSignedInHome(node, viewer);
+      counts.signedInRoute += 1;
       return undefined;
     }
     if (dropPrefetches && prefetchKey(node)) {
@@ -95,6 +104,11 @@ function personalize(html, { viewer = null, csrfToken, encryption, dropPrefetche
         exports.ACCOUNT_ID = viewer ? viewer.pk : '0';
         exports.NAME = viewer ? viewer.display_name || viewer.username : '';
         exports.SHORT_NAME = viewer ? viewer.username : null;
+        counts.viewer += 1;
+      }
+      if (name === 'PolarisViewer' && homeSwitch) {
+        exports.data = viewerObject(viewer);
+        exports.id = viewer.pk;
         counts.viewer += 1;
       }
       return undefined;

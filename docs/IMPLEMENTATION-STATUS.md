@@ -29,7 +29,7 @@ is no Instagram session anywhere.
 
 ## Verified
 
-Automated, `npm test`: 223 tests, 223 pass (at commit eb51d0a and later).
+Automated, `npm test`: all pass (229 at the time of writing).
 
 - Database: clean install, idempotent migrations, persistence across restart,
   hashed passwords/tokens/codes, unique races mapped to 409, FK cascades.
@@ -106,11 +106,29 @@ Real browser, SYNTHETIC page: `npm run verify:browser-auth` 15/15 and
 - Instagram throttles this environment (HTTP 429) after a few page loads. Live
   checks: one deliberate request at a milestone; on 429, continue offline.
 
+## Signed-in initialisation (research, in progress)
+
+Established from the cached `/` document and bundles (offline):
+
+- The route is chosen by the server, not derived from the user id:
+  `CometPlatformRootClient.initialize` carries `initialRouteInfo.route` (root
+  view `CAAIGLoginHomepageRoot`, entry point, `actorID:"0"`) and
+  `expectedPreloaders` for actor "0". Editing only `CurrentUserInitialData.USER_ID`
+  leaves the client waiting on preloaders for another actor; that, not a tamper
+  check, is the likely reason the earlier identity edit never mounted.
+- The signed-in home is `PolarisFeedRoot.entrypoint` (in the cached bundles; its
+  preload props name PolarisFeedTimelineRootV2Query, the stories tray and
+  suggested users). `src/shell/signedInRoute.js` switches the whole route to it
+  for a signed-in viewer (SHELL_SIGNED_IN_HOME=1, experimental, OFF by default).
+- With the switch on, the mount stays hidden: `PolarisFeedRoot.react` is not in
+  the page's Bootloader component map (`Bootloader: X is not in the component
+  map`). Component-map entries carry Instagram's resource hashes, so they must
+  come from Instagram: the bootloader endpoint (anonymous; public code) or a
+  signed-in page. Next step: one live check of whether
+  `/ajax/bootloader-endpoint/?modules=PolarisFeedRoot.react` answers anonymously.
+
 ## Next tasks
 
-1. Signed-in initialisation: the genuine client must identify the local user
-   after login without editing tamper-checked bootstrap values. Investigate how
-   the client derives the viewer (current_user / CurrentUserInitialData) and
-   whether a signed-in document can be produced without an Instagram session.
+1. Signed-in initialisation: see the research section above.
 2. Home feed against the local database in the genuine client; work through the
    unsupported lists on `/__clone/health`.

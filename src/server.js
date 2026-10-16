@@ -572,7 +572,8 @@ function canonicalDocPath(req) {
 function sendHtml(req, res, status, html, { fromTemplate = false } = {}) {
   const ctx = cloneInstance ? cloneInstance.documentContext(req, res) : { viewer: null, csrfToken: null, encryption: null };
   const stats = {};
-  const out = personalize(html, { ...ctx, identity: fromTemplate, dropPrefetches: fromTemplate || forceDropPrefetches, stats });
+  const signedInHome = !fromTemplate && process.env.SHELL_SIGNED_IN_HOME === '1' && routeKind(req.path) === 'home';
+  const out = personalize(html, { ...ctx, identity: fromTemplate, signedInHome, dropPrefetches: fromTemplate || forceDropPrefetches, stats });
   if (cloneInstance) {
     const mentionsKey = /public_?key/i.test(html);
     cloneInstance.recordDocument({ path: req.path, status, fromTemplate, signedIn: Boolean(ctx.viewer), mentionsKey, ...stats });
