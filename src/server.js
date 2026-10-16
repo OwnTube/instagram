@@ -3,6 +3,7 @@
 const express = require('express');
 const config = require('./config');
 const { ResponseCache } = require('./cache');
+const { createAssetStore } = require('./assetStore');
 const { fetchUpstream, UpstreamError } = require('./upstream');
 const backendApp = require('./backend');
 const backendConfig = require('./backend/config');
@@ -75,6 +76,11 @@ if (backendInstance) {
 app.use(express.raw({ type: () => true, limit: config.cacheMaxBodyBytes }));
 
 const cache = new ResponseCache();
+// Public static assets only. ASSET_CACHE_DIR='' turns the disk copy off; it is
+// also off under `node --test` unless a directory is given, so tests stay isolated.
+const assetStore = createAssetStore(
+  process.env.ASSET_CACHE_DIR !== undefined ? process.env.ASSET_CACHE_DIR : process.env.NODE_TEST_CONTEXT ? '' : '.cache/assets',
+);
 
 // Diagnostics surface: which upstream resources failed and why. This is what
 // section 5 of the brief asks us to record, exposed for the operator.
@@ -177,7 +183,11 @@ app.get('/__ig/:host/*', async (req, res) => {
     return res.status(403).type('text/plain').send('Blocked: host is not in ALLOWED_ASSET_HOSTS\n');
   }
 
-  const cached = cache.get(target);
+  let cached = cache.get(target);
+  if (!cached && assetStore) {
+    cached = await assetStore.read(target);
+    if (cached) cache.map.set(target, cached);
+  }
   if (cache.isFresh(cached)) {
     cache.stats.hits += 1;
     res.setHeader('x-loader-cache', 'hit');
@@ -238,6 +248,7 @@ app.get('/__ig/:host/*', async (req, res) => {
       lastModified: upstream.headers.get('last-modified') || undefined,
     };
     cache.set(target, entry);
+    if (assetStore) assetStore.write(target, entry);
     res.setHeader('x-loader-cache', 'miss');
     res.setHeader('x-loader-upstream', target);
     if (upstream.redirected) res.setHeader('x-loader-final-url', upstream.finalUrl);
