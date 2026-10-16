@@ -188,6 +188,70 @@ async function openSession(browserWsUrl) {
   return session;
 }
 
+/**
+ * Fail every browser request that is not to `allowedOrigin` (or data:/blob:)
+ * and record it in session.blockedExternal, so a page can be shown to work with
+ * no request escaping to Instagram or anywhere else.
+ */
+async function blockExternal(session, allowedOrigin) {
+  session.blockedExternal = [];
+  session.cdp.on((msg) => {
+    if (msg.method !== 'Fetch.requestPaused') return;
+    const { requestId, request, resourceType } = msg.params;
+    const url = request.url;
+    const local = url.startsWith(`${allowedOrigin}/`) || url === allowedOrigin || /^(data|blob):/.test(url);
+    if (local) {
+      session.cdp.send('Fetch.continueRequest', { requestId }).catch(() => {});
+    } else {
+      session.blockedExternal.push({ url, type: resourceType });
+      session.cdp.send('Fetch.failRequest', { requestId, errorReason: 'BlockedByClient' }).catch(() => {});
+    }
+  });
+  await session.cdp.send('Fetch.enable', { patterns: [{ urlPattern: '*' }] });
+}
+
+/**
+ * Record, without intercepting (so request timing is unchanged), every request
+ * the browser sends to a host other than `allowedOrigin` (session.externalRequests:
+ * these left the machine) and every load the page's Content-Security-Policy
+ * refused (session.cspRefused: these never left).
+ */
+function watchExternal(session, allowedOrigin) {
+  session.externalRequests = [];
+  session.cspRefused = [];
+  const pending = new Map();
+  session.cdp.on((msg) => {
+    if (msg.method === 'Network.requestWillBeSent') {
+      const url = msg.params.request.url;
+      if (!url.startsWith(`${allowedOrigin}/`) && url !== allowedOrigin && !/^(data|blob|chrome|about):/.test(url)) {
+        const entry = { url, type: msg.params.type };
+        pending.set(msg.params.requestId, entry);
+        session.externalRequests.push(entry);
+      }
+    } else if (msg.method === 'Network.loadingFailed' && pending.has(msg.params.requestId)) {
+      // Refused by the page's Content-Security-Policy: it never left the browser.
+      if (msg.params.blockedReason === 'csp') {
+        const entry = pending.get(msg.params.requestId);
+        session.externalRequests.splice(session.externalRequests.indexOf(entry), 1);
+        session.cspRefused.push(entry.url);
+      }
+      pending.delete(msg.params.requestId);
+    }
+  });
+}
+
+/**
+ * Evaluate in an isolated world (same DOM, separate JS context). Evaluating in
+ * the page's own context while the Instagram client boots was shown to stall
+ * the boot; probes therefore never run there.
+ */
+async function evaluateIsolated(session, expression) {
+  const tree = await session.cdp.send('Page.getFrameTree');
+  const world = await session.cdp.send('Page.createIsolatedWorld', { frameId: tree.frameTree.frame.id, worldName: 'probe' });
+  const result = await session.cdp.send('Runtime.evaluate', { expression, contextId: world.executionContextId, returnByValue: true });
+  return result.result.value;
+}
+
 /** Navigate and wait for the page to settle. */
 async function navigate(session, url, settleMs) {
   await session.cdp.send('Page.navigate', { url });
@@ -237,4 +301,4 @@ async function captureScreenshot(session, filePath) {
   }
 }
 
-module.exports = { launchChromium, openSession, navigate, probeDom, captureScreenshot, Cdp };
+module.exports = { launchChromium, openSession, navigate, probeDom, captureScreenshot, blockExternal, watchExternal, evaluateIsolated, Cdp };

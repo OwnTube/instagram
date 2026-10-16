@@ -46,6 +46,10 @@ function toProxyPath(url) {
 
 function mapUrl(value) {
   const trimmed = String(value).trim();
+  // Only absolute URLs are mapped. A relative value is left exactly as it is
+  // (the browser resolves it against our origin); resolving it here used to
+  // turn non-URL text such as an HTML-escaped quote into a bogus path.
+  if (!/^(?:https?:)?\/\//i.test(trimmed)) return value;
   if (!isAllowedUpstreamUrl(trimmed)) return value;
   const parsed = new URL(trimmed, config.upstream);
   if (DOCUMENT_HOSTS.has(parsed.hostname.toLowerCase())) {
@@ -56,12 +60,27 @@ function mapUrl(value) {
   return toProxyPath(trimmed);
 }
 
-/** Rewrite `url(...)` references inside a CSS document or declaration block. */
-function rewriteCss(css) {
+/**
+ * Rewrite `url(...)` references inside a CSS document or declaration block.
+ * With `baseUrl` (the stylesheet's own upstream URL), relative and root-relative
+ * references are resolved against it first, as the browser would have done at
+ * the original host; references already on the proxy are left alone.
+ */
+function rewriteCss(css, baseUrl) {
   if (typeof css !== 'string' || css.length === 0) return css;
-  return css.replace(/url\(\s*(['"]?)([^'")]+)\1\s*\)/gi, (match, quote, rawUrl) => {
-    const mapped = mapUrl(rawUrl);
-    return mapped === rawUrl ? match : `url(${quote}${mapped}${quote})`;
+  // Quotes may be HTML entities when the CSS sits in a style="" attribute.
+  return css.replace(/url\(\s*(&#x27;|&#39;|&quot;|['"])?(.+?)\1\s*\)/gi, (match, q, rawUrl) => {
+    const quote = q || '';
+    let candidate = rawUrl;
+    if (baseUrl && !/^(?:[a-z][a-z0-9+.-]*:|\/\/|#)/i.test(rawUrl.trim()) && !rawUrl.trim().startsWith(`${config.assetPrefix}/`)) {
+      try {
+        candidate = new URL(rawUrl.trim(), baseUrl).href;
+      } catch {
+        return match;
+      }
+    }
+    const mapped = mapUrl(candidate);
+    return mapped === candidate ? match : `url(${quote}${mapped}${quote})`;
   });
 }
 
@@ -123,6 +142,10 @@ function rewriteHtml(html) {
 
   // <style> blocks: CSS url() only.
   output = output.replace(/(<style\b[^>]*>)([\s\S]*?)(<\/style>)/gi, (m, open, body, close) => `${open}${rewriteCss(body)}${close}`);
+
+  // Copies cached by an earlier version carry `url(/&#x27;https:...` (an
+  // HTML-escaped quote turned into a path); that is never valid, so restore it.
+  output = output.replace(/url\(\/(&#x27;|&#39;|&quot;)(https?:)/gi, 'url($1$2');
 
   // style="..." attributes: CSS url() only.
   output = output.replace(/(\bstyle\s*=\s*)(["'])(.*?)\2/gi, (m, pre, q, val) => `${pre}${q}${rewriteCss(val)}${q}`);

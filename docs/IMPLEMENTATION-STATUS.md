@@ -106,6 +106,49 @@ Real browser, SYNTHETIC page: `npm run verify:browser-auth` 15/15 and
 - Instagram throttles this environment (HTTP 429) after a few page loads. Live
   checks: one deliberate request at a milestone; on 429, continue offline.
 
+## Running independently of Instagram
+
+Strict offline mode: `LOADER_OFFLINE=1 LOADER_PREFER_CACHE=1 npm start`. The loader
+then never contacts any origin, and every document carries a Content-Security-Policy
+allowing only this origin (plus data:/blob:), so the browser itself refuses any
+request that would leave it.
+
+- Local store: `.cache/documents` (anonymous pages, raw upstream bytes, keyed by
+  upstream origin + path), `.cache/assets` (public CDN scripts, styles, fonts,
+  images), `.cache/bootloader` (bootloader-endpoint answers). CSS rewriting and
+  bundle patches apply when an asset is sent, so stored bytes stay pristine.
+- Manifest: `npm run cache:status` writes `.cache/manifest.json` (every asset the
+  cached pages reference: script/link tags, every `rsrcMap` entry the Bootloader
+  may load, sprites, url()s inside stored stylesheets; stored or missing, size,
+  sha256). `npm run cache:warm` fetches the missing public assets once (static CDN
+  only, honouring the 429 cooldown). Current: 644 referenced, 644 stored.
+- Runtime (`/__clone/runtime.js`): absolute static-CDN URLs set as script/link/img
+  src/href/srcset, inline background styles, fetch and XHR go through `/__ig`.
+- Fixed on the way: root-relative url()s in proxied CSS (fonts) resolved against
+  the stylesheet's own URL; `mapUrl` no longer turns relative non-URL text into a
+  path (it corrupted an inline style); `/data/manifest.json` is served locally; a
+  429 is not retried and starts a per-host cooldown.
+- Cache poisoning fixed: document keys did not include the upstream origin, so the
+  synthetic browser check overwrote Instagram's cached `/` with its stand-in page.
+  Keys now include the origin and the synthetic checks use their own cache dirs.
+
+Verified, real browser, genuine client, `LOADER_OFFLINE=1 LOADER_PREFER_CACHE=1`:
+`npm run verify:genuine-signup` 11/11 and `npm run verify:genuine-login` 8/8, each
+asserting that no request was sent to any external host (requests are observed,
+not intercepted). One URL is refused by the CSP and so never sent: the logo sprite
+`Ny6hrBVLYjl.webp`, which the client paints from a CSS rule it inserts at runtime
+(the logo is missing offline).
+
+Not solved: an intermittent boot stall. In some page loads the client stops after
+its inline payloads (no dynamic loads, no XHR, mount stays `content-visibility:
+hidden`). Established: probing the page with getComputedStyle during boot (from
+the page's or an isolated world) reproduces it every time; the same page with no
+probing mounted 10/10 and 4/4 in a neutral harness; rewriting sprite URLs (in
+bootstrap `ixData` or in CSS rules the client inserts) also stalls it every time,
+so neither is done. Without any probing a stall was still seen in 1 of 4 check
+runs, after which reloads in the same browser kept stalling. The checks report a
+stall explicitly (WARN) and reload once. Root cause not identified.
+
 ## Signed-in initialisation (research, in progress)
 
 Established from the cached `/` document and bundles (offline):

@@ -113,6 +113,10 @@ async function run(env, label) {
     UPSTREAM_ORIGIN: `http://127.0.0.1:${upstream.address().port}`,
     BACKEND_DB: path.join(dir, 'db.sqlite'),
     CLONE_DATA_DIR: dir,
+    // A synthetic upstream: keep its pages and assets out of the shared caches.
+    DOCUMENT_CACHE_DIR: path.join(dir, 'documents'),
+    ASSET_CACHE_DIR: path.join(dir, 'assets'),
+    BOOTLOADER_CACHE_DIR: path.join(dir, 'bootloader'),
     VERBOSE: '0',
     BACKEND_VERBOSE: '0',
     ...env,

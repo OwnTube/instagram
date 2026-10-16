@@ -88,6 +88,21 @@ test('anonymous documents survive a restart and an origin that throttles', async
     assert.strictEqual(hits, before, 'LOADER_PREFER_CACHE does not contact the origin');
     await srv.close();
 
+    // A different upstream must never be answered from this upstream's copy.
+    const other = await new Promise((resolve) => {
+      const o = http.createServer((req, res) => {
+        res.writeHead(429, { 'content-type': 'text/plain' });
+        res.end('no');
+      });
+      o.listen(0, '127.0.0.1', () => resolve(o));
+    });
+    srv = await boot({ ...env, UPSTREAM_ORIGIN: `http://127.0.0.1:${other.address().port}`, LOADER_PREFER_CACHE: '1' });
+    const foreign = await (await fetch(`${srv.base}/`, { headers: { accept: 'text/html' } })).text();
+    assert.ok(!foreign.includes('ANON-PAGE-MARK'), 'a copy from another upstream must not be served');
+    await srv.close();
+    other.closeAllConnections?.();
+    await new Promise((r) => other.close(r));
+
     for (const f of fs.readdirSync(path.join(dir, 'documents'))) {
       const text = fs.readFileSync(path.join(dir, 'documents', f), 'utf8');
       assert.ok(!/sessionid|ds_user_id/.test(text), 'no viewer state on disk');

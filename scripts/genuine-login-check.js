@@ -20,13 +20,34 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { launchChromium, openSession, navigate, captureScreenshot } = require('./lib/browser');
+const { launchChromium, openSession, navigate, captureScreenshot, watchExternal, evaluateIsolated } = require('./lib/browser');
 const { encryptLikeClient } = require('../src/clone/passwordEncryption');
 
 const ROOT = path.join(__dirname, '..');
 const SCRATCH = path.join(ROOT, '.scratch', 'genuine-login-check');
 const PASSWORD = 'correct horse 42';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** True once the genuine client has mounted (not just server-rendered markup). */
+const MOUNTED = "(() => { const m = document.querySelector('[id^=mount_]'); return Boolean(m && getComputedStyle(m).contentVisibility === 'visible' && document.querySelector('input[type=password]')); })()";
+const stalls = [];
+
+/**
+ * Load a page and let the client boot undisturbed, then check once that it
+ * mounted. Probing during boot is avoided: forcing style computation (e.g.
+ * getComputedStyle) while the client's stylesheets load was shown to stall its
+ * boot, in the page's context or an isolated one. A load that did not mount is
+ * reported as a stall, and the page is loaded once more.
+ */
+async function loadMounted(session, url) {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    await session.cdp.send('Page.navigate', { url });
+    await sleep(12000);
+    if (await evaluateIsolated(session, MOUNTED).catch(() => false)) return true;
+    stalls.push(url);
+  }
+  return false;
+}
 
 async function evaluate(session, expression) {
   const result = await session.cdp.send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true });
@@ -59,10 +80,7 @@ async function createAccount(base, username) {
 }
 
 async function loginThroughForm(session, base, username, password) {
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    await navigate(session, `${base}/`, 14000);
-    if (await evaluate(session, "Boolean(document.querySelector('input[type=password]'))")) break;
-  }
+  await loadMounted(session, `${base}/`);
   const filled = [
     await type(session, "[...document.querySelectorAll('input')].find((e) => e.type !== 'password' && e.type !== 'hidden' && e.type !== 'checkbox')", username),
     await type(session, "document.querySelector('input[type=password]')", password),
@@ -103,6 +121,7 @@ async function main() {
     const created = await createAccount(base, username);
     check('an account was created with username and password only', created.status === 'SUCCESS', JSON.stringify(created.errors));
     const session = await openSession(browserWsUrl);
+    watchExternal(session, base);
 
     const wrong = await loginThroughForm(session, base, username, 'wrong password 1');
     await captureScreenshot(session, path.join(SCRATCH, 'wrong.png'));
@@ -117,6 +136,9 @@ async function main() {
     const ds = await evaluate(session, "(document.cookie.match(/ds_user_id=([^;]+)/) || [])[1] || null");
     check('ds_user_id names that user', ds === created.created_user_id, `${ds} vs ${created.created_user_id}`);
     check('the form showed no login error', !/incorrect|could not be read|try again/i.test(right.text));
+    check('no request was sent to an external host', session.externalRequests.length === 0, session.externalRequests.map((x) => x.url).slice(0, 5).join(' '));
+    if (session.cspRefused.length) console.log(`INFO  ${session.cspRefused.length} external load(s) refused by the offline CSP (never sent): ${[...new Set(session.cspRefused)].slice(0, 3).join(' ')}`);
+    if (stalls.length) console.log(`WARN  the client stalled on ${stalls.length} load(s) and was reloaded: ${stalls.join(', ')}`);
     check('no uncaught page errors', session.exceptions.length === 0, session.exceptions.map((e) => e.text).join('; ').slice(0, 300));
   } finally {
     child.kill('SIGKILL');

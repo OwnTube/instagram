@@ -8,7 +8,11 @@
  *     so a call the client builds with a full host still reaches our backend
  *     (and our session) instead of Instagram;
  *   - beacons and requests to Meta telemetry hosts are dropped;
- *   - realtime sockets to Meta's edge are refused, because we do not run one.
+ *   - realtime sockets to Meta's edge are refused, because we do not run one;
+ *   - absolute URLs to Instagram's static CDN (scripts the Bootloader inserts,
+ *     stylesheets, fonts, images, fetches) are sent through this origin's
+ *     /__ig asset proxy, which keeps them on disk, so the page never loads code
+ *     from Instagram directly and works offline from the local store.
  *
  * It holds no secret and reads no cookie.
  */
@@ -19,7 +23,22 @@
   var API_PATHS = /^\/(?:api\/|graphql\/|graphql$|rupload_ig|ajax\/|logging_client_events|sync\/|data\/shared_data|accounts\/)/;
   var TELEMETRY_HOSTS = /(^|\.)(facebook\.com|facebook\.net|fbcdn\.net|graph\.instagram\.com)$/i;
   var REALTIME_HOSTS = /(^|\.)(edge-chat\.instagram\.com|edge-chat\.facebook\.com|gateway\.instagram\.com)$/i;
-  var stats = { rewritten: 0, dropped: 0, refusedSockets: 0 };
+  var ASSET_HOSTS = /^(?:static|scontent)\.cdninstagram\.com$/i;
+  var stats = { rewritten: 0, dropped: 0, refusedSockets: 0, assets: 0 };
+
+  /** An absolute static-CDN URL mapped onto the local asset proxy, else null. */
+  function assetPath(raw) {
+    if (typeof raw !== 'string' || !/^(?:https?:)?\/\//i.test(raw)) return null;
+    var u;
+    try {
+      u = new URL(raw, location.href);
+    } catch (e) {
+      return null;
+    }
+    if (!ASSET_HOSTS.test(u.hostname)) return null;
+    stats.assets += 1;
+    return location.origin + '/__ig/' + u.host + u.pathname + u.search;
+  }
 
   function route(raw) {
     if (typeof raw !== 'string' || !/^(?:https?:)?\/\//i.test(raw)) return { url: raw };
@@ -35,8 +54,112 @@
       return { url: location.origin + u.pathname + u.search + u.hash };
     }
     if (TELEMETRY_HOSTS.test(u.hostname)) return { drop: true };
+    var local = assetPath(raw);
+    if (local) return { url: local };
     return { url: raw };
   }
+
+  function mapSrcset(value) {
+    return String(value)
+      .split(',')
+      .map(function (part) {
+        var bits = part.trim().split(/\s+/);
+        var local = assetPath(bits[0]);
+        if (local) bits[0] = local;
+        return bits.join(' ');
+      })
+      .join(', ');
+  }
+
+  // Element URL properties and attributes the client (and its Bootloader) set.
+  var URL_PROPS = [
+    [window.HTMLScriptElement, 'src'],
+    [window.HTMLLinkElement, 'href'],
+    [window.HTMLImageElement, 'src'],
+    [window.HTMLSourceElement, 'src'],
+    [window.HTMLMediaElement, 'src'],
+    [window.HTMLMediaElement, 'poster'],
+    [window.HTMLVideoElement, 'poster'],
+  ];
+  URL_PROPS.forEach(function (pair) {
+    var Ctor = pair[0];
+    if (!Ctor) return;
+    var desc = Object.getOwnPropertyDescriptor(Ctor.prototype, pair[1]);
+    if (!desc || !desc.set) return;
+    Object.defineProperty(Ctor.prototype, pair[1], {
+      configurable: true,
+      enumerable: desc.enumerable,
+      get: desc.get,
+      set: function (v) {
+        var local = assetPath(String(v));
+        desc.set.call(this, local || v);
+      },
+    });
+  });
+  [window.HTMLImageElement, window.HTMLSourceElement].forEach(function (Ctor) {
+    if (!Ctor) return;
+    var desc = Object.getOwnPropertyDescriptor(Ctor.prototype, 'srcset');
+    if (!desc || !desc.set) return;
+    Object.defineProperty(Ctor.prototype, 'srcset', {
+      configurable: true,
+      enumerable: desc.enumerable,
+      get: desc.get,
+      set: function (v) {
+        desc.set.call(this, mapSrcset(v));
+      },
+    });
+  });
+  // Inline-style backgrounds (the client paints image sprites this way).
+  function mapCssUrls(value) {
+    if (typeof value !== 'string' || value.indexOf('url(') === -1) return value;
+    return value.replace(/url\(\s*(['"]?)([^'")]+)\1\s*\)/g, function (m, q, u) {
+      var local = assetPath(u);
+      return local ? 'url(' + q + local + q + ')' : m;
+    });
+  }
+  /** The prototype in the chain of an element's style that owns `prop`. */
+  function styleOwner(prop) {
+    var p = document.documentElement && Object.getPrototypeOf(document.documentElement.style);
+    while (p) {
+      if (Object.getOwnPropertyDescriptor(p, prop)) return p;
+      p = Object.getPrototypeOf(p);
+    }
+    return null;
+  }
+  ['backgroundImage', 'background', 'maskImage', 'webkitMaskImage', 'listStyleImage', 'cssText'].forEach(function (prop) {
+    var owner = styleOwner(prop);
+    var desc = owner && Object.getOwnPropertyDescriptor(owner, prop);
+    if (!desc || !desc.set) return;
+    Object.defineProperty(owner, prop, {
+      configurable: true,
+      enumerable: desc.enumerable,
+      get: desc.get,
+      set: function (v) {
+        desc.set.call(this, mapCssUrls(v));
+      },
+    });
+  });
+  var setPropOwner = styleOwner('setProperty');
+  if (setPropOwner) {
+    var setProperty = setPropOwner.setProperty;
+    setPropOwner.setProperty = function (name, value, priority) {
+      return setProperty.call(this, name, mapCssUrls(value), priority);
+    };
+  }
+
+  var setAttr = Element.prototype.setAttribute;
+  Element.prototype.setAttribute = function (name, value) {
+    var n = String(name).toLowerCase();
+    if (n === 'src' || n === 'href' || n === 'poster' || n === 'xlink:href') {
+      var local = assetPath(String(value));
+      if (local) return setAttr.call(this, name, local);
+    } else if (n === 'srcset') {
+      return setAttr.call(this, name, mapSrcset(value));
+    } else if (n === 'style') {
+      return setAttr.call(this, name, mapCssUrls(String(value)));
+    }
+    return setAttr.apply(this, arguments);
+  };
 
   var realFetch = window.fetch;
   if (realFetch) {

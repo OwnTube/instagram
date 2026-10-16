@@ -90,6 +90,17 @@ const documentStore = createAssetStore(
 // LOADER_PREFER_CACHE=1: serve any cached copy (memory or disk, any age)
 // without contacting the origin. For development while the origin throttles.
 const preferCache = process.env.LOADER_PREFER_CACHE === '1';
+const OFFLINE_CSP = [
+  "default-src 'self' data: blob:",
+  "script-src 'self' data: blob: 'unsafe-inline' 'unsafe-eval'",
+  "style-src 'self' data: 'unsafe-inline'",
+  "img-src 'self' data: blob:",
+  "font-src 'self' data:",
+  "media-src 'self' data: blob:",
+  "connect-src 'self'",
+  "worker-src 'self' blob:",
+  "frame-src 'self'",
+].join('; ');
 
 // Diagnostics surface: which upstream resources failed and why. This is what
 // section 5 of the brief asks us to record, exposed for the operator.
@@ -201,7 +212,7 @@ app.get('/__ig/:host/*', async (req, res) => {
     cache.stats.hits += 1;
     res.setHeader('x-loader-cache', 'hit');
     res.setHeader('x-loader-upstream', target);
-    return sendAsset(res, cached);
+    return sendAsset(res, cached, target);
   }
 
   cache.stats.misses += 1;
@@ -218,7 +229,7 @@ app.get('/__ig/:host/*', async (req, res) => {
       cache.touch(target, { etag: upstream.headers.get('etag'), 'last-modified': upstream.headers.get('last-modified') });
       res.setHeader('x-loader-cache', 'revalidated');
       res.setHeader('x-loader-upstream', target);
-      return sendAsset(res, cached);
+      return sendAsset(res, cached, target);
     }
 
     if (!upstream.ok) {
@@ -232,17 +243,13 @@ app.get('/__ig/:host/*', async (req, res) => {
         // Serve stale rather than break the page, but say so.
         res.setHeader('x-loader-cache', 'stale');
         res.setHeader('x-loader-upstream', target);
-        return sendAsset(res, cached);
+        return sendAsset(res, cached, target);
       }
       res.setHeader('x-loader-upstream', target);
       return res.status(upstream.status).type('text/plain').send(`Upstream error ${upstream.status} for ${target}\n`);
     }
 
-    const type = contentTypeOf(upstream.headers);
-    let body = upstream.body;
-    if (type.includes('text/css')) {
-      body = Buffer.from(rewriteCss(body.toString('utf8')), 'utf8');
-    }
+    const body = upstream.body;
 
     const entry = {
       body,
@@ -255,48 +262,110 @@ app.get('/__ig/:host/*', async (req, res) => {
     res.setHeader('x-loader-cache', 'miss');
     res.setHeader('x-loader-upstream', target);
     if (upstream.redirected) res.setHeader('x-loader-final-url', upstream.finalUrl);
-    sendAsset(res, entry);
+    sendAsset(res, entry, target);
   } catch (error) {
     const status = error instanceof UpstreamError ? error.status : 502;
     recordFailure({ kind: 'asset', status, url: target, reason: error.message });
     if (cached) {
       res.setHeader('x-loader-cache', 'stale');
       res.setHeader('x-loader-upstream', target);
-      return sendAsset(res, cached);
+      return sendAsset(res, cached, target);
     }
     res.status(status).type('text/plain').send(`Upstream fetch failed: ${error.message}\n`);
   }
 });
 
-// Bundle patches are applied when an asset is SENT, not when it is stored, so
-// the memory and disk caches always hold the upstream bytes and a copy cached
-// before a patch existed is still patched. Memoised per cached entry.
+// CSS rewriting and bundle patches are applied when an asset is SENT, not when
+// it is stored, so the memory and disk caches hold the upstream bytes and a copy
+// cached before a rewrite rule or patch existed is still handled. Memoised per
+// cached entry.
 const patchedBodies = new WeakMap();
-function assetBody(res, entry) {
-  if (!patcher.count || !/javascript|ecmascript/.test(entry.contentType || '')) return entry.body;
+function assetBody(res, entry, target) {
+  const isCss = /text\/css/.test(entry.contentType || '');
+  const isJs = patcher.count && /javascript|ecmascript/.test(entry.contentType || '');
+  if (!isCss && !isJs) return entry.body;
   let done = patchedBodies.get(entry);
   if (!done) {
-    const patched = patcher.apply(entry.body.toString('utf8'));
-    done = patched.applied.length ? { body: Buffer.from(patched.source, 'utf8'), applied: patched.applied } : { body: entry.body, applied: [] };
+    if (isCss) {
+      done = { body: Buffer.from(rewriteCss(entry.body.toString('utf8'), target), 'utf8'), applied: [] };
+    } else {
+      const patched = patcher.apply(entry.body.toString('utf8'));
+      done = patched.applied.length ? { body: Buffer.from(patched.source, 'utf8'), applied: patched.applied } : { body: entry.body, applied: [] };
+    }
     patchedBodies.set(entry, done);
   }
   if (done.applied.length) res.setHeader('x-clone-patches', done.applied.join(','));
   return done.body;
 }
 
-function sendAsset(res, entry) {
+function sendAsset(res, entry, target) {
   res.setHeader('content-type', entry.contentType);
   if (entry.etag) res.setHeader('etag', entry.etag);
   if (entry.lastModified) res.setHeader('last-modified', entry.lastModified);
   if (!res.getHeader('cache-control')) {
     res.setHeader('cache-control', `public, max-age=${Math.floor(config.cacheTtlMs / 1000)}`);
   }
-  res.end(assetBody(res, entry));
+  res.end(assetBody(res, entry, target));
 }
 
 /* ------------------------------------------------------------------ */
 /* Diagnostics                                                         */
 /* ------------------------------------------------------------------ */
+
+/* ------------------------------------------------------------------ */
+/* Bootloader endpoint and web manifest                                */
+/* ------------------------------------------------------------------ */
+
+// The client's Bootloader asks /ajax/bootloader-endpoint/?modules=... for the
+// resource map of modules flagged `be` in its component map. The answer names
+// public code (static CDN URLs and hashes), the same for every visitor, so it is
+// fetched anonymously like every upstream request and kept on disk, keyed by the
+// module list and client revision (the other query fields are per-request noise).
+const bootloaderStore = createAssetStore(
+  process.env.BOOTLOADER_CACHE_DIR !== undefined ? process.env.BOOTLOADER_CACHE_DIR : process.env.NODE_TEST_CONTEXT ? '' : '.cache/bootloader',
+);
+function bootloaderKey(req) {
+  const q = req.query || {};
+  return `boot:${new URL(config.upstream).origin}:${String(q.modules || '')}|${String(q.nb_modules || '')}|${String(q.__rev || '')}`;
+}
+app.get(['/ajax/bootloader-endpoint/', '/ajax/bootloader-endpoint'], async (req, res) => {
+  const key = bootloaderKey(req);
+  let cached = cache.get(key);
+  if (!cached && bootloaderStore) {
+    cached = await bootloaderStore.read(key);
+    if (cached) cache.map.set(key, cached);
+  }
+  const send = (entry, how) => {
+    res.setHeader('x-loader-cache', how);
+    res.setHeader('cache-control', 'no-store');
+    res.type(entry.contentType || 'application/x-javascript').end(entry.body);
+  };
+  if (cached && (cache.isFresh(cached) || preferCache)) return send(cached, 'hit');
+  try {
+    const upstream = await fetchUpstream(new URL(req.originalUrl, config.upstream).href, { headers: { accept: '*/*' } });
+    if (upstream.status === 200) {
+      const entry = { body: upstream.body, contentType: upstream.headers.get('content-type') || 'application/x-javascript' };
+      cache.set(key, entry);
+      if (bootloaderStore) bootloaderStore.write(key, entry);
+      return send(entry, 'miss');
+    }
+    recordFailure({ kind: 'bootloader', status: upstream.status, url: req.originalUrl.slice(0, 200), reason: `upstream returned ${upstream.status}` });
+    if (cached) return send(cached, 'stale');
+    return res.status(upstream.status).type('text/plain').send(`Upstream error ${upstream.status}\n`);
+  } catch (error) {
+    const status = error instanceof UpstreamError ? error.status : 502;
+    recordFailure({ kind: 'bootloader', status, url: req.originalUrl.slice(0, 200), reason: error.message });
+    if (cached) return send(cached, 'stale');
+    return res.status(status).type('text/plain').send(`Bootloader resources unavailable: ${error.message}\n`);
+  }
+});
+
+// The page links a web app manifest. This one is ours (served locally, no
+// upstream request); it names this site, not Instagram's servers.
+app.get('/data/manifest.json', (req, res) => {
+  res.setHeader('cache-control', 'public, max-age=3600');
+  res.json({ name: 'Instagram', short_name: 'Instagram', start_url: '/', scope: '/', display: 'standalone', background_color: '#ffffff', theme_color: '#ffffff', icons: [] });
+});
 
 app.get('/__loader/health', (req, res) => {
   res.json({
@@ -494,9 +563,9 @@ app.all('*', async (req, res) => {
     // origin's own redirects and errors are
     // relayed as-is, so a transient state is not frozen into the mirror.
     const cacheable = isDocumentGet && isHtml && upstream.status === 200 && docCache;
-    const body = isHtml
-      ? Buffer.from(rewriteHtml(upstream.body.toString('utf8')), 'utf8')
-      : upstream.body;
+    // Documents are stored as the upstream bytes and rewritten when sent, so a
+    // fix to the rewrite rules also applies to copies already on disk.
+    const body = upstream.body;
 
     if (cacheable) {
       const entry = {
@@ -512,7 +581,7 @@ app.all('*', async (req, res) => {
       res.setHeader('x-loader-cache', 'miss');
     }
 
-    if (isHtml) return sendHtml(req, res, upstream.status, body.toString('utf8'));
+    if (isHtml) return sendHtml(req, res, upstream.status, rewriteHtml(body.toString('utf8')));
     return res.status(upstream.status).end(body);
   } catch (error) {
     const status = error instanceof UpstreamError ? error.status : 502;
@@ -547,7 +616,9 @@ function markPrivate(res) {
 /** Cache key for a document: method + path + the client variant it was fetched for. */
 function documentKey(req, upstreamPath) {
   const variant = req.get('sec-fetch-site') ? 'nav' : 'plain';
-  return `doc:${variant}:${upstreamPath}`;
+  // The origin is part of the key: copies from different upstreams (a test
+  // stand-in, Instagram) must never answer for each other, in memory or on disk.
+  return `doc:${new URL(config.upstream).origin}:${variant}:${upstreamPath}`;
 }
 
 /**
@@ -584,11 +655,17 @@ function sendHtml(req, res, status, html, { fromTemplate = false } = {}) {
   markPrivate(res);
   res.removeHeader('etag');
   res.removeHeader('last-modified');
+  // Strict offline: the browser itself refuses every request that is not to
+  // this origin. The runtime already routes the client's code, styles and
+  // images here; this catches what it cannot see (e.g. url()s in CSS rules the
+  // client inserts), so nothing reaches Instagram or any other host.
+  if (process.env.LOADER_OFFLINE === '1') res.setHeader('content-security-policy', OFFLINE_CSP);
   return res.status(status).type('text/html; charset=utf-8').end(Buffer.from(out, 'utf8'));
 }
 
 function sendDocument(res, entry) {
-  if (/text\/html/.test(entry.contentType)) return sendHtml(res.req, res, 200, entry.body.toString('utf8'));
+  // Rewriting is idempotent, so cached documents pick up newer rewrite rules.
+  if (/text\/html/.test(entry.contentType)) return sendHtml(res.req, res, 200, rewriteHtml(entry.body.toString('utf8')));
   res.setHeader('content-type', entry.contentType);
   if (entry.etag) res.setHeader('etag', entry.etag);
   if (!res.getHeader('cache-control')) {

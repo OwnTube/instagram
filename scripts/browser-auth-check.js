@@ -115,6 +115,10 @@ async function main() {
     UPSTREAM_ORIGIN: `http://127.0.0.1:${standIn.address().port}`,
     BACKEND_DB: path.join(SCRATCH, 'db.sqlite'),
     CLONE_DATA_DIR: SCRATCH,
+    // A synthetic upstream: keep its pages and assets out of the shared caches.
+    DOCUMENT_CACHE_DIR: path.join(SCRATCH, 'documents'),
+    ASSET_CACHE_DIR: path.join(SCRATCH, 'assets'),
+    BOOTLOADER_CACHE_DIR: path.join(SCRATCH, 'bootloader'),
     CLONE_MAIL_TRANSPORT: 'outbox',
     VERBOSE: '0',
     BACKEND_VERBOSE: '0',
