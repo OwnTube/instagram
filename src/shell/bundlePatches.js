@@ -13,13 +13,59 @@
  *
  * Patches are the last resort. Prefer, in order: answering the request on the
  * server (src/clone), editing bootstrap data (src/shell/personalize.js), the
- * transport guard (src/shell/runtime.js), then a patch here. The registry is
- * empty until a live run shows a module that cannot work any other way;
- * add entries to PATCHES with a `why` and keep them minimal.
+ * transport guard (src/shell/runtime.js), then a patch here. Add entries to
+ * PATCHES only when a live run shows a module that cannot work any other way,
+ * each with a `why`, and keep them minimal. Finds are exact minified text from
+ * the build they were read from; after a client update a patch may miss, which
+ * /__loader/health reports (shell.bundlePatches[].missedFind).
  */
 
 /** @type {{ id: string, module: string, find: string | RegExp, replace: string, why: string }[]} */
-const PATCHES = [];
+const PATCHES = [
+  /*
+   * Sign-up without a contact point. Accounts here need only a username and a
+   * password (no email, no phone, no code), so the genuine form's "Mobile
+   * number or email" field and its "You may receive notifications from us"
+   * text (both rendered by CAARegistrationFormCPInput.react) are removed from
+   * the Instagram layout, and the form stops requiring that field.
+   */
+  {
+    id: 'signup-no-contactpoint-field',
+    module: 'CAARegistrationFormDesktop.react',
+    find: 'le=T?[Y,Z,ne,ee,te]:[ee,te,Z,Y,J]',
+    replace: 'le=T?[Y,Z,ne,ee,te]:[te,Z,Y,J]',
+    why: 'The Instagram (non-T) field list starts with the contact-point input `ee`; drop it from that list only.',
+  },
+  {
+    id: 'signup-contactpoint-not-validated',
+    module: 'CAARegistrationFormDesktopReducer',
+    find: 't=g(t,"HandleSubmit"),t=h(t,"HandleSubmit")',
+    replace: 'n!==1&&(t=g(t,"HandleSubmit")),t=h(t,"HandleSubmit")',
+    why: 'validateForm runs the contact-point check `g`; skip it for appType 1 (Instagram), where the field is not shown.',
+  },
+  {
+    id: 'signup-contactpoint-not-required',
+    module: 'CAARegistrationFormDesktopReducer',
+    find: 's=t.cp.valid&&t.password.valid&&r',
+    replace: 's=(n===1||t.cp.valid)&&t.password.valid&&r',
+    why: 'The form is valid without a contact point for appType 1; the server re-validates every field.',
+  },
+  /*
+   * After a successful Instagram sign-up the form normally opens the
+   * contact-point confirmation-code page. There is no contact point and no code
+   * here; the server has already created the account and signed the browser in,
+   * and answers with a same-site redirect_uri, which this follows instead. With
+   * no redirect_uri the original behaviour is kept.
+   */
+  {
+    id: 'signup-success-follows-redirect',
+    module: 'CAARegistrationHomepageSubmitButton.react',
+    find: 'M&&C.submitResult===0?(a({type:"ResetFormAfterSubmitSuccess"}),J({',
+    replace:
+      'M&&C.submitResult===0&&C.redirectURI.length>0?(a({type:"ResetFormAfterSubmitSuccess"}),r("goForceFullPageRedirectTo")(C.redirectURI)):M&&C.submitResult===0?(a({type:"ResetFormAfterSubmitSuccess"}),J({',
+    why: 'Skip the confirmation-code page when the server signed the user in and named where to go.',
+  },
+];
 
 /** Locate each `__d("Name",` definition: start offsets keyed by module name. */
 function moduleSpans(source) {
@@ -39,26 +85,33 @@ function createPatcher(patches = PATCHES) {
     const spans = moduleSpans(source);
     const byName = new Map();
     for (const s of spans) if (!byName.has(s.name)) byName.set(s.name, s);
-    const edits = [];
+    // Patches for the same module are applied in order to that module's text.
+    const edits = new Map();
     for (const patch of patches) {
       const span = byName.get(patch.module);
       if (!span) continue;
-      const segment = source.slice(span.start, span.end);
-      const next = segment.replace(patch.find, patch.replace);
-      if (next === segment) {
+      const edit = edits.get(span) || { span, text: source.slice(span.start, span.end), ids: [] };
+      const next = edit.text.replace(patch.find, patch.replace);
+      if (next === edit.text) {
         report.get(patch.id).missedFind += 1;
         continue;
       }
-      edits.push({ span, next, id: patch.id });
+      edit.text = next;
+      edit.ids.push(patch.id);
+      edits.set(span, edit);
     }
-    if (!edits.length) return { source, applied: [] };
-    edits.sort((a, b) => b.span.start - a.span.start);
+    if (!edits.size) return { source, applied: [] };
+    const ordered = [...edits.values()].sort((x, y) => y.span.start - x.span.start);
     let out = source;
-    for (const e of edits) {
-      out = out.slice(0, e.span.start) + e.next + out.slice(e.span.end);
-      report.get(e.id).applied += 1;
+    const applied = [];
+    for (const e of ordered) {
+      out = out.slice(0, e.span.start) + e.text + out.slice(e.span.end);
+      for (const id of e.ids) {
+        report.get(id).applied += 1;
+        applied.push(id);
+      }
     }
-    return { source: out, applied: edits.map((e) => e.id) };
+    return { source: out, applied: patches.map((p) => p.id).filter((id) => applied.includes(id)) };
   }
 
   return { apply, report: () => [...report.values()], count: patches.length };

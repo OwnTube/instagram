@@ -134,3 +134,22 @@ test('bundle patcher edits only the named module', () => {
   assert.strictEqual(report.missing.missedFind, 1);
   assert.deepStrictEqual(createPatcher([]).apply(bundle), { source: bundle, applied: [] });
 });
+
+test('several patches on one module all apply, in order', () => {
+  const bundle = '__d("ModA",[],function(){return [1,2]+"x";},1);__d("ModB",[],function(){return [1,2];},1);';
+  const patcher = createPatcher([
+    { id: 'one', module: 'ModA', find: '[1,2]', replace: '[2]', why: 'test' },
+    { id: 'two', module: 'ModA', find: '"x"', replace: '"y"', why: 'test' },
+  ]);
+  const { source, applied } = patcher.apply(bundle);
+  assert.deepStrictEqual(applied, ['one', 'two']);
+  assert.ok(source.startsWith('__d("ModA",[],function(){return [2]+"y";},1);'));
+  assert.ok(source.endsWith('__d("ModB",[],function(){return [1,2];},1);'));
+});
+
+test('the registered sign-up patches each name one module and say why', () => {
+  const { PATCHES } = require('../src/shell/bundlePatches');
+  const ids = PATCHES.map((p) => p.id);
+  assert.strictEqual(new Set(ids).size, ids.length);
+  for (const p of PATCHES) assert.ok(p.module && p.find && p.why, p.id);
+});

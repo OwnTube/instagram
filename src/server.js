@@ -233,12 +233,6 @@ app.get('/__ig/:host/*', async (req, res) => {
     let body = upstream.body;
     if (type.includes('text/css')) {
       body = Buffer.from(rewriteCss(body.toString('utf8')), 'utf8');
-    } else if (patcher.count && /javascript|ecmascript/.test(type)) {
-      const patched = patcher.apply(body.toString('utf8'));
-      if (patched.applied.length) {
-        body = Buffer.from(patched.source, 'utf8');
-        res.setHeader('x-clone-patches', patched.applied.join(','));
-      }
     }
 
     const entry = {
@@ -265,6 +259,22 @@ app.get('/__ig/:host/*', async (req, res) => {
   }
 });
 
+// Bundle patches are applied when an asset is SENT, not when it is stored, so
+// the memory and disk caches always hold the upstream bytes and a copy cached
+// before a patch existed is still patched. Memoised per cached entry.
+const patchedBodies = new WeakMap();
+function assetBody(res, entry) {
+  if (!patcher.count || !/javascript|ecmascript/.test(entry.contentType || '')) return entry.body;
+  let done = patchedBodies.get(entry);
+  if (!done) {
+    const patched = patcher.apply(entry.body.toString('utf8'));
+    done = patched.applied.length ? { body: Buffer.from(patched.source, 'utf8'), applied: patched.applied } : { body: entry.body, applied: [] };
+    patchedBodies.set(entry, done);
+  }
+  if (done.applied.length) res.setHeader('x-clone-patches', done.applied.join(','));
+  return done.body;
+}
+
 function sendAsset(res, entry) {
   res.setHeader('content-type', entry.contentType);
   if (entry.etag) res.setHeader('etag', entry.etag);
@@ -272,7 +282,7 @@ function sendAsset(res, entry) {
   if (!res.getHeader('cache-control')) {
     res.setHeader('cache-control', `public, max-age=${Math.floor(config.cacheTtlMs / 1000)}`);
   }
-  res.end(entry.body);
+  res.end(assetBody(res, entry));
 }
 
 /* ------------------------------------------------------------------ */
