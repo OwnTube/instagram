@@ -120,12 +120,27 @@ Established from the cached `/` document and bundles (offline):
   preload props name PolarisFeedTimelineRootV2Query, the stories tray and
   suggested users). `src/shell/signedInRoute.js` switches the whole route to it
   for a signed-in viewer (SHELL_SIGNED_IN_HOME=1, experimental, OFF by default).
-- With the switch on, the mount stays hidden: `PolarisFeedRoot.react` is not in
-  the page's Bootloader component map (`Bootloader: X is not in the component
-  map`). Component-map entries carry Instagram's resource hashes, so they must
-  come from Instagram: the bootloader endpoint (anonymous; public code) or a
-  signed-in page. Next step: one live check of whether
-  `/ajax/bootloader-endpoint/?modules=PolarisFeedRoot.react` answers anonymously.
+- With the switch on, the mount stays hidden, with no exception (caught or
+  uncaught, checked with the debugger pausing on all exceptions) and no request.
+  The Bootloader contract, read from the cached `Bootloader` module, explains it:
+  `loadModules(ms)` proceeds only when `j(ms)` holds: every component is in the
+  component map `T` (filled from `compMap` payloads via `enableBootload`) and
+  every hash in its `r` / `rdfds.r` / `rds.r` is in the resource map `D` (from
+  `rsrcMap`). Otherwise the call is queued (`v`) and retried only when a later
+  payload adds component-map entries. An unknown component therefore waits
+  forever, silently. The bootloader endpoint is used only for components that
+  ARE in `compMap` with the `be` flag; it does not resolve unknown components.
+- `PolarisFeedRoot.react` is absent because the anonymous login page's payloads
+  carry only what the login route needs. The entries for the feed root (and its
+  dependency closure, with Instagram's resource hashes) are only in Instagram's
+  signed-in documents / route definitions. Fabricating them is not acceptable.
+- Not fully explained: in the switched run, an in-page `requireLazy(['Bootloader'])`
+  probe also never fired, while it fires on the unswitched page.
+- Conclusion: a genuine signed-in feed root cannot be produced from anonymous
+  material alone. Options needing a decision: (a) a scrubbed signed-in page saved
+  once by an operator (the existing template mechanism, docs/MANUAL-TESTING.md);
+  (b) a dedicated synthetic Instagram account used only to capture public code
+  maps, never as clone auth. Neither is done here without the owner's decision.
 
 ## Next tasks
 
