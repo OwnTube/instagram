@@ -94,14 +94,12 @@ function personalize(html, { viewer = null, csrfToken, encryption, dropPrefetche
       counts.prefetchesDropped += 1;
       return REMOVE;
     }
-    // Identity edits (CurrentUserInitialData, viewer) are applied ONLY to a
-    // captured signed-in template. On a genuine upstream page the client
-    // tamper-checks CurrentUserInitialData.USER_ID (and the LSD / csrf token)
-    // and refuses to mount if it changes to anything but its original value, so
-    // a live page is served with its identity untouched. We never need to
-    // rewrite the token anyway: the client sends X-CSRFToken from the
-    // `csrftoken` cookie, which this server sets to the clone session's token,
-    // so our backend's CSRF check still matches.
+    // Identity edits (CurrentUserInitialData, viewer) apply to a signed-in
+    // template or the signed-in home route. (They once seemed to trip a
+    // "tamper check"; the real cause was the payload length contract, see
+    // docs/REVERSE-ENGINEERING.md section 6.) The csrf token is never rewritten:
+    // the client sends X-CSRFToken from the `csrftoken` cookie, which this
+    // server sets to the clone session's token.
     if (homeSwitch && isDefineTuple(node)) docDefines.add(node[0]);
     if (identity && isDefineTuple(node)) {
       const [name, , exports] = node;
@@ -110,6 +108,10 @@ function personalize(html, { viewer = null, csrfToken, encryption, dropPrefetche
         exports.ACCOUNT_ID = viewer ? viewer.pk : '0';
         exports.NAME = viewer ? viewer.display_name || viewer.username : '';
         exports.SHORT_NAME = viewer ? viewer.username : null;
+        // The Direct read-receipt key (CurrentUser.getEIMU); Direct answers use
+        // the same local id as `participant_fbid` (src/clone/homeOperations.js).
+        if ('IG_USER_EIMU' in exports) exports.IG_USER_EIMU = viewer ? viewer.pk : '0';
+        if ('NON_FACEBOOK_USER_ID' in exports) exports.NON_FACEBOOK_USER_ID = viewer ? viewer.pk : '0';
         counts.viewer += 1;
       }
       if (name === 'PolarisViewer' && homeSwitch) {

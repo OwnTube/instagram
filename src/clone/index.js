@@ -264,7 +264,8 @@ function createClone({ db, dataDir = '.data', logger = console, env = process.en
     next();
   });
   const ROUTE_DEFINITIONS = /^\/ajax\/(bulk-route-definitions|route-definition)\/?$/;
-  router.use((req, res, next) => (ROUTE_DEFINITIONS.test(req.path) ? next() : csrfCheck(req, res, next)));
+  // The telemetry sink writes nothing, so it needs no CSRF token (dropped beacons carry none).
+  router.use((req, res, next) => (ROUTE_DEFINITIONS.test(req.path) || req.path === '/__clone/dropped' ? next() : csrfCheck(req, res, next)));
 
   router.get('/__clone/health', (req, res) =>
     res.json({

@@ -22,6 +22,7 @@ const { badRequest, notFound, unauthorized } = require('../backend/lib/errors');
 const { isPk, pkFromShortcode } = require('../backend/lib/ids');
 const present = require('./present');
 const { createCaaRegistration, safeNext } = require('./caaRegistration');
+const { createHomeOperations } = require('./homeOperations');
 const { completeToContract } = require('../runtime/graphqlContract');
 
 function connection(items, nextCursor, toNode) {
@@ -197,6 +198,7 @@ function createGraphql({ db, contracts = null }) {
   };
 
   Object.assign(resolvers, createCaaRegistration(() => signupCore));
+  Object.assign(resolvers, createHomeOperations(db));
 
   function parseVariables(raw) {
     if (raw === undefined || raw === null || raw === '') return {};

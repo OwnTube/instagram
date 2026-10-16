@@ -154,6 +154,7 @@ async function main() {
   const tag = Date.now().toString(36).slice(-5);
   const nameA = `feed_a_${tag}`;
   const nameB = `feed_b_${tag}`;
+  const nameC = `feed_c_${tag}`;
   let session = null;
 
   try {
@@ -176,6 +177,23 @@ async function main() {
     const configured = await B.post('/api/v1/media/configure/', { upload_id: uploadId, caption: CAPTION });
     const post = sql('SELECT p.pk, p.code, p.caption, m.storage_key, m.width, m.height FROM posts p JOIN media m ON m.id = p.media_id WHERE p.author_id = ? AND p.deleted_at IS NULL', userB.id);
     check('B published a photo post (database row with stored media)', up.status === 200 && configured.status === 200 && post && post.caption === CAPTION && post.width === 1080, JSON.stringify(post));
+
+    // Content behind the home page's other components, all local: C (whom B
+    // follows, A does not) is a suggestion for A; B's story is in A's tray;
+    // B following A is a notification; B's message is an unread Direct thread.
+    const C = new Browser(base);
+    const c = await C.signup(null, { username: nameC, fullName: 'Feed C', password: PASSWORD });
+    const storyId = String(Date.now() + 1);
+    await B.request('POST', `/rupload_igphoto/fb_uploader_${storyId}`, { raw: png, headers: { 'x-instagram-rupload-params': JSON.stringify({ upload_id: storyId, media_type: 1, is_story: '1' }), 'content-type': 'image/png' } });
+    const extras = [
+      (await B.post(`/api/v1/friendships/create/${c.pk}/`, {})).status,
+      (await B.post('/api/v1/media/configure_to_story/', { upload_id: storyId })).status,
+      (await B.post(`/api/v1/friendships/create/${a.pk}/`, {})).status,
+      (await B.post('/api/v1/direct_v2/threads/broadcast/text/', { recipient_users: [[a.pk]], text: 'hello from B', client_context: 'feed-check-1', action: 'send_item' })).status,
+    ];
+    const rows = sql(`SELECT (SELECT COUNT(*) FROM stories WHERE author_id = ?) AS stories, (SELECT COUNT(*) FROM notifications WHERE user_id = ? AND read_at IS NULL) AS notes,
+      (SELECT COUNT(*) FROM messages m JOIN conversation_members cm ON cm.conversation_id = m.conversation_id WHERE cm.user_id = ? AND m.sender_id = ?) AS dms`, userB.id, userA.id, userA.id, userB.id);
+    check('local content for the home components: C, B\'s story, a notification and a message for A', extras.every((x) => x === 200) && rows.stories === 1 && rows.notes >= 1 && rows.dms === 1, JSON.stringify({ extras, ...rows }));
 
     // 3. A signs in through the genuine login form, strictly offline.
     session = await openSession(browserWsUrl);
@@ -256,6 +274,19 @@ async function main() {
       loggedOutControls: [...document.querySelectorAll('a,button,[role=button]')].filter((e) => /^(Log In|Sign Up|Log in|Sign up)$/.test((e.innerText || '').trim()) && e.getBoundingClientRect().width > 0).map((e) => e.innerText.trim()),
       profileLink: Boolean(document.querySelector('a[href="/${nameA}/"]')),
     })`));
+    // The home components answered from the database (screen text of the tray,
+    // the suggestions rail and the badges).
+    const home = JSON.parse(await evaluateIsolated(session, `JSON.stringify({
+      tray: [...document.querySelectorAll('main [role=menu] li, main ul li')].map((e) => e.innerText.trim()).filter(Boolean).slice(0, 8),
+      text: document.body.innerText,
+      badges: [...document.querySelectorAll('nav a, [role=link]')].map((e) => e.innerText.trim()).filter((t) => /^\\d+\\+?$/.test(t) || /\\n\\d+$/.test(t)).slice(0, 5),
+    })`));
+    check('the stories tray shows B\'s story', home.text.includes(nameB) && home.tray.some((t) => t.includes(nameB)), JSON.stringify(home.tray));
+    check('the suggestions rail shows C (full name), with the real "Followed by" context', home.text.includes('Feed C') && home.text.includes(`Followed by ${nameB}`));
+    const homeOps = new Map();
+    for (const r of session.requests.values()) if (friendly(r)) homeOps.set(friendly(r), r.status);
+    const homeFailed = ['PolarisStoriesV3TrayContainerQuery', 'PolarisStoriesV3AdsPoolQuery', 'IGDChatTabsJewelOffMsysQuery', 'PolarisSuggestedUserListQuery', 'usePolarisNotificationsNavItemQuery', 'IGDBadgeCountOffMsysQuery', 'QuickPromotionSupportIGSchemaBatchFetchQuery'].filter((n) => homeOps.has(n) && homeOps.get(n) !== 200);
+    check('the home operations are answered locally (200)', homeFailed.length === 0, homeFailed.join(', '));
     const meAfter = await evaluate(session, "fetch('/api/v1/accounts/current_user/').then(async (r) => (await r.json().catch(() => ({}))).user?.username)");
     await shot(session, 'feed-05-signed-in-header-after-reload.png');
     check('after reload A is still signed in and B\'s post renders again', again && meAfter === nameA, meAfter);
