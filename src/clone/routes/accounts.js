@@ -59,24 +59,31 @@ function register(router, ctx) {
 
   /* --------------------------------- login -------------------------------- */
 
+  /**
+   * The one place a username and password become a session. The REST login
+   * route and the GraphQL login mutation both end here. Returns the user, or
+   * null for bad credentials (one answer whether or not the account exists).
+   */
+  async function authenticateAndIssue(req, res, { username, password }) {
+    try {
+      const user = await users.authenticate(db, { username: String(username || '').trim(), password });
+      const full = users.getById(db, user.id);
+      issueSession(db, req, res, full);
+      return full;
+    } catch (error) {
+      if (error instanceof AppError && error.status === 401) return null;
+      throw error;
+    }
+  }
+  ctx.loginCore = { readPassword, authenticateAndIssue };
+
   async function login(req, res) {
     const p = req.params_;
     const username = String(p.username || '').trim();
     if (!username) return igFail(res, 400, 'Please enter your username.');
-    const password = readPassword(p);
-    try {
-      const user = await users.authenticate(db, { username, password });
-      const full = users.getById(db, user.id);
-      issueSession(db, req, res, full);
-      return igOk(res, { user: true, userId: full.pk, authenticated: true, oneTapPrompt: false, reactivated: false });
-    } catch (error) {
-      if (error instanceof AppError && error.status === 401) {
-        // One answer whether or not the account exists, so the form cannot be
-        // used to enumerate usernames.
-        return igOk(res, { user: true, authenticated: false });
-      }
-      throw error;
-    }
+    const full = await authenticateAndIssue(req, res, { username, password: readPassword(p) });
+    if (!full) return igOk(res, { user: true, authenticated: false });
+    return igOk(res, { user: true, userId: full.pk, authenticated: true, oneTapPrompt: false, reactivated: false });
   }
   for (const path of ['/api/v1/web/accounts/login/ajax/', '/accounts/login/ajax/']) router.post(path, limits.auth, login);
 

@@ -36,6 +36,7 @@ function limitOf(vars, fallback = 12) {
 
 function createGraphql({ db }) {
   const unsupported = new Map();
+  let loginCore = null;
 
   function needViewer(ctx) {
     if (!ctx.viewer) throw unauthorized();
@@ -135,6 +136,37 @@ function createGraphql({ db }) {
     },
   };
 
+  /** First string found under any of `keys`, searching nested variables. */
+  function findString(node, keys, depth = 0) {
+    if (!node || typeof node !== 'object' || depth > 4) return null;
+    for (const key of keys) if (typeof node[key] === 'string' && node[key]) return node[key];
+    for (const value of Object.values(node)) {
+      const found = findString(value, keys, depth + 1);
+      if (found) return found;
+    }
+    return null;
+  }
+
+  /**
+   * The login form's mutation. It authenticates exactly like the REST login
+   * route (same password decryption, same session cookies) and answers
+   * `authenticated: false` for wrong credentials.
+   */
+  resolvers.useCDSWebLoginMutation = async (vars, ctx) => {
+    if (!loginCore) throw new Error('login is not wired');
+    const username = findString(vars, ['username', 'user_name', 'login']);
+    if (!username) throw badRequest('Please enter your username.');
+    const secret = findString(vars, ['enc_password', 'encPassword', 'encrypted_password', 'password']);
+    if (!secret) throw badRequest('Password is required');
+    const sealed = secret.startsWith('#PWD_');
+    const password = loginCore.readPassword(sealed ? { enc_password: secret } : { password: secret });
+    const user = await loginCore.authenticateAndIssue(ctx.req, ctx.res, { username, password });
+    const body = user
+      ? { authenticated: true, user: true, userId: user.pk, oneTapPrompt: false, reactivated: false }
+      : { authenticated: false, user: true };
+    return { xdt_login: body, ...body };
+  };
+
   function parseVariables(raw) {
     if (raw === undefined || raw === null || raw === '') return {};
     if (typeof raw === 'object') return raw;
@@ -146,7 +178,7 @@ function createGraphql({ db }) {
     }
   }
 
-  function handler(req, res, next) {
+  async function handler(req, res, next) {
     const p = req.params_;
     const name = String(p.fb_api_req_friendly_name || req.get('x-fb-friendly-name') || '');
     const docId = String(p.doc_id || p.query_hash || '');
@@ -171,7 +203,7 @@ function createGraphql({ db }) {
       });
     }
     try {
-      const data = resolver(vars, { viewer: req.viewer || null });
+      const data = await resolver(vars, { viewer: req.viewer || null, req, res });
       return res.status(200).json({ data, extensions: { is_final: true }, status: 'ok' });
     } catch (error) {
       if (error && error.status && error.status < 500) {
@@ -187,6 +219,9 @@ function createGraphql({ db }) {
 
   return {
     handler,
+    /** Operations that check credentials share the login rate limiter. */
+    isAuthOperation: (p) => String((p && p.fb_api_req_friendly_name) || '') === 'useCDSWebLoginMutation',
+    setLoginCore(core) { loginCore = core; },
     supported: () => Object.keys(resolvers),
     unsupported: () => [...unsupported.values()].sort((a, b) => b.count - a.count),
   };

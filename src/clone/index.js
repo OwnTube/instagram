@@ -303,12 +303,13 @@ function createClone({ db, dataDir = '.data', logger = console, env = process.en
   });
 
   require('./routes/accounts').register(router, ctx);
+  graphql.setLoginCore(ctx.loginCore);
   require('./routes/content').register(router, ctx);
   require('./routes/stories').register(router, ctx);
   require('./routes/direct').register(router, ctx);
   require('./routes/upload').register(router, ctx);
 
-  router.post(['/graphql/query', '/graphql/query/', '/api/graphql', '/api/graphql/'], graphql.handler);
+  router.post(['/graphql/query', '/graphql/query/', '/api/graphql', '/api/graphql/'], (req, res, next) => (graphql.isAuthOperation(req.params_) ? ctx.limits.auth(req, res, next) : next()), graphql.handler);
 
   /*
    * Route definitions are answered here with an empty map for every requested
