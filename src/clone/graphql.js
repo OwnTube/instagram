@@ -21,6 +21,7 @@ const { feed, stories } = require('../backend/services/social');
 const { badRequest, notFound, unauthorized } = require('../backend/lib/errors');
 const { isPk, pkFromShortcode } = require('../backend/lib/ids');
 const present = require('./present');
+const { createCaaRegistration, safeNext } = require('./caaRegistration');
 
 function connection(items, nextCursor, toNode) {
   return {
@@ -34,9 +35,12 @@ function limitOf(vars, fallback = 12) {
   return Number.isInteger(n) && n > 0 ? Math.min(n, 50) : fallback;
 }
 
+const AUTH_OPERATIONS = new Set(['useCDSWebLoginMutation', 'useCAARegistrationFormSubmitMutation']);
+
 function createGraphql({ db }) {
   const unsupported = new Map();
   let loginCore = null;
+  let signupCore = null;
 
   function needViewer(ctx) {
     if (!ctx.viewer) throw unauthorized();
@@ -139,11 +143,6 @@ function createGraphql({ db }) {
   const str = (v) => (typeof v === 'string' && v ? v : null);
   const sensitive = (v) => str(v) || (v && typeof v === 'object' ? str(v.sensitive_string_value) : null);
 
-  /** Only same-site paths: the post-login redirect must not leave the origin. */
-  function safeNext(next) {
-    return typeof next === 'string' && /^\/(?![/\\])/.test(next) ? next : '/';
-  }
-
   /** Every scalar the client's selection reads, null unless set. */
   function loginPayload(fields) {
     return {
@@ -195,6 +194,8 @@ function createGraphql({ db }) {
     }
     return { caa_login_web: loginPayload({ ig_authenticated: true, crypted_uid: user.pk, redirect_uri: safeNext(input.next) }) };
   };
+
+  Object.assign(resolvers, createCaaRegistration(() => signupCore));
 
   function parseVariables(raw) {
     if (raw === undefined || raw === null || raw === '') return {};
@@ -249,8 +250,9 @@ function createGraphql({ db }) {
   return {
     handler,
     /** Operations that check credentials share the login rate limiter. */
-    isAuthOperation: (p) => String((p && p.fb_api_req_friendly_name) || '') === 'useCDSWebLoginMutation',
+    isAuthOperation: (p) => AUTH_OPERATIONS.has(String((p && p.fb_api_req_friendly_name) || '')),
     setLoginCore(core) { loginCore = core; },
+    setSignupCore(core) { signupCore = core; },
     supported: () => Object.keys(resolvers),
     unsupported: () => [...unsupported.values()].sort((a, b) => b.count - a.count),
   };

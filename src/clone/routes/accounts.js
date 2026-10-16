@@ -218,13 +218,14 @@ function register(router, ctx) {
   }
   router.post('/api/v1/accounts/check_confirmation_code/', limits.auth, checkCode);
 
-  async function create(req, res) {
-    const p = req.params_;
-    const password = readPassword(p);
+  /**
+   * Create an account and sign this browser in. Shared by the REST signup
+   * route and the registration form's GraphQL mutation. Returns `{ user }`, or
+   * `{ errors }` in the form's per-field shape; nothing is written on errors.
+   */
+  async function createAccount(req, res, p, password) {
     const errors = validateSignup(p, password);
-    if (Object.keys(errors).length) {
-      return igFail(res, 400, 'Please correct the highlighted fields.', { account_created: false, errors, error_type: 'form_validation_error' });
-    }
+    if (Object.keys(errors).length) return { errors };
     const email = optionalEmail(p);
     let user;
     try {
@@ -238,12 +239,23 @@ function register(router, ctx) {
       // Lost a race with another signup for the same username or email.
       if (error instanceof AppError && error.status === 409) {
         const field = error.details?.field || 'username';
-        return igFail(res, 400, error.message, { account_created: false, errors: { [field]: [{ message: error.message, code: `${field}_is_taken` }] }, error_type: 'form_validation_error' });
+        return { errors: { [field]: [{ message: error.message, code: `${field}_is_taken` }] } };
       }
       throw error;
     }
+    if (req.cloneSession) sessions.revoke(db, req.cloneSession.id);
     issueSession(db, req, res, user);
-    return igOk(res, { account_created: true, user_id: user.pk });
+    return { user };
+  }
+  ctx.signupCore = { readPassword, validateSignup, createAccount, suggestions };
+
+  async function create(req, res) {
+    const p = req.params_;
+    const result = await createAccount(req, res, p, readPassword(p));
+    if (result.errors) {
+      return igFail(res, 400, 'Please correct the highlighted fields.', { account_created: false, errors: result.errors, error_type: 'form_validation_error' });
+    }
+    return igOk(res, { account_created: true, user_id: result.user.pk });
   }
   for (const path of ['/api/v1/web/accounts/web_create_ajax/', '/accounts/web_create_ajax/']) router.post(path, limits.auth, create);
 

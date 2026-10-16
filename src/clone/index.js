@@ -304,6 +304,7 @@ function createClone({ db, dataDir = '.data', logger = console, env = process.en
 
   require('./routes/accounts').register(router, ctx);
   graphql.setLoginCore(ctx.loginCore);
+  graphql.setSignupCore(ctx.signupCore);
   require('./routes/content').register(router, ctx);
   require('./routes/stories').register(router, ctx);
   require('./routes/direct').register(router, ctx);
