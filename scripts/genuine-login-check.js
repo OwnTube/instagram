@@ -12,11 +12,15 @@
  *   3. the right password signs the browser in as that user (current_user,
  *      ds_user_id) and the form follows the same-site redirect.
  *
- * Page and bundles come from Instagram or, with LOADER_PREFER_CACHE=1, from the
- * disk caches without any request to www.instagram.com.
+ * Page and bundles come from the disk caches (LOADER_OFFLINE=1,
+ * LOADER_PREFER_CACHE=1 by default) without any request to www.instagram.com.
  *
- *   LOADER_PREFER_CACHE=1 node scripts/genuine-login-check.js
+ *   node scripts/genuine-login-check.js
  */
+
+// Offline by default, as the other genuine checks: pages and bundles from the
+// disk caches, no request to Instagram (override either variable to go online).
+Object.assign(process.env, { LOADER_OFFLINE: '1', LOADER_PREFER_CACHE: '1', ...process.env });
 
 const fs = require('node:fs');
 const path = require('node:path');

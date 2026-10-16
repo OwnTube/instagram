@@ -22,6 +22,7 @@
     "verify:genuine-login": "node scripts/genuine-login-check.js",
     "verify:genuine-feed": "node scripts/genuine-feed-check.js",
     "verify:genuine-profile": "node scripts/genuine-profile-check.js",
+    "verify:genuine-create": "node scripts/genuine-create-check.js",
     "cache:status": "node scripts/asset-cache.js status",
     "cache:warm": "node scripts/asset-cache.js warm"
   },

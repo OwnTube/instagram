@@ -130,6 +130,25 @@ function createGraphql({ db, contracts = null }) {
       return { xig_user_by_igid_v2: { id: String(row.pk), school_partner: null } };
     },
 
+    // Creation dialog: linked Threads / Facebook accounts. Local accounts have
+    // none: no linked profile, no crossposting service result (the client's
+    // fetchFBCrosspostingMetadata then rejects by design, reported via promiseDone).
+    fetchThreadsCrosspostingMetadataQuery(vars, ctx) {
+      return {
+        xcxp_fetch_linked_threads_profile: null,
+        viewer: ctx.viewer ? { user: { id: String(ctx.viewer.pk), cxp_crosspost_settings: null } } : null,
+      };
+    },
+
+    fetchFBCrosspostingMetadataQuery() {
+      return { fx_service_cache: { services: [] } };
+    },
+
+    // Creation and sharing: no COPPA enforcement state exists for local accounts.
+    usePolarisCoppaEnforcementStatusViewerQuery(vars, ctx) {
+      return { xdt_viewer: ctx.viewer ? { user: { id: String(ctx.viewer.pk), is_coppa_enforced: false } } : null };
+    },
+
     PolarisPostRootQuery(vars, ctx) {
       const pk = vars.shortcode ? pkFromShortcode(String(vars.shortcode)) : vars.media_id ? String(vars.media_id).split('_')[0] : null;
       const id = pk && posts.resolveId(db, pk);

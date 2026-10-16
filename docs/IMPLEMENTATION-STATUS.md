@@ -297,12 +297,37 @@ Each item: status, root cause, change, tests, screenshot (in
   Note: the profile entry point and three other answers were acquired at
   revision 1050642531, the rest of the store is 1050627067 (no refresh seen;
   a full refresh is pending while Instagram throttles document fetches).
-- Post creation in the UI, likes/comments in the UI, search, notifications
-  page, stories viewer, Direct thread view: NOT yet verified in the browser
-  (APIs exist and are tested at API level).
+- Post creation: DONE. `npm run verify:genuine-create` 9/9, strict offline:
+  New post > Post opens the genuine creation dialog (module answer
+  PolarisCreationModal.next.react acquired once, anonymously); a real PNG goes
+  into the dialog's own file input; Crop, Edit (WebGL filters, the 12 public
+  filter thumbnails under /images/instagram/xig/filters/ cached once) and the
+  caption step are the genuine ones; Share uploads (rupload) and configures the
+  post, checked in the database (caption, stored media); the post appears in
+  the owner's grid from /__media. Screenshots: m13-create-02..05. Fixes:
+  - the test browser had no WebGL (`--disable-gpu`); PolarisFilterGLContext
+    throws without a context and the step's error boundary showed "Something
+    went wrong". Now SwiftShader (`--use-angle=swiftshader`), as a desktop
+    browser has WebGL;
+  - the genuine uploader sends no CSRF token, only the session cookie and the
+    custom X-Instagram-Rupload-Params header; rupload requests carrying that
+    header are exempt from the token (a custom header cannot be sent
+    cross-site without a CORS preflight, which this origin never grants);
+  - answered fetchThreadsCrosspostingMetadataQuery (no linked profile),
+    fetchFBCrosspostingMetadataQuery (no service result; the client rejects by
+    design and reports it through promiseDone) and
+    usePolarisCoppaEnforcementStatusViewerQuery (`is_coppa_enforced:false`).
+  Tests: test/create-operations.test.js.
+- genuine-login-check and genuine-signup-check now default to LOADER_OFFLINE=1
+  and LOADER_PREFER_CACHE=1 like the others. Without them `npm run` fetched `/`
+  from Instagram, which failed here ("Upstream fetch failed"; 4/8). That was
+  also the likely cause of the earlier one-off login 401 in the feed check.
+- Likes/comments in the UI, search, notifications page, stories viewer, Direct
+  thread view: NOT yet verified in the browser (APIs exist and are tested at
+  API level).
 
 ## Next tasks
 
-1. P6 in order: post creation, likes and comments, search, notifications, stories viewer, Direct threads; each with a
+1. P6 in order: likes and comments, search, notifications, stories viewer, Direct threads; each with a
    DB check and a screenshot.
 2. Make `SHELL_SIGNED_IN_HOME` the default once the above hold.

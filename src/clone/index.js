@@ -272,7 +272,13 @@ function createClone({ db, dataDir = '.data', logger = console, env = process.en
   // token; only the read-only ads queries are answered there (see below).
   const ADS_GRAPHQL = /^\/ads\/igwww_ads_graphql\/?$/;
   const ADS_OPERATIONS = new Set(['PolarisStoriesV3AdsPoolWWWQuery']);
-  router.use((req, res, next) => (ROUTE_DEFINITIONS.test(req.path) || req.path === '/__clone/dropped' || ADS_GRAPHQL.test(req.path) ? next() : csrfCheck(req, res, next)));
+  // The genuine uploader (rupload) sends no CSRF token, only the session cookie
+  // and the custom X-Instagram-Rupload-Params header. A custom header cannot be
+  // sent cross-site without a CORS preflight (this origin answers none), so its
+  // presence stands in for the token there; without it the token is required.
+  const RUPLOAD = /^\/rupload_ig(photo|video)\//;
+  const ruploadByClient = (req) => RUPLOAD.test(req.path) && Boolean(req.get('x-instagram-rupload-params'));
+  router.use((req, res, next) => (ROUTE_DEFINITIONS.test(req.path) || req.path === '/__clone/dropped' || ADS_GRAPHQL.test(req.path) || ruploadByClient(req) ? next() : csrfCheck(req, res, next)));
   router.post(ADS_GRAPHQL, (req, res, next) => {
     if (ADS_OPERATIONS.has(String(req.params_.fb_api_req_friendly_name || ''))) return next();
     return res.status(404).json({ data: null, errors: [{ message: 'Only ads queries are answered on this endpoint', code: 404 }], status: 'fail' });

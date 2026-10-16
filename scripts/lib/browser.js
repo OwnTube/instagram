@@ -23,7 +23,11 @@ function launchChromium(profileDir) {
       [
         '--headless=new',
         '--no-sandbox',
-        '--disable-gpu',
+        // Software WebGL (SwiftShader) instead of --disable-gpu: the genuine
+        // creation flow renders filters with WebGL (PolarisFilterGLContext
+        // throws without a context), as any desktop browser provides.
+        '--use-angle=swiftshader',
+        '--enable-unsafe-swiftshader',
         '--disable-dev-shm-usage',
         '--no-first-run',
         '--no-default-browser-check',
@@ -131,6 +135,7 @@ async function openSession(browserWsUrl) {
           type: msg.params.type,
           method: msg.params.request.method,
           postData: msg.params.request.postData,
+          headers: msg.params.request.headers,
           status: null,
           failed: null,
           fromCache: false,

@@ -13,12 +13,16 @@
  *      is added and no session is issued;
  *   4. a too-short password is refused by the form and nothing is written.
  *
- * It needs the page and its bundles: from Instagram, or from the disk caches
- * (.cache/documents, .cache/assets) with LOADER_PREFER_CACHE=1, which makes no
+ * It needs the page and its bundles, from the disk caches (.cache/documents,
+ * .cache/assets; LOADER_OFFLINE=1 and LOADER_PREFER_CACHE=1 by default), with no
  * request to www.instagram.com. CHROMIUM_BIN must point at Chromium.
  *
- *   LOADER_PREFER_CACHE=1 node scripts/genuine-signup-check.js
+ *   node scripts/genuine-signup-check.js
  */
+
+// Offline by default, as the other genuine checks: pages and bundles from the
+// disk caches, no request to Instagram (override either variable to go online).
+Object.assign(process.env, { LOADER_OFFLINE: '1', LOADER_PREFER_CACHE: '1', ...process.env });
 
 const fs = require('node:fs');
 const path = require('node:path');

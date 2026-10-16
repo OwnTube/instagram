@@ -64,4 +64,25 @@ async function waitFor(session, expression, ms) {
   return false;
 }
 
-module.exports = { sunsetPng, evaluate, type, waitFor, sleep };
+/**
+ * Click, with real mouse events at its centre, the last visible element inside
+ * `scope` whose own text is exactly `label` (some controls of the genuine
+ * client react to pointer events, not to element.click()).
+ */
+async function mouseClickText(session, label, scope = 'document') {
+  const at = await evaluateIsolated(session, `(() => {
+    const els = [...${scope}.querySelectorAll('*')].filter((x) => (x.innerText || '').trim() === ${JSON.stringify(label)} && x.getBoundingClientRect().width > 0);
+    const e = els[els.length - 1];
+    if (!e) return null;
+    const b = e.getBoundingClientRect();
+    return JSON.stringify({ x: b.x + b.width / 2, y: b.y + b.height / 2 });
+  })()`);
+  if (!at) return false;
+  const { x, y } = JSON.parse(at);
+  for (const type of ['mouseMoved', 'mousePressed', 'mouseReleased']) {
+    await session.cdp.send('Input.dispatchMouseEvent', { type, x, y, button: 'left', clickCount: 1 });
+  }
+  return true;
+}
+
+module.exports = { sunsetPng, evaluate, type, waitFor, sleep, mouseClickText };
