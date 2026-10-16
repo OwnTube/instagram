@@ -322,12 +322,27 @@ Each item: status, root cause, change, tests, screenshot (in
   and LOADER_PREFER_CACHE=1 like the others. Without them `npm run` fetched `/`
   from Instagram, which failed here ("Upstream fetch failed"; 4/8). That was
   also the likely cause of the earlier one-off login 401 in the feed check.
-- Likes/comments in the UI, search, notifications page, stories viewer, Direct
-  thread view: NOT yet verified in the browser (APIs exist and are tested at
-  API level).
+- Likes and comments: DONE. `npm run verify:genuine-engage` 8/8, strict
+  offline: the feed's genuine Like button (usePolarisLikeMediaXIGLikeMutation)
+  stores the like; the genuine Comment button opens the post view at
+  /p/<code>/, whose comment field (usePolarisCommentCreateMutation) stores the
+  comment; the post view's Unlike (PolarisAPIUnlikePostMutation) removes the
+  like; after a fresh load of home the reopened post reads the comment back
+  from the database. Each step is checked in the `likes`/`comments` tables.
+  Screenshots: m14-engage-01..04. Answered from the bundles' selections:
+  `xig_media_like`/`xig_media_unlike` {media {id, has_liked}} for the four like
+  mutations (input {media_id}); `xig_comment_create` (success response with
+  `comment_dict`; `fbid_v2` null, local accounts have no Facebook id). Tests:
+  test/engage-operations.test.js.
+  Known gap: loading /p/<code>/ directly (not through the app) serves the
+  logged-out page. There is no signed-in post route yet, because the post
+  route's entry point and props need a real post document, which is not
+  cached (Instagram throttled document fetches).
+- Search, notifications page, stories viewer, Direct thread view: NOT yet
+  verified in the browser (APIs exist and are tested at API level).
 
 ## Next tasks
 
-1. P6 in order: likes and comments, search, notifications, stories viewer, Direct threads; each with a
+1. P6 in order: search, notifications, stories viewer, Direct threads; each with a
    DB check and a screenshot.
 2. Make `SHELL_SIGNED_IN_HOME` the default once the above hold.

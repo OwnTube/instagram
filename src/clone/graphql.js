@@ -17,7 +17,7 @@
 
 const users = require('../backend/services/users');
 const posts = require('../backend/services/posts');
-const { feed, stories, follows } = require('../backend/services/social');
+const { feed, stories, follows, comments } = require('../backend/services/social');
 const { badRequest, notFound, unauthorized } = require('../backend/lib/errors');
 const { isPk, pkFromShortcode } = require('../backend/lib/ids');
 const present = require('./present');
@@ -53,6 +53,15 @@ function createGraphql({ db, contracts = null }) {
     if (vars.username) return users.getByUsername(db, String(vars.username));
     const id = vars.id ?? vars.user_id ?? vars.target_user_id;
     return id && isPk(String(id)) ? users.getByPk(db, String(id)) : null;
+  }
+
+  /** Set the viewer's like on the post `vars.input.media_id` names; its media id and has_liked. */
+  function likeMedia(vars, ctx, liked) {
+    const viewer = needViewer(ctx);
+    const id = posts.resolveId(db, String((vars.input && vars.input.media_id) || ''));
+    if (!id) throw notFound('Media not found');
+    const post = posts.setLike(db, id, viewer.id, liked);
+    return { id: present.mediaId(post), has_liked: Boolean(post.likedByViewer) };
   }
 
   const resolvers = {
@@ -98,6 +107,51 @@ function createGraphql({ db, contracts = null }) {
     // (`xdt_create_friendship` / `xdt_destroy_friendship`: the target user with
     // the viewer's resulting friendship status). Same rules as the REST routes:
     // following twice or unfollowing someone not followed is not an error.
+    // Like and unlike (usePolarisLikeMedia): input {media_id, container_module,
+    // tracking_token}; the answer selects the media's id and has_liked.
+    usePolarisLikeMediaXIGLikeMutation(vars, ctx) {
+      return { xig_media_like: { media: likeMedia(vars, ctx, true) } };
+    },
+
+    usePolarisLikeMediaXIGUnlikeMutation(vars, ctx) {
+      return { xig_media_unlike: { media: likeMedia(vars, ctx, false) } };
+    },
+
+    // The post view's like button (PolarisAPILikePost / PolarisAPIUnlikePost):
+    // the same contract, input {media_id}.
+    PolarisAPILikePostMutation(vars, ctx) {
+      return { xig_media_like: { media: likeMedia(vars, ctx, true) } };
+    },
+
+    PolarisAPIUnlikePostMutation(vars, ctx) {
+      return { xig_media_unlike: { media: likeMedia(vars, ctx, false) } };
+    },
+
+    // Comment from the post's comment field (usePolarisCommentCreate): data
+    // {comment_text, media_id, replied_to_comment_fbid?, tracking_token}.
+    usePolarisCommentCreateMutation(vars, ctx) {
+      const viewer = needViewer(ctx);
+      const data = vars.data || {};
+      const id = posts.resolveId(db, String(data.media_id || ''));
+      if (!id) throw notFound('Media not found');
+      const post = posts.get(db, id, { viewerId: viewer.id });
+      const text = String(data.comment_text ?? '').trim();
+      if (!text) throw badRequest('Comment cannot be empty.');
+      if (text.length > 2200) throw badRequest('Comment is too long.');
+      const parentRef = data.replied_to_comment_fbid;
+      const parentId = parentRef ? comments.resolveId(db, String(parentRef)) : undefined;
+      if (parentRef && !parentId) throw notFound('Comment not found');
+      const c = present.comment(db, comments.create(db, post.id, viewer.id, { body: text, parentId }), present.mediaId(post));
+      const { pk, username, full_name, profile_pic_url, is_verified } = c.user;
+      return {
+        xig_comment_create: {
+          __typename: 'XIGCommentCreateMutationSuccessResponse',
+          // Local accounts have no Facebook id (fbid_v2).
+          comment_dict: { created_at: c.created_at, pk: c.pk, text: c.text, user: { pk, id: pk, username, full_name, profile_pic_url, is_verified, fbid_v2: null } },
+        },
+      };
+    },
+
     usePolarisFollowMutation(vars, ctx) {
       const viewer = needViewer(ctx);
       const row = userFromVars({ id: vars.target_user_id });
