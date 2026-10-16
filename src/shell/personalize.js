@@ -63,7 +63,7 @@ function replacePlaceholders(str, viewer, csrfToken, escape = (x) => x) {
   return out;
 }
 
-function personalize(html, { viewer = null, csrfToken, encryption, dropPrefetches = false, stats } = {}) {
+function personalize(html, { viewer = null, csrfToken, encryption, dropPrefetches = false, identity = false, stats } = {}) {
   if (typeof html !== 'string' || !html) return html;
   const counts = { encryption: 0, csrf: 0, viewer: 0, prefetchesDropped: 0, placeholders: 0 };
 
@@ -80,7 +80,15 @@ function personalize(html, { viewer = null, csrfToken, encryption, dropPrefetche
       counts.prefetchesDropped += 1;
       return REMOVE;
     }
-    if (isDefineTuple(node)) {
+    // Identity edits (CurrentUserInitialData, viewer) are applied ONLY to a
+    // captured signed-in template. On a genuine upstream page the client
+    // tamper-checks CurrentUserInitialData.USER_ID (and the LSD / csrf token)
+    // and refuses to mount if it changes to anything but its original value, so
+    // a live page is served with its identity untouched. We never need to
+    // rewrite the token anyway: the client sends X-CSRFToken from the
+    // `csrftoken` cookie, which this server sets to the clone session's token,
+    // so our backend's CSRF check still matches.
+    if (identity && isDefineTuple(node)) {
       const [name, , exports] = node;
       if (name === 'CurrentUserInitialData') {
         exports.USER_ID = viewer ? viewer.pk : '0';
@@ -88,9 +96,6 @@ function personalize(html, { viewer = null, csrfToken, encryption, dropPrefetche
         exports.NAME = viewer ? viewer.display_name || viewer.username : '';
         exports.SHORT_NAME = viewer ? viewer.username : null;
         counts.viewer += 1;
-      } else if (name === 'LSD' && typeof exports.token === 'string' && csrfToken) {
-        exports.token = csrfToken;
-        counts.csrf += 1;
       }
       return undefined;
     }
@@ -111,11 +116,7 @@ function personalize(html, { viewer = null, csrfToken, encryption, dropPrefetche
           }
         }
       }
-      if (csrfToken && typeof node.csrf_token === 'string') {
-        node.csrf_token = csrfToken;
-        counts.csrf += 1;
-      }
-      if ('viewerId' in node && 'viewer' in node) {
+      if (identity && 'viewerId' in node && 'viewer' in node) {
         node.viewerId = viewer ? viewer.pk : null;
         node.viewer = viewerObject(viewer);
         counts.viewer += 1;

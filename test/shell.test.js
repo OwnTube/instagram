@@ -52,27 +52,30 @@ test('personalize', async (t) => {
     assert.match(out, /"keyId":7/, 'a numeric key id stays numeric');
   });
 
-  await t.test('CSRF fields and the LSD token become the clone token', () => {
-    const out = personalize(anonymousPage(), { csrfToken: 'clone-csrf', encryption: OURS });
+  await t.test('a live page leaves the tamper-checked csrf/LSD token and USER_ID untouched', () => {
+    // Instagram validates these and refuses to mount if they change, so the
+    // shell (identity off, the default for an upstream page) must not touch them.
+    const out = personalize(anonymousPage(), { viewer: viewer(), csrfToken: 'clone-csrf', encryption: OURS });
     const text = leaves(out);
-    assert.ok(!text.includes('upstream-csrf') && !out.includes('upstream-lsd'));
-    assert.ok(text.includes('clone-csrf'));
+    assert.ok(text.includes('upstream-csrf') && out.includes('upstream-lsd'), 'the bootstrap token is preserved');
+    assert.ok(!text.includes('clone-csrf'), 'the clone token is not written into the bootstrap');
+    assert.match(out, /"USER_ID":"0"/, 'USER_ID is left as the page had it');
+    assert.ok(!out.includes('viewer_one'), 'identity is not written into a live page');
   });
 
-  await t.test('anonymous and signed-in viewers get their own identity, and only theirs', () => {
-    const anon = personalize(anonymousPage(), { csrfToken: 'x', encryption: OURS });
-    assert.match(anon, /"USER_ID":"0"/);
-    const one = personalize(anonymousPage(), { viewer: viewer(), csrfToken: 'tok-one', encryption: OURS });
-    const two = personalize(anonymousPage(), { viewer: viewer({ pk: '222', username: 'viewer_two', display_name: 'Viewer Two' }), csrfToken: 'tok-two', encryption: OURS });
+  await t.test('a template (identity on) gets the viewer and only that viewer', () => {
+    const one = personalize(anonymousPage(), { viewer: viewer(), csrfToken: 'tok-one', encryption: OURS, identity: true });
+    const two = personalize(anonymousPage(), { viewer: viewer({ pk: '222', username: 'viewer_two', display_name: 'Viewer Two' }), encryption: OURS, identity: true });
     assert.match(one, /"USER_ID":"111"/);
     assert.ok(leaves(one).includes('"viewerId":"111"'));
-    assert.ok(!one.includes('viewer_two') && !one.includes('tok-two'), "one viewer's page never names another");
-    assert.ok(!two.includes('viewer_one') && !two.includes('tok-one'));
+    assert.ok(!one.includes('viewer_two'), "one viewer's page never names another");
+    assert.ok(!two.includes('viewer_one'));
+    assert.match(personalize(anonymousPage(), { encryption: OURS, identity: true }), /"USER_ID":"0"/);
   });
 
   await t.test('markup in a display name cannot break out of a JSON block', () => {
     const name = '</script><img src=x onerror=alert(1)>';
-    const out = personalize(anonymousPage(), { viewer: viewer({ display_name: name }), csrfToken: 'x', encryption: OURS });
+    const out = personalize(anonymousPage(), { viewer: viewer({ display_name: name }), csrfToken: 'x', encryption: OURS, identity: true });
     const blocks = out.match(/<script type="application\/json"[^>]*>[\s\S]*?<\/script>/g);
     for (const b of blocks) assert.ok(!b.slice(0, -'</script>'.length).includes('</script'), 'no closing tag inside a block');
     assert.ok(!out.includes('<img src=x'));
@@ -81,7 +84,7 @@ test('personalize', async (t) => {
 
   await t.test('placeholders in markup are HTML-escaped', () => {
     const html = page([], '<p>__CLONE_VIEWER_FULL_NAME__</p>');
-    const out = personalize(html, { viewer: viewer({ display_name: '<b>"x"</b>' }), csrfToken: 'x', encryption: OURS });
+    const out = personalize(html, { viewer: viewer({ display_name: '<b>"x"</b>' }), csrfToken: 'x', encryption: OURS, identity: true });
     assert.ok(out.includes('<p>&#60;b&#62;&#34;x&#34;&#60;/b&#62;</p>'));
   });
 

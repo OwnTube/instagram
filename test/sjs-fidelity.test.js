@@ -70,11 +70,12 @@ test('JSON editing preserves bytes', async (t) => {
     assert.ok(out.endsWith('"other":1.0}'));
   });
 
-  await t.test('a block the shell does not need to touch is returned unchanged by personalize', () => {
-    const html = `<html><head></head><body>${block(SUPPORT)}${block('{"config":{"csrf_token":"up"}}')}</body></html>`;
+  await t.test('personalize leaves a block it does not edit byte-identical and swaps the encryption key', () => {
+    const enc = block('{"encryption":{"key_id":"1","public_key":"' + 'a'.repeat(64) + '","version":"10"}}');
+    const html = `<html><head></head><body>${block(SUPPORT)}${enc}</body></html>`;
     const out = personalize(html, { csrfToken: 'ours', encryption: { key_id: '1', public_key: 'b'.repeat(64), version: '10' } });
     assert.ok(out.includes(block(SUPPORT)), 'the support block must be byte-identical');
-    assert.ok(out.includes('"csrf_token":"ours"'));
+    assert.ok(out.includes('"public_key":"' + 'b'.repeat(64) + '"'), 'the encryption key is swapped');
   });
 
   await t.test('new values are still safe inside a script element', () => {
