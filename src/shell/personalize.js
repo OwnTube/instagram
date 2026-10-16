@@ -25,6 +25,7 @@ const { editJsonBlocks, isDefineTuple, prefetchKey, REMOVE } = require('./sjs');
 const { isLoginHomeInitialize, toSignedInHome, insertFeedRoot } = require('./signedInRoute');
 
 const RUNTIME_TAG = '<script src="/__clone/runtime.js"></script>';
+const STATIC_CDN = /^https:\/\/static\.cdninstagram\.com\//;
 
 const PLACEHOLDERS = {
   __CLONE_VIEWER_PK__: (v) => (v ? v.pk : '0'),
@@ -119,6 +120,16 @@ function personalize(html, { viewer = null, csrfToken, encryption, dropPrefetche
       return undefined;
     }
     if (node && typeof node === 'object' && !Array.isArray(node)) {
+      // Image-sprite data (ixData entries): the client paints these URLs as CSS
+      // backgrounds through rules it inserts at runtime, which no transport hook
+      // sees, so they point at the local asset proxy here. (This edit once
+      // "broke boot" only because edited blocks kept a stale data-content-len.)
+      for (const key of ['spi', '_spi']) {
+        if (typeof node[key] === 'string' && STATIC_CDN.test(node[key])) {
+          node[key] = node[key].replace(STATIC_CDN, '/__ig/static.cdninstagram.com/');
+          counts.sprites = (counts.sprites || 0) + 1;
+        }
+      }
       if (encryption) {
         // The page's password-encryption config, in either naming style. The
         // original value's type (number or string) is kept for key ids.

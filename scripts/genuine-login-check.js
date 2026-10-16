@@ -33,11 +33,10 @@ const MOUNTED = "(() => { const m = document.querySelector('[id^=mount_]'); retu
 const stalls = [];
 
 /**
- * Load a page and let the client boot undisturbed, then check once that it
- * mounted. Probing during boot is avoided: forcing style computation (e.g.
- * getComputedStyle) while the client's stylesheets load was shown to stall its
- * boot, in the page's context or an isolated one. A load that did not mount is
- * reported as a stall, and the page is loaded once more.
+ * Load a page, let the client boot, then check once that it mounted (probing
+ * from an isolated world). A load that did not mount is reported as a stall and
+ * the page is loaded once more. Known cause of past stalls: edited payload
+ * blocks with a stale data-content-len (fixed in src/shell/sjs.js).
  */
 async function loadMounted(session, url) {
   for (let attempt = 0; attempt < 2; attempt += 1) {

@@ -139,15 +139,18 @@ not intercepted). One URL is refused by the CSP and so never sent: the logo spri
 `Ny6hrBVLYjl.webp`, which the client paints from a CSS rule it inserts at runtime
 (the logo is missing offline).
 
-Not solved: an intermittent boot stall. In some page loads the client stops after
-its inline payloads (no dynamic loads, no XHR, mount stays `content-visibility:
-hidden`). Established: probing the page with getComputedStyle during boot (from
-the page's or an isolated world) reproduces it every time; the same page with no
-probing mounted 10/10 and 4/4 in a neutral harness; rewriting sprite URLs (in
-bootstrap `ixData` or in CSS rules the client inserts) also stalls it every time,
-so neither is done. Without any probing a stall was still seen in 1 of 4 check
-runs, after which reloads in the same browser kept stalling. The checks report a
-stall explicitly (WARN) and reload once. Root cause not identified.
+Boot stall: SOLVED. Root cause (docs/REVERSE-ENGINEERING.md section 6): the
+payload listener skips a JSON block whose length differs from its
+`data-content-len`. Each data directory gets a random password-key id (1-255);
+when its digit count differed from Instagram's ("219"), the swapped encryption
+block changed length and was skipped. Pinned key ids proved it (old editor:
+key_id 42 and 7 stall, 219 mounts; fixed editor: all mount). The earlier
+`getComputedStyle` explanation was wrong (those runs shared one server/key).
+With the fix, the logo sprite is also served locally (the `ixData` URL edit no
+longer breaks boot), so nothing is refused by the CSP any more.
+
+Open: React error #418 (hydration mismatch, recoverable) appears in about half
+of the login-page loads, with or without the sprite edit. Not yet diagnosed.
 
 ## Signed-in initialisation (research, in progress)
 

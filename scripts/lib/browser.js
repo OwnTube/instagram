@@ -241,9 +241,8 @@ function watchExternal(session, allowedOrigin) {
 }
 
 /**
- * Evaluate in an isolated world (same DOM, separate JS context). Evaluating in
- * the page's own context while the Instagram client boots was shown to stall
- * the boot; probes therefore never run there.
+ * Evaluate in an isolated world (same DOM, separate JS context), so a probe
+ * never runs code in the page's own context.
  */
 async function evaluateIsolated(session, expression) {
   const tree = await session.cdp.send('Page.getFrameTree');
