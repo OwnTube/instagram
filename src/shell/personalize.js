@@ -22,7 +22,7 @@
  */
 
 const { editJsonBlocks, isDefineTuple, prefetchKey, REMOVE } = require('./sjs');
-const { isLoginHomeInitialize, toSignedInHome, insertFeedRoot } = require('./signedInRoute');
+const { isLoginHomeInitialize, toSignedInHome, isSSRInit, disableAnonymousSSR, insertFeedRoot } = require('./signedInRoute');
 
 const RUNTIME_TAG = '<script src="/__clone/runtime.js"></script>';
 const STATIC_CDN = /^https:\/\/static\.cdninstagram\.com\//;
@@ -90,6 +90,11 @@ function personalize(html, { viewer = null, csrfToken, encryption, dropPrefetche
       counts.signedInRoute += 1;
       return REMOVE;
     }
+    if (homeSwitch && isSSRInit(node)) {
+      disableAnonymousSSR(node);
+      counts.ssrDisabled = (counts.ssrDisabled || 0) + 1;
+      return undefined;
+    }
     if (dropPrefetches && prefetchKey(node)) {
       counts.prefetchesDropped += 1;
       return REMOVE;
@@ -100,6 +105,15 @@ function personalize(html, { viewer = null, csrfToken, encryption, dropPrefetche
     // docs/REVERSE-ENGINEERING.md section 6.) The csrf token is never rewritten:
     // the client sends X-CSRFToken from the `csrftoken` cookie, which this
     // server sets to the clone session's token.
+    // The page names Facebook's cross-site user-info URL; PolarisLoggedInFBUserProvider
+    // fetches it (with facebook.com cookies) to offer "Continue as <Facebook
+    // name>". This origin has no Facebook session (the runtime drops Meta hosts),
+    // so the probe could only fail; with no URL the provider skips it
+    // (`if (cross_site_request_url == null) return null`).
+    if (isDefineTuple(node) && node[0] === 'PolarisSiteData' && node[2] && node[2].cross_site_request_url != null) {
+      node[2].cross_site_request_url = null;
+      counts.crossSiteProbe = (counts.crossSiteProbe || 0) + 1;
+    }
     if (homeSwitch && isDefineTuple(node)) docDefines.add(node[0]);
     if (identity && isDefineTuple(node)) {
       const [name, , exports] = node;

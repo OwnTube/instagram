@@ -55,6 +55,7 @@ test('no clone identity or secret reaches upstream', async (t) => {
     assert.match(res.text, /^for \(;;\);/);
     const payload = JSON.parse(res.text.slice('for (;;);'.length));
     assert.deepStrictEqual(Object.keys(payload.payload.payloads).sort(), [`/p/${post.code}/`, '/zebra_alice/'].sort());
+    assert.deepStrictEqual(payload.payload.sr_payload, {}, 'the client (fetchAnonymousCometRoute) requires payloads and sr_payload');
     assert.strictEqual(server.upstream.length, before, 'nothing was sent upstream');
   });
 

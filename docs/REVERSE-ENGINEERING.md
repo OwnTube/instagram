@@ -169,3 +169,88 @@ The client normalises a GraphQL answer with its compiled operation
   (`page_info` with `end_cursor`/`has_next_page`, `edges[].cursor`, `edges[].node`).
 
 Reproduce: `npm run verify:genuine-feed` (strict offline; docs/IMPLEMENTATION-STATUS.md).
+
+## 9. Viewer-specific component bindings (`cr:NNNN`)
+
+An endpoint answer's `jsmods.define` carries `cr:NNNN` entries: component
+replacements the server chooses per viewer. Bound, an entry names a module;
+unbound, it is `["cr:N",[],{"__rc":[null,null]},-1]` (same answer, other slots).
+The feed root's answer is fetched anonymously, so it carries the logged-out
+choices. Read in the stored bundles:
+
+- `PolarisShellHeader` renders `cr:2696` whenever it is bound;
+  `PolarisFeedRoot` never passes `hideHeader`. `cr:2696` -> `PolarisDesktopNav`,
+  which renders `cr:4477` -> `PolarisDesktopNavLoggedOutContainer` ("Log In",
+  "Sign Up"). Unbound, the header falls back to
+  `PolarisFeedMobileTopNavigation`, which has its own logged-in branch.
+- `cr:7457` is gated in the client by `useHasLoggedOutMobileTopNav`, `cr:4197`
+  by `useShouldShowLoggedOutCallToAction`; they need no edit.
+
+`src/shell/signedInRoute.js` (`LOGGED_OUT_ONLY`) unbinds `cr:2696` and
+`cr:4477` for a signed-in viewer. Nothing is hidden with CSS and no state is
+hardcoded: the client renders its own signed-in header.
+
+## 10. Home operations and revision consistency
+
+Contracts: `node scripts/graphql-contract.js <Operation>` prints the response
+tree of the client's compiled operation. The answers are in
+`src/clone/homeOperations.js` (contract notes at the top of that file). Two
+client rules decide what is "truthful" there:
+
+- Direct unread state (`XFBIGDirectViewerThreadIsUnreadResolver`): unread when
+  `marked_as_unread`, or when the read receipt for `CurrentUser.getEIMU()`
+  (`CurrentUserInitialData.IG_USER_EIMU`, set by the shell to the viewer's pk)
+  has a `watermark_timestamp_ms` older than `last_activity_timestamp_ms`.
+- The ads GraphQL endpoint (`/ads/igwww_ads_graphql/`) is called by a network
+  layer that sends no CSRF token; only `PolarisStoriesV3AdsPoolWWWQuery` is
+  answered there (empty), every other operation gets 404.
+
+Revision consistency (`ClientConsistency`): an endpoint answer carries
+`consistency.rev`; when it differs from the page's and its modules overlap the
+loaded ones, the client asks for a soft or hard refresh. Offline, that reload
+gets the same stale page. So the page documents and every bootloader answer
+must share one revision: `scripts/refresh-client.js` re-stores them together
+(anonymous requests, one each, stops at the first non-200, backs up first).
+Bootloader answers are keyed by `modules|nb_modules|__rev`; the client
+sometimes combines a blocking and a non-blocking module in one request, which
+is a separate key.
+
+## 11. Comet SSR on the signed-in route (React #418), route definitions
+
+The anonymous `/` document is server-rendered: `CometSSRClientInjector.ssrInit`
+(`enabled: true`, `eid: mount_0_0_*`, `disabled_status: "fail_ssr_disabled"`)
+and `onPayloadReceived` passes (`FIRST`, `LAST`) for the logged-out login
+homepage. `CometSSRStateManager` is a state machine: with SSR enabled,
+`onRootComponentLoaded` after the payloads leads to `HYDRATION`/`SSR_SUCCESS`
+and `hydrateRoot(mount, root)`; with `ssrInit({enabled:false})`, `ssrInit`
+calls `disableSSRInFlight` (state `SSRDisabled`) and the root component goes to
+`CLIENT_RENDER`, `CometClientRootRendererUtils.initReactRender` (createRoot);
+payloads arriving in that state change nothing. Our signed-in route replaced
+the root but left SSR enabled, so React hydrated the logged-out markup with the
+feed tree: #418 ("server rendered HTML didn't match"), then a client-render
+fallback. Fix: the signed-in route's document carries `enabled: false`
+(`disableAnonymousSSR` in `src/shell/signedInRoute.js`).
+
+REA check (REA 6.5.0, `rea analyze-javascript-application` over the three
+modules extracted from the stored bundle at rev 1050627067; evidence id
+`ev_6fc1ad03b16d9c2f62c5c86acee5561e05e2880bf8228a748f9aa18223a2eb98`): the
+semantic graph's call sites (each with its enclosing function node) put
+`ReactDOM.hydrateRoot` in `CometSSRStateManager` (the `$7` hydration helper)
+and in `CometSSRMergedContentInjector`; `initReactRender` in the state
+manager's client-render helper `$9` and in the merged-content injector;
+`onSSRInit` and `disableSSRInFlight` in `CometSSRClientInjector.ssrInit`. That
+matches the reading above. Reproduce: extract the modules (each `__d("Name"`
+up to the next `__d(`) into a directory with a `package.json`, run the command
+with `--format json`, and filter `semantic_graph.nodes` of kind `call-site`.
+REA was used only on locally stored public bundles.
+
+Route definitions: `fetchAnonymousCometRoute` accepts an answer only if it has
+both `payloads` and `sr_payload` (else `mustfixThrow("Routing payload
+expected...")`). Our local answer lacked `sr_payload`. Each URL entry with
+`error` is read by `parseCometRouteFetchPayload` as "unavailable" (no route
+definition), and the router loads that URL as a page.
+
+Facebook cross-site probe: `PolarisLoggedInFBUserProvider` fetches
+`PolarisSiteData.cross_site_request_url` with facebook.com credentials and skips
+the probe when that is null. This origin has no Facebook session, so the shell
+sets it to null.

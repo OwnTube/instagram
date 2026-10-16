@@ -349,7 +349,10 @@ function createClone({ db, dataDir = '.data', logger = console, env = process.en
     const payloads = {};
     for (const url of urls.slice(0, 100)) payloads[String(url)] = { error: 1357004, errorSummary: 'Route definition unavailable', payload: null };
     res.setHeader('cache-control', 'private, no-store, max-age=0');
-    return res.type('application/x-javascript').send(`for (;;);${JSON.stringify({ __ar: 1, payload: { payloads }, lid: '0' })}`);
+    // fetchAnonymousCometRoute requires both `payloads` and `sr_payload` (server
+    // render data, none here); an entry with `error` makes parseCometRouteFetchPayload
+    // report the route as unavailable, and the router then loads the URL as a page.
+    return res.type('application/x-javascript').send(`for (;;);${JSON.stringify({ __ar: 1, payload: { payloads, sr_payload: {} }, lid: '0' })}`);
   });
 
   router.get('/api/v1/web/get_profile_pic_props/:username/', (req, res) =>

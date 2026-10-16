@@ -216,3 +216,25 @@ test('a signed-in viewer does not get the logged-out desktop top navigation bind
   // Gated by the client itself (useHasLoggedOutMobileTopNav): delivered as is.
   assert.deepStrictEqual(byId['cr:7457'][2], { __rc: ['PolarisMobileTopNavLoggedOut.react', null] });
 });
+
+test("the signed-in home route does not hydrate the anonymous page's server render", () => {
+  const init = ['CometPlatformRootClient', 'initialize', [], [{ expectedPreloaders: [], additional_roots: [], initialRouteInfo: { route: { actorID: '0', routePath: '/', url: '/' } }, ssrEnabled: true }]];
+  const ssrInit = ['CometSSRClientInjector', 'ssrInit', null, [{ enabled: true, eid: 'mount_0_0_x', disabled_status: 'fail_ssr_disabled', gks: { mwp_ssr_enabled: true } }]];
+  const html = page([{ require: [ssrInit] }, { require: [init] }]);
+  const answer = { allResources: [], hsrp: { hblp: { rsrcMap: {} } }, jsmods: {} };
+  const ssrOf = (out) =>
+    [...out.matchAll(/<script type="application\/json"[^>]*data-sjs>(.*?)<\/script>/g)]
+      .map((m) => JSON.parse(m[1]))
+      .flatMap((b) => b.require || [])
+      .find((r) => r[0] === 'CometSSRClientInjector')[3][0];
+  assert.strictEqual(ssrOf(personalize(html, { viewer: viewer(), encryption: OURS, signedInHome: true, feedRoot: answer })).enabled, false);
+  assert.strictEqual(ssrOf(personalize(html, { viewer: viewer(), encryption: OURS })).enabled, true, 'the anonymous page keeps its own server render');
+});
+
+test('pages name no Facebook cross-site probe (this origin has no Facebook session)', () => {
+  const html = page([{ define: [['PolarisSiteData', [], { machine_id: 'm', cross_site_request_url: 'https://www.facebook.com/ig_xsite_user_info/' }, 7369]] }]);
+  const out = personalize(html, { encryption: OURS });
+  assert.ok(!out.includes('ig_xsite_user_info'));
+  assert.match(out, /"cross_site_request_url":null/);
+  assert.match(out, /"machine_id":"m"/, 'the rest of the site data is unchanged');
+});

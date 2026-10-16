@@ -86,6 +86,27 @@ function toSignedInHome(node, viewer) {
   return node;
 }
 
+/**
+ * The anonymous document's Comet SSR init (`CometSSRClientInjector.ssrInit`).
+ * Its server render (the hidden `eid` mount and the onPayloadReceived passes)
+ * is the logged-out login homepage; with SSR enabled, CometSSRStateManager
+ * hydrates that markup with whatever root the page initializes, so the feed
+ * root would be hydrated against logged-out HTML (React #418, then a client
+ * render fallback). A signed-in route has no server render of its own here, so
+ * its document says so the way the server does: `enabled: false`, which
+ * ssrInit turns into the "SSR is disabled from server" path (state SSRDisabled,
+ * then ClientRender via createRoot; later payloads are ignored in that state).
+ * Evidence: docs/REVERSE-ENGINEERING.md section 11.
+ */
+function isSSRInit(node) {
+  return Array.isArray(node) && node[0] === 'CometSSRClientInjector' && node[1] === 'ssrInit' && Array.isArray(node[3]) && node[3][0] && typeof node[3][0] === 'object';
+}
+
+function disableAnonymousSSR(node) {
+  node[3][0].enabled = false;
+  return node;
+}
+
 /** The stored endpoint answer's payload ({allResources, hsrp, jsmods}), or null. */
 function parseAnswer(text) {
   try {
@@ -163,4 +184,4 @@ function insertFeedRoot(html, answer, docDefines, toLocal, initTuple) {
   return { html: html.slice(0, at) + parts.join('') + html.slice(at), inserted: tags.length, missing };
 }
 
-module.exports = { isLoginHomeInitialize, toSignedInHome, insertFeedRoot, parseAnswer, FEED_ROOT, LOGGED_OUT_ONLY };
+module.exports = { isLoginHomeInitialize, toSignedInHome, isSSRInit, disableAnonymousSSR, insertFeedRoot, parseAnswer, FEED_ROOT, LOGGED_OUT_ONLY };

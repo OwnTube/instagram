@@ -256,7 +256,7 @@ async function main() {
     const ops = new Map();
     for (const r of reqs) if (friendly(r)) ops.set(friendly(r), { status: r.status, path: new URL(r.url).pathname });
     const unsupported = [...ops].filter(([, o]) => o.status !== 200).map(([n, o]) => `${n}:${o.status} (${o.path})`);
-    const failed = reqs.filter((r) => !friendly(r) && (r.failed || r.status >= 400)).map((r) => { const u = new URL(r.url); const keep = ['modules', 'nb_modules', '__rev'].filter((k) => u.searchParams.has(k)).map((k) => `${k}=${u.searchParams.get(k)}`); return `${r.status || r.failed} ${u.pathname}${keep.length ? `?${keep.join('&')}` : ''}`; });
+    const failed = reqs.filter((r) => !friendly(r) && (r.failed || r.status >= 400)).map((r) => { const u = new URL(r.url); const keep = ['modules', 'nb_modules', '__rev'].filter((k) => u.searchParams.has(k)).map((k) => `${k}=${u.searchParams.get(k)}`); return `${r.failed || r.status} ${u.pathname}${keep.length ? `?${keep.join('&')}` : ''}`; });
     if (session.cspRefused.length) console.log(`INFO  ${session.cspRefused.length} external load(s) refused by the offline CSP (never sent): ${[...new Set(session.cspRefused)].slice(0, 3).join(' ')}`);
     if (unsupported.length) console.log(`INFO  operations without a local answer: ${unsupported.join(', ')}`);
     if (failed.length) console.log(`INFO  failed requests: ${[...new Set(failed)].join(' | ')}`);

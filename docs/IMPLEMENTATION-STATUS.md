@@ -29,7 +29,7 @@ is no Instagram session anywhere.
 
 ## Verified
 
-Automated, `npm test`: all pass (233 at the time of writing).
+Automated, `npm test`: all pass (247 on 2026-10-16, with the P4 fixes).
 
 - Database: clean install, idempotent migrations, persistence across restart,
   hashed passwords/tokens/codes, unique races mapped to 409, FK cascades.
@@ -91,15 +91,20 @@ Real browser, SYNTHETIC page: `npm run verify:browser-auth` 15/15 and
 - After sign-up the redirect lands on `/`, which renders the logged-out page:
   without a signed-in template the genuine client shows anonymous views even
   though the session is valid (current_user answers the new user).
-- Stories tray, suggested users, notifications, DM badges and quick promotions on
-  the signed-in home: their operations still get 501 (listed below).
 
 ## Known gaps
 
 - Without a signed-in template, a logged-in clone user is served the logged-out
   page. Templates need a one-time save of a signed-in page (docs/MANUAL-TESTING.md).
-- Route definitions are answered with empty entries; client navigation may then
-  load route code differently than on instagram.com.
+- Route definitions are answered as unavailable for every URL (error 1357004,
+  in the contract the client expects); the router then loads such URLs as
+  pages instead of soft-navigating. Real definitions name per-route bundles we
+  cannot build without inventing them.
+- The client's Facebook cross-site probes cannot succeed here (Meta hosts are
+  dropped): `ig_xsite_user_info` is no longer named by the page (see checklist);
+  `ig_xsite_user_obid` is hardcoded in `PolarisLoggedInFBUserOBIDProvider` and
+  logs a caught warning. The DGW realtime client logs
+  `unsupported_environment_retry_with_mqtt` (no realtime gateway here).
 - Some bundles are loaded by the client straight from static.cdninstagram.com
   (not through /__ig), so patches and the disk cache do not cover them. None of
   the patched modules is among them today.
@@ -152,14 +157,7 @@ key_id 42 and 7 stall, 219 mounts; fixed editor: all mount). The earlier
 With the fix, the logo sprite is also served locally (the `ixData` URL edit no
 longer breaks boot), so nothing is refused by the CSP any more.
 
-Open: React error #418 (hydration mismatch, recoverable). Not reproduced on
-direct loads (0/4 signed-in and anonymous loads on 2026-10-16, also 0 with the
-debugger pausing on exceptions); seen in flows that sign in through the in-page
-form and then land on `/` (2026-10-16, strict offline: genuine-login check 3 of
-3 runs, one of them with `CLONE_CONTRACTS=0`, so not caused by answer
-completion; feed check every run, 4 of 4). Those flows also log `Route definition unavailable` (error 1357004) from
-the client router, whose route-definition requests are answered with empty
-entries (see Known gaps). Lead, not yet proven: the post-login soft navigation.
+React error #418 and "Route definition unavailable": SOLVED (checklist P4).
 
 ## Signed-in home and feed (genuine client)
 
@@ -190,7 +188,7 @@ items and switches to the empty-feed suggested-users view (seen in the store:
 
 Verified, real browser, genuine client, strict offline
 (`npm run verify:genuine-feed`, which sets `LOADER_OFFLINE=1
-LOADER_PREFER_CACHE=1 SHELL_SIGNED_IN_HOME=1`): 11/11.
+LOADER_PREFER_CACHE=1 SHELL_SIGNED_IN_HOME=1`): 17/17 (2026-10-16, three consecutive runs).
 Local accounts A and B; A follows B (row in `follows`); B uploads a generated
 1080x1080 PNG and publishes it (rows in `media` and `posts`); A signs in through
 the genuine login form (useCDSWebLoginMutation); `/` mounts the genuine feed
@@ -201,25 +199,87 @@ an external host; no outbound connection from the loader process (global fetch
 and http/https instrumented); `/__loader/health` reports offline and cache-only.
 Screenshots: `test-artifacts/screenshots/feed-0*.png` (not committed).
 
-Still reported by that run (not failures of the scenario):
-- 501, no local answer yet: PolarisStoriesV3TrayContainerQuery,
-  PolarisSuggestedUserListQuery, usePolarisNotificationsNavItemQuery,
-  IGDBadgeCountOffMsysQuery, IGDChatTabsJewelOffMsysQuery,
-  IGDOmniPickerNullStateListQuery, QuickPromotionSupportIGSchemaBatchFetchQuery
-  (stories tray and suggestions stay as glimmers);
-- 504 from the offline guard: `/ajax/bootloader-endpoint/` for
-  `PolarisImmersiveFeedPostModal.react` and `IGDChatTabsRootContentOffMsys.react`
-  (not yet stored; one anonymous endpoint request each when not throttled),
-  `www-service-worker.js`, the launcher icon;
-- the logged-out top bar ("Log In", "Sign Up") stays above the signed-in shell;
-  not yet explained;
-- React #418 (above).
+The run also checks the home components against database content (account C,
+B's story, a follow notification, a DM for A): the stories tray shows B, the
+suggestions rail shows C with "Followed by <B>", every home operation is
+answered 200, and after a reload A is still signed in with no logged-out
+controls.
+
+## Status checklist
+
+Each item: status, root cause, change, tests, screenshot (in
+`test-artifacts/screenshots/`, not committed), remaining work. Re-verify with
+`npm test` and the `verify:genuine-*` scripts (strict offline) before trusting.
+
+### P1 Signed-in header showed "Log In" / "Sign Up": DONE (a047fb4)
+- Cause: the feed root's anonymous answer binds `cr:2696` (PolarisDesktopNav)
+  and `cr:4477` (logged-out container); the server binds these per viewer.
+- Change: `src/shell/signedInRoute.js` unbinds them for a signed-in viewer
+  (the answer's own unbound form); REVERSE-ENGINEERING.md section 9.
+- Tests: test/shell.test.js; feed check "no logged-out controls" after reload.
+- Screenshot: m05 (sent), feed-05-signed-in-header-after-reload.png.
+
+### P2 Home operations returning 501: DONE (540890b, extended in 915f560)
+- Cause: no resolvers. Now `src/clone/homeOperations.js`, from the database,
+  in each operation's compiled shape (REVERSE-ENGINEERING.md section 10):
+  stories tray, suggestions (and its refetch), notifications badge, Direct
+  badge/jewel/chat-tab content (threads with newest messages), Direct picker,
+  stories ads pools (empty: no ads locally), quick promotions (none),
+  presence (on), viewer settings (reduce motion off).
+- Tests: test/home-operations.test.js (11). Screenshot: m06, m07 (sent).
+
+### P3 Lazy modules, service worker, launcher icon: DONE (915f560)
+- Cause: the stored page (rev 1050596935) and feed-root answer (rev
+  1050606970) were of different revisions, and the chat-tab/post-modal answers
+  were never stored. `scripts/refresh-client.js` moved documents and answers
+  to one revision (1050627067, backup in `.cache/backup-1050596935/`); lazy
+  answers stored by one anonymous request each: PolarisImmersiveFeedPostModal,
+  IGDChatTabsRootContentOffMsys (nb), IGDChatTabsContentOffMsys,
+  IGDChatTabsThreadListContentOffMsys, PolarisFeedEmptySULWrapper,
+  VultureJSSampleRatesLoader; `npm run cache:warm` stored their CDN files
+  (6887 of 6888; the one missing is a bogus `#clip0_` URL).
+- Launcher icon: the proxy now stores public origin images.
+- Service worker: `/www-service-worker.js` is an explicit 404 (push
+  notifications would need Meta's push service; not served, by decision).
+- Screenshot: m07-lazy-chat-tabs-module-loaded-offline.png (sent).
+
+### P4 React #418 and "Route definition unavailable": DONE
+- #418 cause: the anonymous `/` document carries a Comet SSR render of the
+  logged-out page (`CometSSRClientInjector.ssrInit {enabled:true}` +
+  onPayloadReceived passes); CometSSRStateManager hydrates it with whatever
+  root initializes, i.e. the feed root, so hydration mismatched. Fix: the
+  signed-in route's document says SSR is disabled (`enabled:false`), the
+  client's own "disabled from server" path (client render via createRoot).
+  Found by reading the modules; confirmed with REA (section 11).
+- Route error cause: our bulk-route-definitions answer lacked `sr_payload`,
+  which `fetchAnonymousCometRoute` requires; now `{payloads, sr_payload:{}}`.
+- Facebook cross-site probe (`ig_xsite_user_info`): the page no longer names
+  it (`PolarisSiteData.cross_site_request_url = null`, a state the provider
+  handles by skipping the probe).
+- Tests: test/shell.test.js (2 new), test/upstream-leak.test.js.
+  Feed check 3 consecutive runs 17/17 with no #418 and no route error;
+  signup 11/11, login 8/8 (no uncaught errors).
+- Screenshots: m08-p4-no-hydration-or-route-errors-after-3-runs.png,
+  m09-rea-comet-ssr-call-sites.png (sent).
+
+### P5 Layout: OPEN (next)
+- Observed at 1280x900: the left navigation is the collapsed icon rail and,
+  on the empty feed, the footer overlaps it; the empty-feed card shows a
+  broken image. Not yet investigated.
+
+### P6 Core features
+- Signup, login, session, logout: verified (genuine forms; logout REST).
+- Feed and pagination: feed verified; pagination verified at API level only.
+- Stories tray, suggestions, Direct chat tabs: verified rendering (above).
+- Profiles/profile navigation, follow/unfollow in the UI, post creation in the
+  UI, likes/comments in the UI, search, notifications page, stories viewer,
+  Direct thread view: NOT yet verified in the browser (APIs exist and are
+  tested at API level).
 
 ## Next tasks
 
-1. Answer the remaining signed-in home operations (stories tray, suggested
-   users, notifications, badges) from the database, completed to their
-   compiled contracts like the feed.
-2. Store the two missing bootloader-endpoint answers; explain the logged-out top
-   bar; diagnose React #418 in the post-login flow.
+1. P5 layout at 1280x900 (navigation rail, footer overlap, empty-feed image).
+2. P6 in order: profile navigation, follow/unfollow, post creation, likes and
+   comments, search, notifications, stories viewer, Direct threads; each with a
+   DB check and a screenshot.
 3. Make `SHELL_SIGNED_IN_HOME` the default once the above hold.
