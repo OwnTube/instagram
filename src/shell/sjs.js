@@ -348,6 +348,17 @@ function editJsonText(text, visit, depth = 0) {
 }
 
 /** Apply a visitor to every JSON script block. Returns { html, blocks, edited }. */
+/**
+ * ServerJSPayloadListener processes a `script[data-sjs]` block only when its
+ * `textContent.length` equals the tag's `data-content-len` (a completeness check
+ * for streamed blocks); a block whose length no longer matches is skipped
+ * silently. An edited block must therefore carry its new length, in UTF-16 code
+ * units as `textContent.length` counts them (a JS string's length).
+ */
+function withContentLength(openTag, text) {
+  return openTag.replace(/(\bdata-content-len=)(["']?)\d+\2/i, (m, attr, q) => `${attr}${q}${text.length}${q}`);
+}
+
 function editJsonBlocks(html, visit) {
   let blocks = 0;
   let edited = 0;
@@ -356,7 +367,7 @@ function editJsonBlocks(html, visit) {
     const next = editJsonText(body, visit);
     if (next === body) return whole;
     edited += 1;
-    return `${open}${next}${close}`;
+    return `${withContentLength(open, next)}${next}${close}`;
   });
   return { html: out, blocks, edited };
 }
@@ -382,4 +393,4 @@ function prefetchKey(node) {
   return null;
 }
 
-module.exports = { editJsonBlocks, editJsonText, parseWithSpans, isDefineTuple, prefetchKey, safeStringify, looksLikeJson, REMOVE };
+module.exports = { withContentLength, editJsonBlocks, editJsonText, parseWithSpans, isDefineTuple, prefetchKey, safeStringify, looksLikeJson, REMOVE };

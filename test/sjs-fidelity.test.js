@@ -92,3 +92,18 @@ test('JSON editing preserves bytes', async (t) => {
     assert.strictEqual(editJsonText('{"a":', () => 'x'), '{"a":');
   });
 });
+
+test('an edited block keeps data-content-len equal to its new length', () => {
+  // ServerJSPayloadListener skips a data-sjs block whose textContent.length does
+  // not equal data-content-len, so every edit must update it.
+  const open = '<script type="application/json" nonce="n" data-content-len="9" data-sjs>';
+  const html = `${open}{"a":"x"}</script><script type="application/json" data-content-len="7" data-sjs>{"b":1}</script>`;
+  const { html: out } = editJsonBlocks(html, (n) => {
+    if (n && typeof n === 'object' && 'a' in n) n.a = 'a longer value: é ✓';
+    return undefined;
+  });
+  for (const m of out.matchAll(/data-content-len="(\d+)" data-sjs>(.*?)<\/script>/g)) {
+    assert.strictEqual(Number(m[1]), m[2].length, m[2]);
+  }
+  assert.ok(out.includes('data-content-len="7" data-sjs>{"b":1}'), 'an untouched block keeps its attribute');
+});

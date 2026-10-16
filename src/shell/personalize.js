@@ -22,7 +22,7 @@
  */
 
 const { editJsonBlocks, isDefineTuple, prefetchKey, REMOVE } = require('./sjs');
-const { isLoginHomeInitialize, toSignedInHome } = require('./signedInRoute');
+const { isLoginHomeInitialize, toSignedInHome, insertFeedRoot } = require('./signedInRoute');
 
 const RUNTIME_TAG = '<script src="/__clone/runtime.js"></script>';
 
@@ -64,11 +64,14 @@ function replacePlaceholders(str, viewer, csrfToken, escape = (x) => x) {
   return out;
 }
 
-function personalize(html, { viewer = null, csrfToken, encryption, dropPrefetches = false, identity = false, signedInHome = false, stats } = {}) {
+function personalize(html, { viewer = null, csrfToken, encryption, dropPrefetches = false, identity = false, signedInHome = false, feedRoot = null, toLocal = (u) => u, stats } = {}) {
   if (typeof html !== 'string' || !html) return html;
   const counts = { encryption: 0, csrf: 0, viewer: 0, prefetchesDropped: 0, placeholders: 0, signedInRoute: 0 };
   // The experimental signed-in route needs identity that agrees with it.
-  const homeSwitch = Boolean(signedInHome && viewer);
+  // The signed-in route needs the feed root's code (a stored bootloader answer).
+  const homeSwitch = Boolean(signedInHome && viewer && feedRoot);
+  const docDefines = new Set();
+  let initTuple = null;
   if (homeSwitch) identity = true;
 
   const visit = (node) => {
@@ -81,9 +84,10 @@ function personalize(html, { viewer = null, csrfToken, encryption, dropPrefetche
       return undefined;
     }
     if (homeSwitch && isLoginHomeInitialize(node)) {
-      toSignedInHome(node, viewer);
+      // Moved after the page's own payload (insertFeedRoot).
+      initTuple = toSignedInHome(node, viewer);
       counts.signedInRoute += 1;
-      return undefined;
+      return REMOVE;
     }
     if (dropPrefetches && prefetchKey(node)) {
       counts.prefetchesDropped += 1;
@@ -97,6 +101,7 @@ function personalize(html, { viewer = null, csrfToken, encryption, dropPrefetche
     // rewrite the token anyway: the client sends X-CSRFToken from the
     // `csrftoken` cookie, which this server sets to the clone session's token,
     // so our backend's CSRF check still matches.
+    if (homeSwitch && isDefineTuple(node)) docDefines.add(node[0]);
     if (identity && isDefineTuple(node)) {
       const [name, , exports] = node;
       if (name === 'CurrentUserInitialData') {
@@ -140,6 +145,12 @@ function personalize(html, { viewer = null, csrfToken, encryption, dropPrefetche
   };
 
   let { html: out } = editJsonBlocks(html, visit);
+  if (homeSwitch && counts.signedInRoute) {
+    const done = insertFeedRoot(out, feedRoot, docDefines, toLocal, initTuple);
+    out = done.html;
+    counts.feedRootResources = done.inserted;
+    counts.feedRootUnmapped = done.missing.length;
+  }
   if (out.includes('__CLONE_')) out = replacePlaceholders(out, viewer, csrfToken, escapeHtml);
   out = out.replace(/<head\b[^>]*>/i, (open) => `${open}${RUNTIME_TAG}`);
   if (!out.includes(RUNTIME_TAG)) out = `${RUNTIME_TAG}${out}`;

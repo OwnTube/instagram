@@ -154,24 +154,41 @@ test('the registered sign-up patches each name one module and say why', () => {
   for (const p of PATCHES) assert.ok(p.module && p.find && p.why, p.id);
 });
 
-test('experimental signed-in home route switches the whole route, only for a viewer', () => {
+test('experimental signed-in home route switches the whole route and applies the feed root answer', () => {
   const init = ['CometPlatformRootClient', 'initialize', [], [{
     expectedPreloaders: [{ actorID: '0', preloaderID: 'adp_X', queryName: 'CAAFetaIGLoginHomepageQuery' }],
     additional_roots: [{ __dr: 'CAAIGLoginHomepageRoot.react' }],
     initialRouteInfo: { route: { actorID: '0', routePath: '/', url: '/', rootView: { resource: { __dr: 'CAAIGLoginHomepageRoot.react' } } } },
     ssrEnabled: true,
   }]];
-  const html = page([{ require: [init] }, { define: [['CurrentUserInitialData', [], { USER_ID: '0', ACCOUNT_ID: '0', NAME: '', SHORT_NAME: null }, 1], ['PolarisViewer', [], { data: null, id: null }, 2]] }]);
+  const html = page([{ define: [['CurrentUserInitialData', [], { USER_ID: '0', ACCOUNT_ID: '0', NAME: '', SHORT_NAME: null }, 1], ['PolarisViewer', [], { data: null, id: null }, 2]] }, { require: [init] }]);
+  const answer = {
+    allResources: ['h1', 'h2', 'gone'],
+    hsrp: { hsdp: { gkxData: { 1: { result: true } } }, hblp: { rsrcMap: { h1: { type: 'js', src: 'https://static.cdninstagram.com/rsrc.php/a.js' }, h2: { type: 'css', src: 'https://static.cdninstagram.com/rsrc.php/b.css' } }, compMap: {} } },
+    jsmods: { define: [['PolarisViewer', [], { data: null }, 9], ['cr:1', [], {}, -1]], require: [['PolarisFeedRoot.react']] },
+  };
+  const toLocal = (u) => u.replace('https://static.cdninstagram.com/', '/__ig/static.cdninstagram.com/');
   const off = personalize(html, { viewer: viewer(), encryption: OURS });
   assert.ok(off.includes('CAAIGLoginHomepageRoot.react') && /"USER_ID":"0"/.test(off), 'off by default');
-  const anon = personalize(html, { viewer: null, encryption: OURS, signedInHome: true });
-  assert.ok(anon.includes('"actorID":"0"'), 'no viewer, no switch');
-  const on = personalize(html, { viewer: viewer(), encryption: OURS, signedInHome: true });
-  const args = JSON.parse(on.match(/<script type="application\/json" data-sjs>(.*?)<\/script>/)[1]).require[0][3][0];
+  assert.ok(personalize(html, { viewer: null, encryption: OURS, signedInHome: true, feedRoot: answer }).includes('"actorID":"0"'), 'no viewer, no switch');
+  assert.ok(personalize(html, { viewer: viewer(), encryption: OURS, signedInHome: true }).includes('"actorID":"0"'), 'no stored answer, no switch');
+  const stats = {};
+  const on = personalize(html, { viewer: viewer(), encryption: OURS, signedInHome: true, feedRoot: answer, toLocal, stats });
+  const blocks = [...on.matchAll(/<script type="application\/json"[^>]*data-sjs>(.*?)<\/script>/g)].map((m) => JSON.parse(m[1]));
+  const args = blocks.find((b) => b.require && b.require[0] && b.require[0][0] === 'CometPlatformRootClient').require[0][3][0];
   assert.strictEqual(args.initialRouteInfo.route.actorID, '111');
   assert.strictEqual(args.initialRouteInfo.route.rootView.resource.__dr, 'PolarisFeedRoot.react');
   assert.deepStrictEqual(args.expectedPreloaders, []);
   assert.strictEqual(args.ssrEnabled, false);
   assert.match(on, /"USER_ID":"111"/);
-  assert.match(on, /"PolarisViewer",\[\],\{"data":\{"id":"111"/);
+  // The answer's resources, its support data and jsmods precede the initialize block.
+  const initAt = on.indexOf('"CometPlatformRootClient","initialize"');
+  assert.ok(on.indexOf('<script src="/__ig/static.cdninstagram.com/rsrc.php/a.js" data-bootloader-hash="h1"') < initAt);
+  assert.ok(on.indexOf('<link rel="stylesheet" href="/__ig/static.cdninstagram.com/rsrc.php/b.css" data-bootloader-hash="h2"') < initAt);
+  const support = blocks.find((b) => b.require && b.require.some((r) => r[0] === 'Bootloader' && r[1] === 'handlePayload'));
+  assert.ok(support, 'support block present');
+  assert.deepStrictEqual(support.require[0], ['HasteSupportData', 'handle', null, [answer.hsrp.hsdp]]);
+  assert.deepStrictEqual(support.define.map((d) => d[0]), ['cr:1'], "the page's own PolarisViewer wins over the answer's");
+  assert.strictEqual(stats.feedRootResources, 2);
+  assert.strictEqual(stats.feedRootUnmapped, 1, 'a hash with no resource-map entry is reported, not invented');
 });

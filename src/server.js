@@ -9,6 +9,7 @@ const backendApp = require('./backend');
 const backendConfig = require('./backend/config');
 const { createClone, classify } = require('./clone');
 const { personalize } = require('./shell/personalize');
+const { parseAnswer } = require('./shell/signedInRoute');
 const { routeKind, createTemplateStore } = require('./shell/templates');
 const { createPatcher } = require('./shell/bundlePatches');
 
@@ -26,6 +27,7 @@ const {
   rewriteCss,
   resolveProxyTarget,
   ALLOWED_HOSTS,
+  mapUrl,
 } = require('./rewrite');
 
 const app = express();
@@ -314,6 +316,20 @@ function sendAsset(res, entry, target) {
 
 /* ------------------------------------------------------------------ */
 /* Bootloader endpoint and web manifest                                */
+/* ------------------------------------------------------------------ */
+
+/**
+ * The stored bootloader answer for the signed-in feed root, for the client
+ * revision of `html` (ClientConsistency rev), or null when it is not stored.
+ */
+async function feedRootAnswer(html) {
+  const rev = (/"consistency":\{"rev":(\d+)\}/.exec(html) || [])[1] || '';
+  const key = `boot:${new URL(config.upstream).origin}:PolarisFeedRoot.react||${rev}`;
+  const entry = cache.get(key) || (bootloaderStore ? await bootloaderStore.read(key) : undefined);
+  return entry ? parseAnswer(entry.body.toString('utf8')) : null;
+}
+
+/* ------------------------------------------------------------------ */
 /* ------------------------------------------------------------------ */
 
 // The client's Bootloader asks /ajax/bootloader-endpoint/?modules=... for the
@@ -640,11 +656,12 @@ function canonicalDocPath(req) {
  * this browser's CSRF token, the clone viewer). The result is specific to one
  * browser, so it is never cacheable by anyone else.
  */
-function sendHtml(req, res, status, html, { fromTemplate = false } = {}) {
+async function sendHtml(req, res, status, html, { fromTemplate = false } = {}) {
   const ctx = cloneInstance ? cloneInstance.documentContext(req, res) : { viewer: null, csrfToken: null, encryption: null };
   const stats = {};
-  const signedInHome = !fromTemplate && process.env.SHELL_SIGNED_IN_HOME === '1' && routeKind(req.path) === 'home';
-  const out = personalize(html, { ...ctx, identity: fromTemplate, signedInHome, dropPrefetches: fromTemplate || forceDropPrefetches, stats });
+  const signedInHome = !fromTemplate && process.env.SHELL_SIGNED_IN_HOME === '1' && routeKind(req.path) === 'home' && Boolean(ctx.viewer);
+  const feedRoot = signedInHome ? await feedRootAnswer(html) : null;
+  const out = personalize(html, { ...ctx, identity: fromTemplate, signedInHome, feedRoot, toLocal: mapUrl, dropPrefetches: fromTemplate || forceDropPrefetches, stats });
   if (cloneInstance) {
     const mentionsKey = /public_?key/i.test(html);
     cloneInstance.recordDocument({ path: req.path, status, fromTemplate, signedIn: Boolean(ctx.viewer), mentionsKey, ...stats });

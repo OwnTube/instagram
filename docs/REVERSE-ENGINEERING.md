@@ -87,3 +87,52 @@ account; nothing was invented.
 `CSSLoader` / `CSSPoller`: stylesheets present in the document are watched by
 polling `link.sheet.cssRules` every 20 ms until rules are readable (same-origin
 sheets from `/__ig` are readable), with a `CSSLoaderConfig.timeout` deadline.
+
+## 6. Payload processing: `data-content-len` (root cause of the "tamper check")
+
+`ServerJSPayloadListener.process()` (module of the same name) walks
+`script[data-sjs]:not([data-processed])` and handles a block only if
+`textContent.length === data-content-len`; otherwise it leaves the block
+unprocessed, silently (a completeness check for streamed HTML). Each block is
+followed by its own `requireLazy(["ServerJSPayloadListener"], m => m.process())`
+trigger. A nonce mismatch only warns (`Env.sjsNonceEnforce: false`).
+
+Consequences, all previously misread:
+
+- Editing `CurrentUserInitialData.USER_ID`, the csrf token or the LSD token
+  changed their block's length, so the block (with all its defines) was never
+  processed and the client never mounted. There is no tamper check.
+- The encryption-key swap appeared "safe" only because our key has the same
+  length as Instagram's.
+- Rewriting the logo sprite URL in `ixData` broke boot for the same reason.
+
+`src/shell/sjs.js` (`withContentLength`) now rewrites `data-content-len` for
+every edited block; `test/sjs-fidelity.test.js` covers it.
+
+## 7. The signed-in home route, built from verified parts
+
+With correct block lengths, the signed-in route works offline from the
+anonymous `/` document plus the stored bootloader answer
+(`src/shell/signedInRoute.js`, `SHELL_SIGNED_IN_HOME=1`):
+
+1. the `initialize` tuple is switched to `PolarisFeedRoot.entrypoint` under the
+   viewer's actor (no expected preloaders, `ssrEnabled: false`) and moved after
+   the page's own payload blocks, because the feed entry point evaluates
+   support data at initialisation (`getPolarisFeedInitialPageSize` reads gkx
+   `8953`, which the anonymous page delivers in block 29 of 39, after its own
+   initialize in block 11);
+2. before it: the answer's `allResources` as tags with `data-bootloader-hash`,
+   then one block applying the answer as `HasteResponse.handle` does
+   (`HasteSupportData.handle`, `Bootloader.handlePayload`, `jsmods`), then
+   `RequireDeferredReference.unblock([root modules], "sd"|"css")`, the same
+   "delivered" signals the anonymous page sends for its own root
+   (`RequireDeferredFactoryEvent` = `SUPPORT_DATA` "sd", `CSS` "css");
+3. a copy of the page's own process trigger.
+
+Observed (offline Chromium, synthetic local user): the genuine signed-in shell
+mounts (left navigation, the signed-in "Turn on Notifications" prompt), requests
+carry `__user=<local pk>`, and the client issues `PolarisFeedTimelineRootV2Query`
+(answered locally), `PolarisStoriesV3TrayContainerQuery`,
+`PolarisSuggestedUserListQuery`, `usePolarisNotificationsNavItemQuery`,
+`IGDBadgeCountOffMsysQuery`, `QuickPromotionSupportIGSchemaBatchFetchQuery`, ...
+The remaining operations are the next work list.
