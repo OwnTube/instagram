@@ -254,3 +254,29 @@ Facebook cross-site probe: `PolarisLoggedInFBUserProvider` fetches
 `PolarisSiteData.cross_site_request_url` with facebook.com credentials and skips
 the probe when that is null. This origin has no Facebook session, so the shell
 sets it to null.
+
+## 12. The signed-in profile route
+
+Built like the home route (section 7) from the real route documents' shape:
+`{allResources:[<X>.entrypoint, <Root>.react], resource:<Root>.react, props,
+entryPoint:{__dr:<X>.entrypoint}}`. Without `entryPoint` the root reads
+`props.contentQuery` of undefined. For a profile the entry point is
+`PolarisProfilePostsTabRoot.entrypoint` (made by `buildPolarisProfileRoute`)
+and the root `PolarisProfileRoot.react`; both answers are inserted (the
+insertion now takes several answers, dedupes their hashes and defines, and
+unblocks both for `sd` and `css`). Props: `id`, `userID`, `userFullName`, the
+`enable_*` flags false, and `polaris_preload:{}` (absent, the root throws
+"gated"). Params: the `XPolarisProfileControllerRouteBuilder` defaults plus
+`username`; `routePath` is the builder pattern
+`/{username}/{?tab}/{?view_type}/{?igshid}/`; trace policy
+`polaris.profilePage`. `canonicalRouteName` is only read for logging, so it is
+null rather than invented.
+
+`cr:5380` is bound to a local-service preload hook (`preloadEnabledOnInit` of
+an undefined service here); unbound, the client falls back to
+`useEmptyFunction`, so the shell unbinds it for signed-in viewers like the
+logged-out-only bindings of section 9.
+
+The profile header reads `viewer.user` from PolarisProfilePageContentQuery and
+the posts tab reads `xdt_viewer.user.id` from PolarisProfilePostsQuery; both
+are null-dereferenced if absent, so the answers carry them.

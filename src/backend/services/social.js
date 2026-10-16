@@ -465,6 +465,12 @@ const stories = {
     return rows.map((r) => this.toPublic(r, viewerId, db));
   },
 
+  /** The author's own stories, active or expired, newest first (the story archive). */
+  listArchive(db, authorId) {
+    const rows = db.prepare(`${STORY_SELECT} WHERE s.author_id = ? ORDER BY s.created_at DESC`).all(authorId);
+    return rows.map((r) => this.toPublic(r, authorId, db));
+  },
+
   /** Authors with active stories the viewer may see: the viewer and accepted followees. */
   tray(db, viewerId) {
     const rows = db

@@ -9,7 +9,7 @@ const backendApp = require('./backend');
 const backendConfig = require('./backend/config');
 const { createClone, classify } = require('./clone');
 const { personalize } = require('./shell/personalize');
-const { parseAnswer } = require('./shell/signedInRoute');
+const { parseAnswer, homeRoute, profileRoute } = require('./shell/signedInRoute');
 const { routeKind, createTemplateStore } = require('./shell/templates');
 const { createPatcher } = require('./shell/bundlePatches');
 
@@ -319,14 +319,21 @@ function sendAsset(res, entry, target) {
 /* ------------------------------------------------------------------ */
 
 /**
- * The stored bootloader answer for the signed-in feed root, for the client
- * revision of `html` (ClientConsistency rev), or null when it is not stored.
+ * The stored bootloader answers for a signed-in route (by requested module
+ * name), for the client revision of `html` (ClientConsistency rev), or null
+ * when any of them is not stored.
  */
-async function feedRootAnswer(html) {
+async function routeAnswers(html, modules) {
   const rev = (/"consistency":\{"rev":(\d+)\}/.exec(html) || [])[1] || '';
-  const key = `boot:${new URL(config.upstream).origin}:PolarisFeedRoot.react||${rev}`;
-  const entry = cache.get(key) || (bootloaderStore ? await bootloaderStore.read(key) : undefined);
-  return entry ? parseAnswer(entry.body.toString('utf8')) : null;
+  const answers = [];
+  for (const name of modules) {
+    const key = `boot:${new URL(config.upstream).origin}:${name}||${rev}`;
+    const entry = cache.get(key) || (bootloaderStore ? await bootloaderStore.read(key) : undefined);
+    const answer = entry ? parseAnswer(entry.body.toString('utf8')) : null;
+    if (!answer) return null;
+    answers.push(answer);
+  }
+  return answers;
 }
 
 /* ------------------------------------------------------------------ */
@@ -666,6 +673,21 @@ function canonicalDocPath(req) {
 }
 
 /**
+ * The signed-in route for a document request (src/shell/signedInRoute.js):
+ * the home feed, or the posts tab of an existing local account's profile.
+ * Anything else keeps the page's own route.
+ */
+function signedInRouteFor(req) {
+  const kind = routeKind(req.path);
+  if (kind === 'home') return homeRoute();
+  if (kind === 'profile' && cloneInstance) {
+    const user = cloneInstance.userByUsername(req.path.split('/')[1]);
+    return user ? profileRoute(user) : null;
+  }
+  return null;
+}
+
+/**
  * Send an HTML document after per-request personalisation (our encryption key,
  * this browser's CSRF token, the clone viewer). The result is specific to one
  * browser, so it is never cacheable by anyone else.
@@ -673,9 +695,10 @@ function canonicalDocPath(req) {
 async function sendHtml(req, res, status, html, { fromTemplate = false } = {}) {
   const ctx = cloneInstance ? cloneInstance.documentContext(req, res) : { viewer: null, csrfToken: null, encryption: null };
   const stats = {};
-  const signedInHome = !fromTemplate && process.env.SHELL_SIGNED_IN_HOME === '1' && routeKind(req.path) === 'home' && Boolean(ctx.viewer);
-  const feedRoot = signedInHome ? await feedRootAnswer(html) : null;
-  const out = personalize(html, { ...ctx, identity: fromTemplate, signedInHome, feedRoot, toLocal: mapUrl, dropPrefetches: fromTemplate || forceDropPrefetches, stats });
+  const route = !fromTemplate && process.env.SHELL_SIGNED_IN_HOME === '1' && ctx.viewer ? signedInRouteFor(req) : null;
+  const signedInHome = Boolean(route);
+  const feedRoot = route ? await routeAnswers(html, route.answers) : null;
+  const out = personalize(html, { ...ctx, identity: fromTemplate, signedInHome, feedRoot, route, routeUrl: req.path, toLocal: mapUrl, dropPrefetches: fromTemplate || forceDropPrefetches, stats });
   if (cloneInstance) {
     const mentionsKey = /public_?key/i.test(html);
     cloneInstance.recordDocument({ path: req.path, status, fromTemplate, signedIn: Boolean(ctx.viewer), mentionsKey, ...stats });

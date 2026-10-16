@@ -282,6 +282,15 @@ test('the original client flows, answered by our backend', async (t) => {
     const viewers = await alice.get(`/api/v1/media/${story.body.media.pk}/list_reel_media_viewer/`);
     assert.strictEqual(viewers.body.users[0].username, 'bob');
     assert.strictEqual((await bob.get(`/api/v1/media/${story.body.media.pk}/list_reel_media_viewer/`)).status, 403);
+    // The author's story archive, by day; nobody else's stories are in it.
+    const archive = await alice.get('/api/v1/archive/reel/day_shells/?timezone_offset=0');
+    assert.strictEqual(archive.status, 200);
+    assert.strictEqual(archive.body.items.length, 1);
+    assert.match(archive.body.items[0].id, /^archiveDay:\d+$/);
+    assert.strictEqual(Number(archive.body.items[0].id.split(':')[1]) % 86400, 0, 'a UTC day start');
+    assert.strictEqual(archive.body.items[0].reel_type, 'archive_day_reel');
+    assert.deepStrictEqual(archive.body.items[0].items.map((i) => String(i.pk)), [String(story.body.media.pk)]);
+    assert.deepStrictEqual((await bob.get('/api/v1/archive/reel/day_shells/')).body.items, []);
   });
 
   await t.test('search and activity reflect real records', async () => {

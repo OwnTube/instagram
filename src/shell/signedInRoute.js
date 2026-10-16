@@ -46,17 +46,106 @@ const FEED_ROOT = 'PolarisFeedRoot';
  */
 const LOGGED_OUT_ONLY = new Set(['cr:2696', 'cr:4477']);
 
+/**
+ * Bindings for services this server does not have, left unbound so the client
+ * takes its own fallback:
+ *  - `cr:5380` -> usePolarisSetupProfileGatingREST (signed-in profile gating):
+ *    it fetches the gating info named by the server's
+ *    `polaris_preload.gated` preloader spec (age/region restrictions). No
+ *    content is gated here and that endpoint is not known, so the slot is
+ *    unbound: usePolarisSetupProfileGating falls back to useEmptyFunction
+ *    (`n("cr:5380") ?? useEmptyFunction`), i.e. "not gated".
+ */
+const NO_LOCAL_SERVICE = new Set(['cr:5380']);
+
 function forSignedInViewer(define) {
-  return LOGGED_OUT_ONLY.has(define[0]) ? [define[0], [], { __rc: [null, null] }, define[3]] : define;
+  return LOGGED_OUT_ONLY.has(define[0]) || NO_LOCAL_SERVICE.has(define[0]) ? [define[0], [], { __rc: [null, null] }, define[3]] : define;
 }
 const FEED_PARAMS = { create_live: false, create_long_video: false, create_post: false, from_share: false, yr: false, scs: false, flo: false, variant: null };
+// XPolarisProfileControllerRouteBuilder: "/{username}/{?tab}/{?view_type}/{?igshid}/" and its defaults.
+const PROFILE_PARAMS = {
+  show_shared_access_dialog: false,
+  show_meta_verified_dialog: false,
+  show_pro_dash_dialog: false,
+  pro_dash_tool: '',
+  show_ad_partnerships_dialog: false,
+  enable_persistent_cta: false,
+  tab: null,
+  view_type: null,
+  igshid: null,
+};
 
-function feedView() {
+/**
+ * Signed-in routes the shell can build. Each names its entry point and the
+ * entry point's root component, the stored bootloader answers that provide
+ * their code (`answers`, module names as requested), the route
+ * props its entry point and root read, the pattern and params of its route builder, its
+ * trace policy and page id (both read by the client: `polaris.feedPage`,
+ * `polaris.profilePage`, page ids `feedPage`, `profilePage`).
+ * `canonicalRouteName` is only used for logging (null-checked everywhere); it
+ * is not in any stored material, so it is null rather than invented.
+ */
+function homeRoute() {
   return {
-    allResources: [{ __dr: `${FEED_ROOT}.entrypoint` }, { __dr: `${FEED_ROOT}.react` }],
-    resource: { __dr: `${FEED_ROOT}.react` },
+    entryPoint: FEED_ROOT,
+    root: FEED_ROOT,
+    answers: [`${FEED_ROOT}.react`],
     props: { is_desktop: true, enable_desktop_nux_flow: false, enable_mobile_suggested_user_cta: false, page_logging: { name: 'feedPage', params: { page_id: 'feedPage' } } },
-    entryPoint: { __dr: `${FEED_ROOT}.entrypoint` },
+    params: { ...FEED_PARAMS },
+    routePath: '/',
+    tracePolicy: 'polaris.feedPage',
+    pageID: 'feedPage',
+  };
+}
+
+/**
+ * A local user's profile (posts tab). Props read by buildPolarisProfileRoute
+ * (`id`, the optional query switches), PolarisProfilePostsTabRoot.entrypoint
+ * (`id`, `number_of_preloaded_posts`, default 12) and
+ * PolarisProfilePostsTabRoot.react (`userID`, `userFullName`),
+ * PolarisProfileRoot.react (`polaris_preload`, below); the switches
+ * for queries we have no content for (highlights, suggested users, SEO pool)
+ * are off.
+ */
+function profileRoute(user) {
+  const pk = String(user.pk);
+  return {
+    // buildPolarisProfileRoute: the posts tab's entry point has the profile
+    // root as its component and nests the tab (`contentEntryPoint`).
+    entryPoint: 'PolarisProfilePostsTabRoot',
+    root: 'PolarisProfileRoot',
+    answers: ['PolarisProfilePostsTabRoot.entrypoint', 'PolarisProfileRoot.react'],
+    props: {
+      id: pk,
+      userID: pk,
+      userFullName: user.display_name || null,
+      enable_highlights_query: false,
+      enable_suggested_users_query: false,
+      enable_seo_crawling_pool: false,
+      // PolarisPreloadConstants.POLARIS_PRELOAD_PROP: the server's preloader
+      // specs by name (bootstrapPolarisPreloader issues those enabled on
+      // navigation), including `gated` for the gating hook (unbound here, see
+      // NO_LOCAL_SERVICE). No server preloads: the entry point's own queries
+      // load the profile.
+      polaris_preload: {},
+    },
+    params: { ...PROFILE_PARAMS, username: user.username },
+    routePath: '/{username}/{?tab}/{?view_type}/{?igshid}/',
+    tracePolicy: 'polaris.profilePage',
+    pageID: 'profilePage',
+  };
+}
+
+/**
+ * A route view in the shape the page server sends (the anonymous documents'
+ * own routes): its entry point, the entry point's root component, the props.
+ */
+function view(spec) {
+  return {
+    allResources: [{ __dr: `${spec.entryPoint}.entrypoint` }, { __dr: `${spec.root}.react` }],
+    resource: { __dr: `${spec.root}.react` },
+    props: spec.props,
+    entryPoint: { __dr: `${spec.entryPoint}.entrypoint` },
   };
 }
 
@@ -68,23 +157,27 @@ function isLoginHomeInitialize(node) {
   return Boolean(route && route.routePath === '/' && route.actorID === '0');
 }
 
-/** Rewrite the initialize arguments in place for `viewer`. */
-function toSignedInHome(node, viewer) {
+/** Rewrite the initialize arguments in place: route `spec` for `viewer`, at `url`. */
+function toSignedInRoute(node, viewer, spec = homeRoute(), url = '/') {
   const args = node[3][0];
   const route = args.initialRouteInfo.route;
   route.actorID = String(viewer.pk);
-  route.rootView = feedView();
-  route.hostableView = feedView();
-  route.tracePolicy = 'polaris.feedPage';
-  route.canonicalRouteName = 'comet.igweb.PolarisFeedRoute';
-  route.polarisRouteConfig = { pageID: 'feedPage' };
-  route.params = { ...FEED_PARAMS };
+  route.rootView = view(spec);
+  route.hostableView = view(spec);
+  route.tracePolicy = spec.tracePolicy;
+  route.canonicalRouteName = null;
+  route.polarisRouteConfig = { pageID: spec.pageID };
+  route.params = spec.params;
   route.stripParams = [];
+  route.routePath = spec.routePath;
+  route.url = url;
   args.expectedPreloaders = [];
   args.additional_roots = [];
   args.ssrEnabled = false;
   return node;
 }
+
+const toSignedInHome = (node, viewer) => toSignedInRoute(node, viewer, homeRoute());
 
 /**
  * The anonymous document's Comet SSR init (`CometSSRClientInjector.ssrInit`).
@@ -136,32 +229,46 @@ function attr(value) {
  * Returns { html, inserted, missing }; `missing` lists resource hashes the
  * answer names but does not map (they cannot be served and are reported).
  */
-function insertFeedRoot(html, answer, docDefines, toLocal, initTuple) {
-  const hblp = answer.hsrp.hblp || {};
-  const rsrcMap = hblp.rsrcMap || {};
+function insertFeedRoot(html, answers, docDefines, toLocal, initTuple, root = FEED_ROOT, entryPoint = root) {
+  // One answer, or several (a route whose entry point and root component are
+  // answered separately); each is applied the way HasteResponse.handle does.
+  const list = Array.isArray(answers) ? answers : [answers];
   const tags = [];
   const missing = [];
-  for (const hash of answer.allResources) {
-    const e = rsrcMap[hash];
-    if (!e || !e.src) {
-      missing.push(hash);
-      continue;
-    }
-    const src = attr(toLocal(e.src));
-    if (e.type === 'css') tags.push(`<link rel="stylesheet" href="${src}" data-bootloader-hash="${attr(hash)}" crossorigin="anonymous" />`);
-    else if (e.type === 'js') tags.push(`<script src="${src}" data-bootloader-hash="${attr(hash)}" crossorigin="anonymous"></script>`);
-  }
-  const jsmods = answer.jsmods || {};
-  const define = (jsmods.define || []).filter((d) => Array.isArray(d) && !docDefines.has(d[0])).map(forSignedInViewer);
+  const seenHashes = new Set();
+  const seenDefines = new Set(docDefines);
+  const define = [];
   const require = [];
-  if (answer.hsrp.hsdp) require.push(['HasteSupportData', 'handle', null, [answer.hsrp.hsdp]]);
-  require.push(['Bootloader', 'handlePayload', null, [hblp]]);
-  require.push(...(jsmods.require || []));
+  for (const answer of list) {
+    const hblp = answer.hsrp.hblp || {};
+    const rsrcMap = hblp.rsrcMap || {};
+    for (const hash of answer.allResources) {
+      if (seenHashes.has(hash)) continue;
+      seenHashes.add(hash);
+      const e = rsrcMap[hash];
+      if (!e || !e.src) {
+        missing.push(hash);
+        continue;
+      }
+      const src = attr(toLocal(e.src));
+      if (e.type === 'css') tags.push(`<link rel="stylesheet" href="${src}" data-bootloader-hash="${attr(hash)}" crossorigin="anonymous" />`);
+      else if (e.type === 'js') tags.push(`<script src="${src}" data-bootloader-hash="${attr(hash)}" crossorigin="anonymous"></script>`);
+    }
+    const jsmods = answer.jsmods || {};
+    for (const d of jsmods.define || []) {
+      if (!Array.isArray(d) || seenDefines.has(d[0])) continue;
+      seenDefines.add(d[0]);
+      define.push(forSignedInViewer(d));
+    }
+    if (answer.hsrp.hsdp) require.push(['HasteSupportData', 'handle', null, [answer.hsrp.hsdp]]);
+    require.push(['Bootloader', 'handlePayload', null, [hblp]]);
+    require.push(...(jsmods.require || []));
+  }
   // The page server's "delivered" signals for its route root, as the anonymous
   // document sends them for CAAIGLoginHomepageRoot: support data ("sd") and
   // styles ("css") for the root are in this document (above), so references to
   // the root may resolve (RequireDeferredReference.unblock defines rd:<module>).
-  const roots = [`${FEED_ROOT}.react`, `${FEED_ROOT}.entrypoint`];
+  const roots = [`${root}.react`, `${entryPoint}.entrypoint`];
   require.push(['RequireDeferredReference', 'unblock', [], [roots, 'sd']]);
   require.push(['RequireDeferredReference', 'unblock', [], [roots, 'css']]);
 
@@ -184,4 +291,4 @@ function insertFeedRoot(html, answer, docDefines, toLocal, initTuple) {
   return { html: html.slice(0, at) + parts.join('') + html.slice(at), inserted: tags.length, missing };
 }
 
-module.exports = { isLoginHomeInitialize, toSignedInHome, isSSRInit, disableAnonymousSSR, insertFeedRoot, parseAnswer, FEED_ROOT, LOGGED_OUT_ONLY };
+module.exports = { isLoginHomeInitialize, toSignedInHome, toSignedInRoute, homeRoute, profileRoute, isSSRInit, disableAnonymousSSR, insertFeedRoot, parseAnswer, FEED_ROOT, LOGGED_OUT_ONLY, NO_LOCAL_SERVICE };

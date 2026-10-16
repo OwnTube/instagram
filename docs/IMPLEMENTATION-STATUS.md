@@ -282,14 +282,27 @@ Each item: status, root cause, change, tests, screenshot (in
 - Signup, login, session, logout: verified (genuine forms; logout REST).
 - Feed and pagination: feed verified; pagination verified at API level only.
 - Stories tray, suggestions, Direct chat tabs: verified rendering (above).
-- Profiles/profile navigation, follow/unfollow in the UI, post creation in the
-  UI, likes/comments in the UI, search, notifications page, stories viewer,
-  Direct thread view: NOT yet verified in the browser (APIs exist and are
-  tested at API level).
+- Profiles and follow/unfollow: DONE. `npm run verify:genuine-profile` 9/9,
+  strict offline: `/<username>/` is served as the genuine signed-in profile
+  route (`profileRoute` in src/shell/signedInRoute.js); header counts and the
+  Following button come from the database; the grid photo is served from
+  /__media; unfollow through the genuine Following menu and follow through the
+  genuine Follow button are each checked in the `follows` table; the own
+  profile shows Edit profile. Screenshots: m12-profile-01/03/05. Answers added:
+  PolarisSchoolPartnerProfileBadgeQuery, usePolarisFollowMutation,
+  usePolarisUnfollowMutation, viewer fields in the profile queries,
+  /api/v1/archive/reel/day_shells/. Tests: test/profile-operations.test.js.
+  Observed, not fixed: the follower count in the header does not change after
+  unfollow until reload (the mutation contract returns friendship_status only).
+  Note: the profile entry point and three other answers were acquired at
+  revision 1050642531, the rest of the store is 1050627067 (no refresh seen;
+  a full refresh is pending while Instagram throttles document fetches).
+- Post creation in the UI, likes/comments in the UI, search, notifications
+  page, stories viewer, Direct thread view: NOT yet verified in the browser
+  (APIs exist and are tested at API level).
 
 ## Next tasks
 
-1. P6 in order: profile navigation, follow/unfollow, post creation, likes and
-   comments, search, notifications, stories viewer, Direct threads; each with a
+1. P6 in order: post creation, likes and comments, search, notifications, stories viewer, Direct threads; each with a
    DB check and a screenshot.
 2. Make `SHELL_SIGNED_IN_HOME` the default once the above hold.

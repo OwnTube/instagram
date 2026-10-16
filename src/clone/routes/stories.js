@@ -17,6 +17,31 @@ function register(router, ctx) {
     return items.length ? present.reel(db, authorRow, items, viewerId) : null;
   }
 
+  /*
+   * The viewer's story archive by day (XPolarisIGXAPIStoriesDayShellControllerRouteBuilder;
+   * read by PolarisStoryAPIActions as {items, max_id, more_available}). One reel
+   * per local calendar day (`timezone_offset`, seconds east of UTC), id
+   * `archiveDay:<day start, unix seconds>`, reel_type `archive_day_reel` (both
+   * as the client's own ReelType / PolarisStoryActions use them).
+   */
+  router.get('/api/v1/archive/reel/day_shells/', requireViewer, (req, res) => {
+    const offset = Number.isFinite(Number(req.query.timezone_offset)) ? Number(req.query.timezone_offset) : 0;
+    const days = new Map();
+    for (const story of stories.listArchive(db, req.viewer.id)) {
+      const local = Math.floor(Date.parse(story.createdAt) / 1000) + offset;
+      const day = local - (((local % 86400) + 86400) % 86400) - offset;
+      if (!days.has(day)) days.set(day, []);
+      days.get(day).push(story);
+    }
+    const author = users.getById(db, req.viewer.id);
+    const items = [...days].map(([day, list]) => ({
+      ...present.reel(db, author, list.slice().reverse(), req.viewer.id),
+      id: `archiveDay:${day}`,
+      reel_type: 'archive_day_reel',
+    }));
+    return igOk(res, { items, max_id: '', more_available: false });
+  });
+
   router.get('/api/v1/feed/reels_tray/', requireViewer, (req, res) => {
     const tray = stories
       .tray(db, req.viewer.id)

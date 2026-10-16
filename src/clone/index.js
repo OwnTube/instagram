@@ -382,6 +382,12 @@ function createClone({ db, dataDir = '.data', logger = console, env = process.en
     return user && user.status === 'active' ? { user, session: resolved.session } : null;
   }
 
+  /** An active local account by username (a profile page's subject), or null. */
+  function userByUsername(username) {
+    const user = users.getByUsername(db, String(username));
+    return user && user.status === 'active' ? user : null;
+  }
+
   /** What a page needs to be personalised for this browser. */
   function documentContext(req, res) {
     const found = viewerFor(req);
@@ -392,7 +398,7 @@ function createClone({ db, dataDir = '.data', logger = console, env = process.en
     };
   }
 
-  return { router, codec, media, graphql, config, classify, viewerFor, documentContext, recordDocument };
+  return { router, codec, media, graphql, config, classify, viewerFor, userByUsername, documentContext, recordDocument };
 }
 
 module.exports = { createClone, classify };

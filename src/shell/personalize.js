@@ -22,7 +22,7 @@
  */
 
 const { editJsonBlocks, isDefineTuple, prefetchKey, REMOVE } = require('./sjs');
-const { isLoginHomeInitialize, toSignedInHome, isSSRInit, disableAnonymousSSR, insertFeedRoot } = require('./signedInRoute');
+const { isLoginHomeInitialize, toSignedInRoute, homeRoute, isSSRInit, disableAnonymousSSR, insertFeedRoot } = require('./signedInRoute');
 
 const RUNTIME_TAG = '<script src="/__clone/runtime.js"></script>';
 const STATIC_CDN = /^https:\/\/static\.cdninstagram\.com\//;
@@ -65,12 +65,18 @@ function replacePlaceholders(str, viewer, csrfToken, escape = (x) => x) {
   return out;
 }
 
-function personalize(html, { viewer = null, csrfToken, encryption, dropPrefetches = false, identity = false, signedInHome = false, feedRoot = null, toLocal = (u) => u, stats } = {}) {
+/**
+ * `signedInHome` + `feedRoot` (the route root's stored bootloader answer) switch
+ * the anonymous page to a signed-in route: `route` (src/shell/signedInRoute.js,
+ * default the home feed) at `routeUrl`.
+ */
+function personalize(html, { viewer = null, csrfToken, encryption, dropPrefetches = false, identity = false, signedInHome = false, feedRoot = null, route = null, routeUrl = '/', toLocal = (u) => u, stats } = {}) {
   if (typeof html !== 'string' || !html) return html;
   const counts = { encryption: 0, csrf: 0, viewer: 0, prefetchesDropped: 0, placeholders: 0, signedInRoute: 0 };
   // The experimental signed-in route needs identity that agrees with it.
   // The signed-in route needs the feed root's code (a stored bootloader answer).
   const homeSwitch = Boolean(signedInHome && viewer && feedRoot);
+  const spec = route || homeRoute();
   const docDefines = new Set();
   let initTuple = null;
   if (homeSwitch) identity = true;
@@ -86,7 +92,7 @@ function personalize(html, { viewer = null, csrfToken, encryption, dropPrefetche
     }
     if (homeSwitch && isLoginHomeInitialize(node)) {
       // Moved after the page's own payload (insertFeedRoot).
-      initTuple = toSignedInHome(node, viewer);
+      initTuple = toSignedInRoute(node, viewer, spec, routeUrl);
       counts.signedInRoute += 1;
       return REMOVE;
     }
@@ -173,7 +179,7 @@ function personalize(html, { viewer = null, csrfToken, encryption, dropPrefetche
 
   let { html: out } = editJsonBlocks(html, visit);
   if (homeSwitch && counts.signedInRoute) {
-    const done = insertFeedRoot(out, feedRoot, docDefines, toLocal, initTuple);
+    const done = insertFeedRoot(out, feedRoot, docDefines, toLocal, initTuple, spec.root, spec.entryPoint);
     out = done.html;
     counts.feedRootResources = done.inserted;
     counts.feedRootUnmapped = done.missing.length;

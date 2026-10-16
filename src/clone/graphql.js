@@ -17,7 +17,7 @@
 
 const users = require('../backend/services/users');
 const posts = require('../backend/services/posts');
-const { feed, stories } = require('../backend/services/social');
+const { feed, stories, follows } = require('../backend/services/social');
 const { badRequest, notFound, unauthorized } = require('../backend/lib/errors');
 const { isPk, pkFromShortcode } = require('../backend/lib/ids');
 const present = require('./present');
@@ -79,13 +79,55 @@ function createGraphql({ db, contracts = null }) {
       const result = posts.listByAuthor(db, row.id, { limit: limitOf(vars), cursor: vars.after || undefined }, { viewerId });
       return {
         xdt_api__v1__feed__user_timeline_graphql_connection: connection(result.items, result.nextCursor, (p) => present.media(db, p, viewerId)),
+        // The operation also selects the viewer (`xdt_viewer.user.id`); the
+        // profile grid reads it unconditionally when signed in.
+        xdt_viewer: ctx.viewer ? { user: { id: String(ctx.viewer.pk) } } : null,
       };
     },
 
     PolarisProfilePageContentQuery(vars, ctx) {
       const row = userFromVars(vars);
       if (!row) throw notFound('User not found');
-      return { user: present.userInfo(db, row, ctx.viewer?.id ?? null) };
+      // The operation also selects the viewer: local accounts are not
+      // professional accounts (no insights) and none is supervised.
+      const viewer = ctx.viewer ? { user: { pk: String(ctx.viewer.pk), id: String(ctx.viewer.pk), can_see_organic_insights: false, supervision_info: null } } : null;
+      return { user: present.userInfo(db, row, ctx.viewer?.id ?? null), viewer };
+    },
+
+    // Follow and unfollow from the profile header and its "Following" menu
+    // (`xdt_create_friendship` / `xdt_destroy_friendship`: the target user with
+    // the viewer's resulting friendship status). Same rules as the REST routes:
+    // following twice or unfollowing someone not followed is not an error.
+    usePolarisFollowMutation(vars, ctx) {
+      const viewer = needViewer(ctx);
+      const row = userFromVars({ id: vars.target_user_id });
+      if (!row) throw notFound('User not found');
+      try {
+        follows.follow(db, viewer.id, row.id);
+      } catch (error) {
+        if (error.status !== 409) throw error;
+      }
+      return { xdt_create_friendship: { id: String(row.pk), username: row.username, friendship_status: present.friendshipStatus(db, viewer.id, row) } };
+    },
+
+    usePolarisUnfollowMutation(vars, ctx) {
+      const viewer = needViewer(ctx);
+      const row = userFromVars({ id: vars.target_user_id });
+      if (!row) throw notFound('User not found');
+      try {
+        follows.unfollow(db, viewer.id, row.id);
+      } catch (error) {
+        if (error.status !== 404) throw error;
+      }
+      return { xdt_destroy_friendship: { id: String(row.pk), username: row.username, friendship_status: present.friendshipStatus(db, viewer.id, row) } };
+    },
+
+    // The profile header's school-partner badge (`xig_user_by_igid_v2
+    // .school_partner`): there is no school partner programme locally.
+    PolarisSchoolPartnerProfileBadgeQuery(vars) {
+      const row = userFromVars({ id: vars.igid });
+      if (!row) throw notFound('User not found');
+      return { xig_user_by_igid_v2: { id: String(row.pk), school_partner: null } };
     },
 
     PolarisPostRootQuery(vars, ctx) {
