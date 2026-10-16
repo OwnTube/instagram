@@ -26,6 +26,8 @@
  */
 
 const MIN_AGE = 13;
+/** CAARegistrationFieldValidationFields names. */
+const FIELD_NAMES = new Set(['FULLNAME', 'CONTACTPOINT', 'PASSWORD', 'USERNAME']);
 
 const sensitive = (v) => {
   if (typeof v === 'string') return v;
@@ -173,7 +175,11 @@ function createCaaRegistration(getCore) {
     return {
       xfb_caa_registration_field_validation: {
         status: first ? 'VALIDATION_ERROR' : 'SUCCESS',
-        error: first ? { ...first, msg_text_with_entities: null } : null,
+        // On success the answer still names the field that was checked. The
+        // form's reducer (ParseFieldValidationServerResponse) re-runs the
+        // password check after any validation whose error.field is not
+        // PASSWORD, so `error: null` for a password check loops forever.
+        error: first ? { ...first, msg_text_with_entities: null } : FIELD_NAMES.has(name) ? { field: name, code: null, message: null, msg_text_with_entities: null } : null,
         username_suggestions: wantSuggestions ? core.suggestions(sensitive(input.username)) : [],
         regulation_jurisdiction: null,
         age_range: null,

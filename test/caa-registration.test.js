@@ -154,7 +154,11 @@ test('genuine sign-up form (CAA registration)', async (t) => {
     assert.ok(taken.username_suggestions.length > 0);
     assert.strictEqual((await v({ field_name: 'USERNAME', username: sens('free_name_1') })).status, 'SUCCESS');
     assert.strictEqual((await v({ field_name: 'PASSWORD', reg_passwd__: sens('short') })).error.field, 'PASSWORD');
-    assert.strictEqual((await v({ field_name: 'PASSWORD', reg_passwd__: sens(PASSWORD) })).status, 'SUCCESS');
+    const ok = await v({ field_name: 'PASSWORD', reg_passwd__: sens(PASSWORD) });
+    assert.strictEqual(ok.status, 'SUCCESS');
+    // A successful password check must name PASSWORD, or the form re-requests it forever.
+    assert.strictEqual(ok.error.field, 'PASSWORD');
+    assert.strictEqual(ok.error.message, null);
     assert.strictEqual((await v({ field_name: 'FULLNAME', fullname: sens('A Name') })).status, 'SUCCESS');
     assert.strictEqual(db.prepare("SELECT 1 FROM users WHERE username_ci = 'free_name_1'").get(), undefined);
   });
