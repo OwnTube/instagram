@@ -28,25 +28,38 @@ function block(obj) {
   return `<script type="application/json" data-sjs>${JSON.stringify(obj)}</script>`;
 }
 
+// A big integer and integer-like object keys sit in the SAME block as the csrf
+// the shell edits. A whole-block round trip would lose the integer's precision
+// and reorder the keys; this fixture lets the served bytes be checked.
+const BIG_INT = '12345678901234567890';
+const SUPPORT_BLOCK = `{"config":{"csrf_token":"upstream-anon-csrf"},"clp":{"1744178":{"r":1},"636":{"r":2}},"hsi":${BIG_INT}}`;
+
 function upstreamPage() {
   return (
     '<!DOCTYPE html><html><head><title>Instagram</title>' +
     '<script src="https://static.cdninstagram.com/rsrc.php/boot.js"></script></head><body><div id="spinner">loading</div>' +
     block({ define: [['CurrentUserInitialData', [], { USER_ID: '0', NAME: '', SHORT_NAME: null }, 1]] }) +
-    block({ raw: JSON.stringify({ config: { csrf_token: 'upstream-anon-csrf' }, encryption: { key_id: '1', public_key: 'a'.repeat(64), version: '10' } }) }) +
+    `<script type="application/json" data-sjs>${SUPPORT_BLOCK}</script>` +
+    block({ raw: JSON.stringify({ encryption: { key_id: '1', public_key: 'a'.repeat(64), version: '10' } }) }) +
     block({ require: [['RelayPrefetchedStreamCache', 'next', [], [PREFETCH_KEY, { __bbox: { result: { data: { note: PREFETCH_MARK } } } }]]] }) +
     '</body></html>'
   );
 }
 
 async function withServer(env, fn) {
+  const seenAccept = [];
   const upstream = await new Promise((resolve) => {
     const s = http.createServer((req, res) => {
+      seenAccept.push(req.headers.accept || '');
+      // Mimic Instagram: a request that does not ask for HTML gets a reduced
+      // page with no login form.
+      const full = (req.headers.accept || '').includes('text/html');
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-      res.end(upstreamPage());
+      res.end(full ? upstreamPage() : '<!DOCTYPE html><html><head></head><body>reduced</body></html>');
     });
     s.listen(0, '127.0.0.1', () => resolve(s));
   });
+  upstream.seenAccept = seenAccept;
   const dir = fs.mkdtempSync(path.join(ROOT, '.scratch', 'doc-'));
   const saved = { ...process.env };
   Object.assign(process.env, {
@@ -63,7 +76,7 @@ async function withServer(env, fn) {
     const s = app.listen(0, '127.0.0.1', () => resolve(s));
   });
   try {
-    await fn(`http://127.0.0.1:${server.address().port}`);
+    await fn(`http://127.0.0.1:${server.address().port}`, upstream);
   } finally {
     for (const k of Object.keys(env)) if (saved[k] === undefined) delete process.env[k];
     server.closeAllConnections?.();
@@ -96,6 +109,9 @@ test('the served document lets the client boot', async (t) => {
       const ours = (await (await fetch(`${base}/data/shared_data/`)).json()).encryption;
       assert.ok(html.includes(ours.public_key) && !html.includes('a'.repeat(64)), 'our key replaces the upstream key');
       assert.ok(!html.includes('upstream-anon-csrf'), 'the upstream csrf token is replaced');
+      // The csrf edit must not corrupt the big integer or key order in its block.
+      assert.ok(html.includes(`"hsi":${BIG_INT}`), 'the big integer survives the edit to its block');
+      assert.ok(html.includes('"clp":{"1744178":{"r":1},"636":{"r":2}}'), 'integer-like key order is preserved');
       const csrf = res.headers.getSetCookie().find((c) => c.startsWith('csrftoken='));
       assert.ok(csrf && !/HttpOnly/i.test(csrf), 'a readable csrftoken is issued for the client to echo');
       assert.ok(html.includes('/__clone/runtime.js'), 'the runtime is injected');
@@ -113,6 +129,23 @@ test('the served document lets the client boot', async (t) => {
     await withServer({ SHELL_DROP_PREFETCHES: '1' }, async (base) => {
       const html = await (await fetch(`${base}/`, { headers: { accept: 'text/html' } })).text();
       assert.ok(!html.includes(PREFETCH_MARK), 'with the debug flag the prefetch is stripped');
+    });
+  });
+
+  await t.test('a document navigation gets the full HTML variant even when the client sends */*', async () => {
+    await withServer({}, async (base, upstream) => {
+      const route = await fetch(`${base}/`, { headers: { accept: '*/*' } });
+      const html = await route.text();
+      assert.ok(html.includes(PREFETCH_MARK), 'the full page was fetched, not the reduced one');
+      assert.ok(upstream.seenAccept.some((a) => a.includes('text/html')), 'upstream was asked for HTML');
+    });
+  });
+
+  await t.test('a request for a file keeps its own Accept and is not forced to HTML', async () => {
+    await withServer({}, async (base, upstream) => {
+      upstream.seenAccept.length = 0;
+      await fetch(`${base}/data/manifest.json`, { headers: { accept: 'application/json' } });
+      assert.ok(upstream.seenAccept.every((a) => !a.includes('text/html')), 'a .json path must not be upgraded to HTML');
     });
   });
 

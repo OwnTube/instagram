@@ -355,8 +355,22 @@ app.all('*', async (req, res) => {
     if (cached?.lastModified) conditional['if-modified-since'] = cached.lastModified;
   }
 
+  // The upstream origin serves a DIFFERENT, reduced document to a request whose
+  // Accept is `*/*` or absent (no login form, no feed modules), and the full app
+  // shell only to one that asks for HTML. A real browser navigation always asks
+  // for HTML, but curl and our own tests often send `*/*` and would get the
+  // stripped page. So for a document navigation we send a browser-like Accept
+  // unless the client already asked for HTML. Requests for a file (a path with
+  // an extension, e.g. /data/manifest.json) keep their own Accept.
+  const BROWSER_DOCUMENT_ACCEPT =
+    'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7';
+  const clientAccept = req.get('accept') || '';
+  const wantsDocument =
+    req.get('sec-fetch-dest') === 'document' || (isDocumentGet && !/\.[a-z0-9]{1,8}(?:$|\?)/i.test(req.path));
+  const accept = clientAccept.includes('text/html') ? clientAccept : wantsDocument ? BROWSER_DOCUMENT_ACCEPT : clientAccept || '*/*';
+
   const forwarded = {
-    accept: req.get('accept') || 'text/html,application/xhtml+xml',
+    accept,
     'accept-language': req.get('accept-language') || 'en-US,en;q=0.9',
     'user-agent': req.get('user-agent') || config.userAgent,
     referer: config.upstream + '/',
