@@ -136,35 +136,64 @@ function createGraphql({ db }) {
     },
   };
 
-  /** First string found under any of `keys`, searching nested variables. */
-  function findString(node, keys, depth = 0) {
-    if (!node || typeof node !== 'object' || depth > 4) return null;
-    for (const key of keys) if (typeof node[key] === 'string' && node[key]) return node[key];
-    for (const value of Object.values(node)) {
-      const found = findString(value, keys, depth + 1);
-      if (found) return found;
-    }
-    return null;
+  const str = (v) => (typeof v === 'string' && v ? v : null);
+  const sensitive = (v) => str(v) || (v && typeof v === 'object' ? str(v.sensitive_string_value) : null);
+
+  /** Only same-site paths: the post-login redirect must not leave the origin. */
+  function safeNext(next) {
+    return typeof next === 'string' && /^\/(?![/\\])/.test(next) ? next : '/';
+  }
+
+  /** Every scalar the client's selection reads, null unless set. */
+  function loginPayload(fields) {
+    return {
+      error_code: null, error_message: null, error_style: null, redirect_uri: null, two_factor_result: null,
+      reg_nta_context: null, is_3pl: false, is_xapp_login: false, recaptcha_needed: false, is_ig_login_recaptcha: false,
+      should_show_profile_selector: false, should_show_save_password_dialog: false, captcha_persist_data: null,
+      crypted_uid: null, ig_trusted_device_nonce_refresh: null, stop_deletion_payload: null, ig_authenticated: false,
+      should_show_google_oauth_after_failure: false, google_oauth_uri: null, lara_recovery_redirect_uri: null,
+      lara_recovery_captcha_persist_data: null, lara_recovery_captcha_cipher: null, lara_recovery_method: null,
+      lara_recovery_cuid: null, ig_nonce_refresh: null, ig_login_upsell_ar: null,
+      ...fields,
+    };
+  }
+
+  function loginError(code, text) {
+    return loginPayload({
+      error_code: code,
+      error_style: 'GENERIC_BANNER',
+      error_message: { __typename: 'TextWithEntities', text, ranges: [], inline_style_ranges: [], image_ranges: [], color_ranges: [] },
+    });
   }
 
   /**
-   * The login form's mutation. It authenticates exactly like the REST login
-   * route (same password decryption, same session cookies) and answers
-   * `authenticated: false` for wrong credentials.
+   * The login form's mutation. The contract is read from the client's own
+   * useCDSWebLoginMutation module: variables `{input: {identifier,
+   * enc_password: {sensitive_string_value}, password: {...}, next}}`, answer
+   * `caa_login_web`, where a string `redirect_uri` means success and
+   * `error_message.text` is shown otherwise. Authentication is the REST
+   * login route's: same decryption, same local session cookies.
    */
   resolvers.useCDSWebLoginMutation = async (vars, ctx) => {
     if (!loginCore) throw new Error('login is not wired');
-    const username = findString(vars, ['username', 'user_name', 'login']);
-    if (!username) throw badRequest('Please enter your username.');
-    const secret = findString(vars, ['enc_password', 'encPassword', 'encrypted_password', 'password']);
-    if (!secret) throw badRequest('Password is required');
-    const sealed = secret.startsWith('#PWD_');
-    const password = loginCore.readPassword(sealed ? { enc_password: secret } : { password: secret });
-    const user = await loginCore.authenticateAndIssue(ctx.req, ctx.res, { username, password });
-    const body = user
-      ? { authenticated: true, user: true, userId: user.pk, oneTapPrompt: false, reactivated: false }
-      : { authenticated: false, user: true };
-    return { xdt_login: body, ...body };
+    const input = vars.input && typeof vars.input === 'object' ? vars.input : {};
+    const identifier = str(input.identifier);
+    const secret = sensitive(input.enc_password) || sensitive(input.password);
+    if (!identifier || !secret) return { caa_login_web: loginError('missing_credentials', 'Please enter your username and password.') };
+    let user;
+    try {
+      const password = loginCore.readPassword(secret.startsWith('#PWD_') ? { enc_password: secret } : { password: secret });
+      user = await loginCore.authenticateAndIssue(ctx.req, ctx.res, { username: identifier, password });
+    } catch (error) {
+      // An unreadable password is the page's problem (stale key), not a bad login.
+      if (error && error.status === 400) return { caa_login_web: loginError('password_unreadable', error.message) };
+      throw error;
+    }
+    if (!user) {
+      // One answer whether or not the account exists.
+      return { caa_login_web: loginError('invalid_credentials', 'Sorry, your username or password was incorrect. Please double-check and try again.') };
+    }
+    return { caa_login_web: loginPayload({ ig_authenticated: true, crypted_uid: user.pk, redirect_uri: safeNext(input.next) }) };
   };
 
   function parseVariables(raw) {

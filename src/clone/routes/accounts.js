@@ -68,6 +68,8 @@ function register(router, ctx) {
     try {
       const user = await users.authenticate(db, { username: String(username || '').trim(), password });
       const full = users.getById(db, user.id);
+      // A new login replaces any session this browser already held.
+      if (req.cloneSession) sessions.revoke(db, req.cloneSession.id);
       issueSession(db, req, res, full);
       return full;
     } catch (error) {
