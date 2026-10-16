@@ -4,7 +4,7 @@ const express = require('express');
 const config = require('./config');
 const { ResponseCache } = require('./cache');
 const { createAssetStore } = require('./assetStore');
-const { fetchUpstream, UpstreamError } = require('./upstream');
+const { fetchUpstream, UpstreamError, throttle } = require('./upstream');
 const backendApp = require('./backend');
 const backendConfig = require('./backend/config');
 const { createClone, classify } = require('./clone');
@@ -304,6 +304,7 @@ app.get('/__loader/health', (req, res) => {
     upstream: config.upstream,
     allowedAssetHosts: [...ALLOWED_HOSTS],
     cache: { size: cache.size(), ttlMs: config.cacheTtlMs, ...cache.stats, diskAssets: Boolean(assetStore), diskDocuments: Boolean(documentStore), preferCache },
+    upstream: { offline: process.env.LOADER_OFFLINE === '1', throttled: throttle.status() },
     // No Instagram session exists anywhere in this system, configured or
     // relayed. Clone users authenticate against our own backend only.
     instagramSessions: { relayed: false, configured: false },

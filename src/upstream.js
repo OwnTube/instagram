@@ -45,8 +45,33 @@ const STRIPPED_REQUEST_HEADERS = new Set([
 ]);
 
 const IDEMPOTENT_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
-// Statuses that indicate transient throttling or a transient origin error.
-const RETRYABLE_STATUSES = new Set([429, 500, 502, 503, 504]);
+// Transient origin errors worth one more try. 429 is NOT here: retrying a
+// throttling origin only extends the throttle. It starts a cooldown instead.
+const RETRYABLE_STATUSES = new Set([500, 502, 503, 504]);
+const DEFAULT_COOLDOWN_MS = 5 * 60 * 1000;
+
+/**
+ * Per-host throttle state. After a 429 no request is sent to that host until
+ * the cooldown (Retry-After, else DEFAULT_COOLDOWN_MS) has passed; callers get
+ * an UpstreamError with status 429 and serve a cached copy if they have one.
+ */
+const throttle = {
+  until: new Map(),
+  hit(url, headers) {
+    const host = new URL(url).host;
+    const advised = retryAfterMs(headers);
+    const ms = Math.min(advised ?? Number(process.env.UPSTREAM_COOLDOWN_MS || DEFAULT_COOLDOWN_MS), 60 * 60 * 1000);
+    this.until.set(host, Date.now() + ms);
+  },
+  remainingMs(url) {
+    const until = this.until.get(new URL(url).host) || 0;
+    return Math.max(0, until - Date.now());
+  },
+  status() {
+    const now = Date.now();
+    return [...this.until].filter(([, t]) => t > now).map(([host, t]) => ({ host, coolingDownForMs: t - now }));
+  },
+};
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -77,6 +102,9 @@ async function fetchUpstream(
   url,
   { method = 'GET', headers = {}, body, timeoutMs = config.requestTimeoutMs } = {},
 ) {
+  if (process.env.LOADER_OFFLINE === '1') throw new UpstreamError('LOADER_OFFLINE=1: the origin is not contacted', 504, url);
+  const cooling = throttle.remainingMs(url);
+  if (cooling > 0) throw new UpstreamError(`origin is throttling; cooling down for ${Math.ceil(cooling / 1000)}s`, 429, url);
   const canRetry = IDEMPOTENT_METHODS.has(method.toUpperCase());
   const attempts = canRetry ? Math.max(1, config.maxRetries + 1) : 1;
   let lastResponse = null;
@@ -108,6 +136,7 @@ async function fetchUpstream(
       });
 
       cookieJar.store(response.headers);
+      if (response.status === 429) throttle.hit(url, response.headers);
 
       if (canRetry && RETRYABLE_STATUSES.has(response.status) && attempt < attempts) {
         const advised = retryAfterMs(response.headers);
@@ -163,4 +192,4 @@ async function fetchUpstream(
   throw new UpstreamError('upstream request failed after retries', 502, url);
 }
 
-module.exports = { fetchUpstream, UpstreamError, STRIPPED_REQUEST_HEADERS, cookieJar };
+module.exports = { fetchUpstream, UpstreamError, STRIPPED_REQUEST_HEADERS, cookieJar, throttle };

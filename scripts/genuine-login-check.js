@@ -42,10 +42,12 @@ async function type(session, selectorExpr, text) {
 
 /** Create an account through the sign-up form's mutation, as the form sends it. */
 async function createAccount(base, username) {
-  const first = await fetch(`${base}/accounts/emailsignup/`, { headers: { accept: 'text/html' } });
+  // shared_data issues the anonymous csrftoken and names our encryption key;
+  // no document (and so no request to Instagram) is needed.
+  const first = await fetch(`${base}/data/shared_data/`);
   const cookie = first.headers.getSetCookie().map((c) => c.split(';')[0]).join('; ');
   const csrf = decodeURIComponent((cookie.match(/csrftoken=([^;]+)/) || [])[1] || '');
-  const enc = (await (await fetch(`${base}/data/shared_data/`)).json()).encryption;
+  const enc = (await first.json()).encryption;
   const encPassword = encryptLikeClient({ keyId: enc.key_id, publicKeyHex: enc.public_key, password: PASSWORD, time: Math.floor(Date.now() / 1000), tag: '#PWD_BROWSER', version: '10' });
   const variables = { input: { reg_data: { username: { sensitive_string_value: username }, fullname: { sensitive_string_value: 'Login Tester' }, reg_passwd__: { sensitive_string_value: encPassword }, contactpoint: { sensitive_string_value: '' }, birthday_day: 15, birthday_month: 1, birthday_year: 1990 } } };
   const res = await fetch(`${base}/api/graphql`, {
