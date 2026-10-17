@@ -119,86 +119,62 @@ bootstrap shape); the genuine browser checks run against the real snapshot.
 
 ## Current snapshot (2026-10-17)
 
-Active: `rev1050669561-20261017T030543Z`, revision 1050669561, status
-`active`, built from acquisition `20261017T030239Z` (2 documents, 15 answers,
-136 new assets; 153 requests, all 200, none refused) plus the local asset
-store. 15 documents, 15 answers, 7508 assets (152.5 MB), known missing 0.
-Routes: home and profile supported (the previously missing
-`PolarisProfilePostsTabRoot.entrypoint`, `PolarisCreationModal.next.react`,
-`PolarisEmptyProfileOtherUsers.react`, `PolarisProfileNewUserActivatorsUnit.react`
-and `PolarisFollowingActionsModal.next.react` are all present at this
-revision). Bundle patches: all 4 apply.
+Active: `rev1050701999-20261017T075357Z`, revision 1050701999, built from
+acquisition `20261017T074937Z` plus the local stores. Rollback:
+`rev1050682636-20261017T042512Z` (the previous active snapshot, kept
+verified; `client:rollback` returns to it). 15 documents, 32 answers, 8744
+assets (173.1 MB), known missing 0, integrity ok, all 4 bundle patches apply.
 
-Verification (`client:verify --browser`, real snapshot, upstream guard on),
-first run (batched requests): login 9/9, signup 13/13, feed 18/18, engage 9/9
-(core: pass, so `verified`); create 9/10, profile 9/10 (scope: PARTIAL).
+Acquisition 20261017T074937Z (anonymous, one bounded pass; provenance in the
+manifest): 143 requests: 2 documents, 32 bootloader answers and 108 assets at
+200; 1 document, the not-found page `/no..such..account/`, at HTTP 429 with no
+Retry-After. The pass stopped at that 429 and nothing was retried. The
+answers it asked for now include every answer key of the then-active snapshot
+(`moduleSets()` in scripts/client-acquire.js), so a new revision does not drop
+a root the old one served (32 answers, against 19 planned before). Its assets
+came in two steps of the asset cache (97, then 11, after `bxData` URIs, the
+client's binary data files such as a wasm module, were added to the
+references it collects). Cooldown: `node scripts/client-acquire.js
+--check-cooldown` reported "cooling down until 2026-10-17T08:51:37Z" (the
+60-minute cap, as the 429 carried no Retry-After); no acquisition was started
+because time had passed.
 
-Re-check of the same active snapshot after the one-module-per-request change
-(`client:verify rev1050669561-20261017T030543Z --browser`, which records the
-results without changing what is active): login 9/9, signup 13/13, feed
-18/18, engage 9/9, create 10/10, profile 10/10 (scope: complete). Repeated
-runs: create 3/3 and profile 3/3 more runs at 10/10; the search check 5/5
-runs at 9/9 (it now also requires every bootloader request to be answered
-200; 6 requests per run, none combined). Before the change the search check
-passed 1 of 3 runs (4/8 in the others, each with the 404 below).
+Verification (`client-snapshot.js verify rev1050701999-20261017T075357Z
+--browser`, real snapshot, upstream guard on): login 10/10, signup 13/13,
+feed 18/18, engage 9/9, create 10/10, profile 10/10; scope complete; status
+`verified`, then activated. The first verification run failed login 8/9 on
+React #418; the same failure reproduced on the previous active snapshot and
+at earlier commits, and was traced to narrow windows (docs/REVERSE-ENGINEERING.md
+section 11, fixed in the runtime and src/server.js). The login check now also
+covers a narrow-window reload.
 
-### Combined sets
-Before the change:
-- create: the client asked `/ajax/bootloader-endpoint/?modules=
-  PolarisImmersiveFeedPostModal.react,PolarisFeedEmptySULWrapper.react`
-  (one combined set); the snapshot holds each module's own answer but not
-  that set, so it is a 404. Needs one more acquisition pass
-  (`--set 'PolarisImmersiveFeedPostModal.react,PolarisFeedEmptySULWrapper.react|'`).
-- profile: one bootloader request 404'd during verification; a standalone
-  re-run passed 10/10, so the failing set was not reproduced (the check now
-  prints the full `modules|nb_modules@rev` key).
+Genuine checks on the active snapshot (real snapshot, strictly offline):
+restart 7/7, Direct 8/8, activity 8/8, search 9/9, stories 8/9 (the tray
+ring still opens the story with a page load: no genuine route definition).
 
-Composing that set from the two single-module answers was tried and
-abandoned: the real parts disagree in per-response fields (`hsdp.qexData.*.l`
-exposure ids, `hblp.compMap.*.rds.r` tier lists, `hblp.indexUpgrades`
-index lists), so a merged answer would be one the server never produced.
-The set stays an explicit 404 until it is acquired as one answer. The same
-set blocks a new account's empty home feed (it stays on its loading
-skeleton), and with it the genuine search box there
-(`scripts/genuine-search-check.js`: 4/8; the local search operations in
-`src/clone/searchOperations.js` pass their API tests).
+### Route report (direct loads in the genuine client, signed in, `scripts/route-screens.js after2`, 0 upstream attempts, 0 requests to other hosts)
 
-Activation and rollback on the real store: activating the older verified
-snapshot `rev1050627067-20261017T030220Z` served it (0 upstream attempts);
-`client:rollback` returned to `rev1050669561-20261017T030543Z` (0 upstream
-attempts); activating the unverified candidate `rev1050669561-20261017T030508Z`
-was refused.
+| Route | Signed in | Status |
+| --- | --- | --- |
+| `/` | feed (PolarisFeedRoot) | working |
+| `/<local user>/` | profile (PolarisProfilePostsTabRoot) | working |
+| `/<unknown user>/`, `/no..such..account/` | the client's own "Sorry, this page isn't available." (404) | working |
+| `/stories/<user>/` | stories viewer (PolarisStoriesMediaRoot) | working (direct load); from the tray: page load |
+| `/notifications/`, `/accounts/activity/` | activity feed (PolarisActivityFeedRoot; the client redirects the old URL) | working |
+| `/direct/inbox/`, `/direct/t/<thread>/` | Direct inbox and thread (PolarisDirectInboxRoot); send, read state | working; no live delivery (no realtime gateway) |
+| `/reels/` | Reels tab (PolarisClipsTabRoot) with no clips | renders; local accounts cannot publish clips, so it is empty |
+| `/p/<code>/` | anonymous page with login markup | broken: PolarisPostRoot renders only through `cr:2882`, which the anonymous answer leaves unbound |
+| `/explore/` | 404, not in snapshot | blocked: its root module is never named in the bundles |
+| `/accounts/login/`, `/accounts/password/reset/` | 404, not in snapshot | blocked: their documents got 429 on every pass |
+| `/accounts/edit/` | 404, not in snapshot | unsupported: no document |
+| `/create/select/` | 404, not in snapshot | unsupported as a direct load: the creation dialog pushes this URL for its Select step; inside the app the dialog works |
+| `/accounts/emailsignup/` | sign-up page | working anonymous |
 
-The second acquisition pass (20261017T031253Z, for the combined set and
-the roots below) got HTTP 429 at its third document and stopped; nothing
-was built from it and the active snapshot is unchanged. That 429's
-Retry-After was not recorded, so `client:acquire` treats it as cooling down
-for the 60-minute cap (until 04:13:00Z) and refuses to start before then;
-`node scripts/client-acquire.js --check-cooldown` reports it. Passes now
-record Retry-After with every 429.
-
-Restart (`scripts/pinned-restart-check.js`, server as a child process with
-the guard preloaded): 7/7 - cold and warm signed-in loads, restart keeps
-the same snapshot and the session, no browser request left the origin,
-neither process attempted an upstream request.
-
-### Route report (direct loads, `npm run audit:routes`, 0 upstream attempts)
-
-| Route | Anonymous | Signed in | Status |
-| --- | --- | --- | --- |
-| `/` | anonymous page | signed-in route (PolarisFeedRoot) | working |
-| `/<local user>/` | anonymous page | signed-in route (PolarisProfilePostsTabRoot) | working |
-| `/accounts/emailsignup/` | sign-up page | sign-up page | working anonymous; signed-in behaviour unverified |
-| `/p/<code>/`, `/stories/<user>/`, `/<unknown user>/` | anonymous page | anonymous page with login markup | broken signed in (needs PolarisPostRoot / PolarisStoriesMediaRoot answers) |
-| `/explore/`, `/explore/search/`, `/reels/`, `/direct/inbox/`, `/accounts/activity/`, `/create/select/` | 404 not in snapshot | 404 | unsupported as direct loads |
-| `/accounts/login/`, `/accounts/password/reset/` | 404 not in snapshot | 404 | unsupported (documents in the next acquisition pass) |
-| `/accounts/edit/` | 501 | 501 | unsupported (no local handler for the document) |
-
-Inside the app the client reaches the post modal, likes/comments, creation
-and the chat tabs through its own router (genuine checks). In-app navigation
-to explore, reels, Direct inbox and notifications asks for a route
-definition, which is answered "unavailable", so the client loads the URL as
-a page: a 404 today.
+Signed out, every signed-in-only path above is a 404, not the anonymous home
+page. Inside the app, navigation to a route whose definition is not in the
+page (stories from the tray, explore, reels from the nav) falls back to a page
+load: no genuine `/ajax/bulk-route-definitions/` sample exists, and none is
+made up.
 
 ## References
 

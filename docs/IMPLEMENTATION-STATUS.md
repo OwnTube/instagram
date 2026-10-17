@@ -386,8 +386,11 @@ Each item: status, root cause, change, tests, screenshot (in
   `unsupported_environment_retry_with_mqtt`; new messages appear on reload).
 - Reels: `/reels/` is the signed-in PolarisClipsTabRoot route and
   PolarisClipsHomeRootQuery answers an empty connection (local accounts
-  publish photos only). NOT working yet: the viewer container
-  `PolarisClipsViewerDefaultContainer.react` is not in the snapshot.
+  publish photos only). On the active snapshot the tab renders with the Reels
+  nav item selected and an empty viewer (no snapshot miss); the viewer
+  container's dependencies have no empty-state component, so a blank area is
+  taken to be the client's own rendering of zero clips (inferred from the
+  bundle, not compared with a live page).
 
 ### P0 Login flash, sign-up back to login, homepage flash, revisions: DONE (verified offline)
 
@@ -434,8 +437,8 @@ docs/REVERSE-ENGINEERING.md section 13.
 
 ## Next tasks
 
-1. Activate the snapshot built from acquisition 20261017T074937Z once it is
-   verified, then re-run the genuine checks and Reels on it.
+1. Done: the snapshot from acquisition 20261017T074937Z is verified and
+   active (docs/CLIENT-PINNING.md "Current snapshot").
 2. Explore: the client bundles never name its root module (only a route
    definition does), so `/explore/` stays a 404 until a genuine route
    definition or document for it is available.
