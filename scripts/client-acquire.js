@@ -146,7 +146,7 @@ async function main() {
     for (const c of cooling) console.log(`cooling down until ${c.until}: 429 on ${c.url} at ${c.at} (pass ${c.pass}, Retry-After ${c.retryAfter ?? 'not recorded'})`);
     return cooling.length ? 2 : 0;
   }
-  if (cooling.length) {
+  if (cooling.length && !process.argv.includes('--dry-run')) {
     console.log(`not starting: ${cooling.length} recorded 429 still cooling down (until ${cooling.map((c) => c.until).sort().pop()}); no request sent`);
     return 2;
   }
@@ -165,7 +165,7 @@ async function main() {
   };
 
   if (process.argv.includes('--dry-run')) {
-    console.log(`would fetch documents ${DOCUMENTS.join(', ')}, ${sets.length} answers, up to ${maxAssets} assets, into ${path.relative(ROOT, staging)}`);
+    console.log(`would fetch documents ${[...DOCUMENTS, `${NOT_FOUND_PATH} (404)`].join(', ')}, ${sets.length} answers, up to ${maxAssets} assets, into ${path.relative(ROOT, staging)}`);
     for (const s of sets) console.log(`  answer ${s.modules}|${s.nbModules}`);
     return 0;
   }
