@@ -490,6 +490,29 @@ function createHomeOperations(db) {
       };
     },
 
+    // The "New message" dialog's Chat with someone the viewer has no thread
+    // with: the client opens an optimistic thread (/direct/t/<fbid>/) and
+    // reads the recipient by their messaging id, which is the account pk here
+    // (interop_messaging_user_fbid). Unknown ids are null.
+    useIGDCreateOptimisticThreadUserQuery(vars, ctx) {
+      const viewer = viewerOf(ctx);
+      const fbid = String(vars.messaging_user_fbid ?? '');
+      const row = /^\d{1,30}$/.test(fbid) ? users.getByPk(db, fbid) : null;
+      if (!row) return { xig_user_from_messaging_user_fbid: null };
+      const u = present.user(db, row, viewer.id);
+      return {
+        xig_user_from_messaging_user_fbid: {
+          id: u.id,
+          username: u.username,
+          full_name: u.full_name,
+          profile_pic_url: u.profile_pic_url,
+          is_verified: u.is_verified,
+          interop_messaging_user_fbid: String(row.pk),
+          friendship_status: { blocking: Boolean(u.friendship_status && u.friendship_status.blocking), is_restricted: Boolean(u.friendship_status && u.friendship_status.is_restricted) },
+        },
+      };
+    },
+
     // Whether the message the client marked read is one of that thread's.
     useIGDMarkThreadAsReadValidationMutation(vars, ctx) {
       const viewer = viewerOf(ctx);

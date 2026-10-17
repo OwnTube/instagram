@@ -159,6 +159,16 @@ test('signed-in home operations', async (t) => {
     assert.strictEqual(items[0].pk, String(b.pk));
   });
 
+  await t.test("the picker's Chat reads the recipient by messaging id; unknown ids are null", async () => {
+    const res = await gql(ann, 'useIGDCreateOptimisticThreadUserQuery', { messaging_user_fbid: String(b.pk) });
+    assert.strictEqual(res.status, 200);
+    const u = res.body.data.xig_user_from_messaging_user_fbid;
+    assert.deepStrictEqual([u.username, u.interop_messaging_user_fbid, u.friendship_status.blocking, u.friendship_status.is_restricted], ['bob_home', String(b.pk), false, false]);
+    for (const id of ['999999999999', 'x']) {
+      assert.strictEqual((await gql(ann, 'useIGDCreateOptimisticThreadUserQuery', { messaging_user_fbid: id })).body.data.xig_user_from_messaging_user_fbid, null, id);
+    }
+  });
+
   await t.test('the telemetry sink accepts dropped beacons without a CSRF token', async () => {
     const res = await ann.request('POST', '/__clone/dropped', { raw: 'x', csrf: false });
     assert.strictEqual(res.status, 204);

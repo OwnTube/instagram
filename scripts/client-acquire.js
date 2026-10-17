@@ -167,7 +167,42 @@ function activeCooldowns(now = Date.now()) {
 
 const STATIC_HOSTS = new Set(['static.cdninstagram.com', 'scontent.cdninstagram.com']);
 
+// Every option this command takes. Anything else stops it before any request:
+// a mistyped flag must never turn into a network pass.
+const VALUE_OPTIONS = new Set(['--assets-for', '--max-assets', '--modules', '--set', '--skip-documents']);
+const FLAG_OPTIONS = new Set(['--check-cooldown', '--dry-run', '--help', '-h']);
+const USAGE = `usage:
+  NODE_USE_ENV_PROXY=1 node scripts/client-acquire.js [--modules A,B] [--set 'A,B|C'] [--skip-documents /a/,/b/] [--max-assets N] [--dry-run]
+  node scripts/client-acquire.js --check-cooldown
+  NODE_USE_ENV_PROXY=1 node scripts/client-acquire.js --assets-for .cache/acquired/<stamp> [--max-assets N]
+(the only command that contacts Instagram; see the header of scripts/client-acquire.js)`;
+
+/** The first problem with the command line, or null. */
+function argumentError(argv) {
+  for (let i = 0; i < argv.length; i += 1) {
+    const a = argv[i];
+    if (FLAG_OPTIONS.has(a)) continue;
+    if (VALUE_OPTIONS.has(a)) {
+      if (argv[i + 1] === undefined || argv[i + 1].startsWith('--')) return `${a} needs a value`;
+      i += 1;
+      continue;
+    }
+    return `unknown argument ${JSON.stringify(a)}`;
+  }
+  return null;
+}
+
 async function main() {
+  const argv = process.argv.slice(2);
+  if (argv.includes('--help') || argv.includes('-h')) {
+    console.log(USAGE);
+    return 0;
+  }
+  const bad = argumentError(argv);
+  if (bad) {
+    console.error(`client-acquire: ${bad}; nothing was requested.\n${USAGE}`);
+    return 2;
+  }
   const assetsFor = option('--assets-for', null);
   // A full pass contacts www.instagram.com and the static hosts; an asset
   // completion only the static hosts.
