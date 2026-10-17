@@ -80,6 +80,40 @@ test('signed-in home operations', async (t) => {
     assert.strictEqual(messages.page_info.has_next_page, false);
   });
 
+  await t.test('the Direct inbox page: its thread list, folder counts and one thread', async () => {
+    const box = (await gql(ann, 'PolarisDirectInboxQuery', { device_id_for_iris_subscription: 'x', __relay_internal__pv__IGDMaxUnreadMessagesCountrelayprovider: 5 })).body.data.get_slide_mailbox_for_iris_subscription;
+    const thread = box.threads_by_folder.edges[0].node.as_ig_direct_thread;
+    assert.strictEqual(thread.folder, 'INBOX');
+    // The thread list items require each member's friendship status.
+    assert.deepStrictEqual([thread.users[0].username, thread.users[0].friendship_status.blocking], ['bob_home', false]);
+    assert.strictEqual(box.threads_by_system_folder_and_ig_inbox_folder.edges.length, 1);
+    const count = async (folder) => (await gql(ann, 'useIGDSystemFolderUnreadThreadCountQuery', { folder, newer_than_timestamp_ms: 0 })).body.data.get_slide_mailbox_for_iris_subscription.threads_by_folder.edges.length;
+    assert.strictEqual(await count('INBOX'), 1);
+    assert.strictEqual(await count('PENDING'), 0, 'there are no message requests locally');
+
+    const key = thread.thread_key;
+    const detail = (await gql(ann, 'IGDThreadDetailQuery', { thread_fbid: key, __relay_internal__pv__IGDInitialMessagePageCountrelayprovider: 20 })).body.data.get_slide_thread_nullable;
+    assert.strictEqual(detail.as_ig_direct_thread.thread_fbid, key);
+    const message = detail.as_ig_direct_thread.slide_messages.edges[0].node;
+    assert.deepStrictEqual([message.content_type, message.text_body, message.thread_fbid], ['TEXT', 'hi ann', key]);
+    const header = (await gql(ann, 'IGDInboxHeaderOffMsysQuery', { thread_fbid: key })).body.data.get_slide_thread_nullable;
+    assert.strictEqual(header.as_ig_direct_thread.users[0].username, 'bob_home');
+    const outsider = (await gql(cat, 'IGDThreadDetailQuery', { thread_fbid: key })).body.data;
+    assert.strictEqual(outsider.get_slide_thread_nullable, null, "another account's thread is not readable");
+    // Opening the thread marks it read; another account cannot mark it.
+    const msgId = message.message_id;
+    const valid = await gql(ann, 'useIGDMarkThreadAsReadValidationMutation', { data: { message_id: msgId, message_timestamp_ms: message.timestamp_ms }, metadata: { ig_thread_igid: key } });
+    assert.strictEqual(valid.body.data.xig_direct_mark_read_id_validation, true);
+    const read = await gql(ann, 'useIGDMarkThreadAsReadMutation', { data: { item_id: '', message_id: msgId }, metadata: { ig_thread_igid: key } });
+    assert.strictEqual(read.body.data.xig_direct_item_seen_mutation_with_slide_messaging_response.participant_eimu_id, String(a.pk));
+    const after = (await gql(ann, 'IGDChatTabsJewelOffMsysQuery', {})).body.data.get_slide_mailbox_for_iris_subscription.threads_by_folder.edges[0].node.as_ig_direct_thread;
+    const mine = after.slide_read_receipts.find((r) => r.participant_fbid === String(a.pk));
+    assert.ok(Number(mine.watermark_timestamp_ms) >= Number(after.last_activity_timestamp_ms), 'the thread is read for ann');
+    assert.strictEqual((await gql(cat, 'useIGDMarkThreadAsReadMutation', { data: { item_id: '', message_id: msgId }, metadata: { ig_thread_igid: key } })).status, 400);
+    const me = (await gql(ann, 'IGDThreadListHeaderAccountSwitcherOffMsysQuery', {})).body.data.viewer.xdt_user;
+    assert.strictEqual(me.username, 'ann_home');
+  });
+
   await t.test('presence and viewer settings report the local defaults', async () => {
     assert.strictEqual((await gql(ann, 'IGPresenceUnifiedSetupQuery')).body.data.xdt_api__v1__get__presence__disabled.disabled, false);
     const settings = (await gql(ann, 'PolarisViewerSettingsQuery')).body.data.viewer.user;
@@ -116,5 +150,7 @@ test('signed-in home operations', async (t) => {
     const anon = new Browser(server.base);
     await anon.visit();
     assert.strictEqual((await gql(anon, 'PolarisSuggestedUserListQuery', {})).status, 401);
+    assert.strictEqual((await gql(anon, 'PolarisDirectInboxQuery', {})).status, 401);
+    assert.strictEqual((await gql(anon, 'IGDThreadDetailQuery', { thread_fbid: '1' })).status, 401);
   });
 });

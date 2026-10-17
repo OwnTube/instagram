@@ -170,7 +170,9 @@ function storiesRoute(user, owner) {
  * /api/v1/news/inbox/ and /api/v1/friendships/pending/. Route builder
  * XPolarisActivityFeedControllerRouteBuilder: `/notifications/`, default
  * params {followRequests: false}. Page id: PolarisActivityFeedConstants
- * PAGE_ID (`ActivityFeedPage`); the client names no trace policy for it.
+ * PAGE_ID (`ActivityFeedPage`). Trace policy `polaris.notificationsPage`: one
+ * of the `polaris.<page>` policies the client maps to its surfaces
+ * (usePolarisVenusFlytrapPreSelectedProducts).
  * /accounts/activity/ gets the same route: the client redirects it to
  * /notifications/ itself (usePolarisAccountActivityRedirect).
  */
@@ -182,8 +184,53 @@ function activityRoute() {
     props: {},
     params: { followRequests: false },
     routePath: '/notifications/',
-    tracePolicy: null,
+    tracePolicy: 'polaris.notificationsPage',
     pageID: 'ActivityFeedPage',
+  };
+}
+
+/**
+ * The Direct inbox, or one thread of it: PolarisDirectInboxRoot. Its entry
+ * point preloads the mailbox, badge counts, presence, viewer settings and
+ * account queries (each answered locally, src/clone/homeOperations.js) and the
+ * inbox tray entry point; with `routeParams.thread_key` (IGDThreadUrl:
+ * `/direct/t/{?thread_key}/`, an extra URL of the inbox route) it also
+ * preloads that thread's header and messages. The client builds
+ * `/direct/inbox/` as a literal (no route builder, so no default params).
+ * Page id: `DirectInboxPage`, or `DirectThreadPage` for a thread (the ids the
+ * client's Direct checks compare against); trace policy
+ * `polaris.directInboxPage` (see activityRoute) for both, one root.
+ */
+function directInboxRoute(threadKey = null) {
+  return {
+    entryPoint: 'PolarisDirectInboxRoot',
+    root: 'PolarisDirectInboxRoot',
+    answers: ['PolarisDirectInboxRoot.entrypoint', 'PolarisDirectInboxRoot.react'],
+    props: {},
+    params: threadKey ? { thread_key: threadKey } : {},
+    routePath: threadKey ? '/direct/t/{?thread_key}/' : '/direct/inbox/',
+    tracePolicy: 'polaris.directInboxPage',
+    pageID: threadKey ? 'DirectThreadPage' : 'DirectInboxPage',
+  };
+}
+
+/**
+ * The Reels tab: PolarisClipsTabRoot, whose entry point nests the clips
+ * viewer's entry point (PolarisClipsViewerDefaultContent, or the following
+ * tab's for `routeParams.tab === 'following'` when its gate is on). Route
+ * builder `/reels/{?shortcode}/` (no default params); page id `reelsTab`, the
+ * id the client's page checks use; trace policy `polaris.reelsTab`.
+ */
+function reelsRoute() {
+  return {
+    entryPoint: 'PolarisClipsTabRoot',
+    root: 'PolarisClipsTabRoot',
+    answers: ['PolarisClipsTabRoot.entrypoint', 'PolarisClipsTabRoot.react'],
+    props: {},
+    params: { shortcode: null },
+    routePath: '/reels/{?shortcode}/',
+    tracePolicy: 'polaris.reelsTab',
+    pageID: 'reelsTab',
   };
 }
 
@@ -392,4 +439,4 @@ function insertFeedRoot(html, answers, docDefines, toLocal, initTuple, root = FE
   return { html: html.slice(0, at) + parts.join('') + html.slice(at), inserted: tags.length, missing };
 }
 
-module.exports = { emptySSRMount, isLoginHomeInitialize, toSignedInHome, toSignedInRoute, homeRoute, profileRoute, storiesRoute, activityRoute, errorRoute, isSSRInit, disableAnonymousSSR, insertFeedRoot, parseAnswer, FEED_ROOT, LOGGED_OUT_ONLY, NO_LOCAL_SERVICE };
+module.exports = { emptySSRMount, isLoginHomeInitialize, toSignedInHome, toSignedInRoute, homeRoute, profileRoute, storiesRoute, activityRoute, directInboxRoute, reelsRoute, errorRoute, isSSRInit, disableAnonymousSSR, insertFeedRoot, parseAnswer, FEED_ROOT, LOGGED_OUT_ONLY, NO_LOCAL_SERVICE };

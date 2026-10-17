@@ -39,6 +39,21 @@
  *  - PolarisUserActionLoadSULV2Query (the activity feed's "Suggested for
  *    you"): `ayml{more_available, groups[].items[]{user{..friendship_status},
  *    uuid, social_context}}`, the same suggestions;
+ *  - the Direct inbox page (PolarisDirectInboxRoot entry point):
+ *    PolarisDirectInboxQuery (the mailbox: `threads_by_folder`, the
+ *    professional accounts' `threads_by_system_folder_and_ig_inbox_folder`,
+ *    `pinned_threads_v2`), useIGDSystemFolderUnreadThreadCountQuery (one
+ *    folder's threads newer than a time; `INBOX` or `PENDING`, and there are
+ *    no pending requests locally), IGDThreadListHeaderAccountSwitcherOffMsysQuery
+ *    (`viewer.xdt_user`), PolarisAutomaticPreviewsDisabledContextProviderQuery
+ *    (no stored preference: not disabled), useFeatureLimitsOffMsysQuery (no
+ *    messaging limits), PolarisDirectInboxQPInterstitialQuery (no
+ *    promotions) and IGDInboxTrayQuery (notes: none can be created here);
+ *  - one thread (`get_slide_thread_nullable`, by `thread_fbid`): the thread
+ *    page's IGDInboxHeaderOffMsysQuery and IGDThreadDetailQuery, and the chat
+ *    tab's IGDChatTabRootOffMsysQuery; text messages are SlideMessageText
+ *    with content_type `TEXT`; useIGDMarkThreadAsReadMutation (opening a
+ *    thread marks it seen) and its ...ValidationMutation;
  *  - PolarisSuggestedUserListRefetchQuery: the suggestions list's refetch
  *    (the empty feed), same response tree as PolarisSuggestedUserListQuery;
  *  - IGPresenceUnifiedSetupQuery `xdt_api__v1__get__presence__disabled
@@ -51,7 +66,7 @@
 
 const crypto = require('node:crypto');
 const users = require('../backend/services/users');
-const { stories } = require('../backend/services/social');
+const { stories, messages } = require('../backend/services/social');
 const present = require('./present');
 const { unauthorized, badRequest } = require('../backend/lib/errors');
 
@@ -103,7 +118,7 @@ function mutualName(db, viewerId, userId) {
  * A conversation's newest messages as a SlideMessage connection (newest first,
  * the order of Direct's thread item lists).
  */
-function slideMessages(db, conversationId, first) {
+function slideMessages(db, conversationId, first, threadPk) {
   const rows = db
     .prepare(
       `SELECT m.pk, m.body, m.created_at, u.pk AS sender_pk FROM messages m JOIN users u ON u.id = m.sender_id
@@ -118,62 +133,100 @@ function slideMessages(db, conversationId, first) {
       timestamp_ms: ms(m.created_at),
       igd_snippet: m.body,
       text_body: m.body,
+      content_type: 'TEXT',
       content: { __typename: 'SlideMessageText', text_body: m.body },
+      message_id: String(m.pk),
+      thread_fbid: String(threadPk),
+      is_reported: false,
+      is_ai_generated: false,
+      igd_is_forwarded: false,
+      reactions: [],
+      msg_reactions: [],
+      mentions: [],
     },
     cursor: String(m.pk),
   }));
   return { edges, page_info: { end_cursor: edges.length ? edges[edges.length - 1].cursor : null, has_next_page: rows.length > first } };
 }
 
+const THREAD_COLUMNS = `c.id, c.pk, c.created_at,
+  (SELECT MAX(created_at) FROM messages WHERE conversation_id = c.id AND deleted_at IS NULL) AS last_message_at`;
+
 /** The viewer's conversations as SlideThread nodes (newest activity first). */
-function mailboxThreads(db, viewer, limit, { messages = 0 } = {}) {
+function mailboxThreads(db, viewer, limit, options = {}) {
   const rows = db
     .prepare(
-      `SELECT c.id, c.pk, c.created_at,
-         (SELECT MAX(created_at) FROM messages WHERE conversation_id = c.id AND deleted_at IS NULL) AS last_message_at
+      `SELECT ${THREAD_COLUMNS}
        FROM conversations c JOIN conversation_members m ON m.conversation_id = c.id
        WHERE m.user_id = ? ORDER BY COALESCE(last_message_at, c.created_at) DESC LIMIT ?`
     )
     .all(viewer.id, limit);
+  return rows.map((c) => threadEdge(db, viewer, c, options));
+}
+
+/** One of the viewer's conversations by its thread key (pk), as a SlideThread edge; null when the viewer is not in it. */
+function viewerThread(db, viewer, threadKey, options = {}) {
+  if (!/^\d{1,30}$/.test(String(threadKey ?? ''))) return null;
+  const c = db
+    .prepare(
+      `SELECT ${THREAD_COLUMNS}
+       FROM conversations c JOIN conversation_members m ON m.conversation_id = c.id
+       WHERE c.pk = ? AND m.user_id = ?`
+    )
+    .get(String(threadKey), viewer.id);
+  return c ? threadEdge(db, viewer, c, options) : null;
+}
+
+/** The viewer's conversation with this thread key (pk): {id, pk}, or null. */
+function viewerConversation(db, viewer, threadKey) {
+  if (!/^\d{1,30}$/.test(String(threadKey ?? ''))) return null;
+  return db.prepare('SELECT c.id, c.pk FROM conversations c JOIN conversation_members m ON m.conversation_id = c.id WHERE c.pk = ? AND m.user_id = ?').get(String(threadKey), viewer.id) || null;
+}
+
+function threadEdge(db, viewer, c, { messages = 0 } = {}) {
   const viewerUser = present.user(db, users.getById(db, viewer.id), null, { withFriendship: false });
-  return rows.map((c) => {
-    const members = db
-      .prepare(
-        `SELECT u.*, cm.last_seen_at,
-           (SELECT MAX(created_at) FROM messages WHERE conversation_id = cm.conversation_id AND sender_id = u.id AND deleted_at IS NULL) AS last_sent_at
-         FROM conversation_members cm JOIN users u ON u.id = cm.user_id WHERE cm.conversation_id = ?`
-      )
-      .all(c.id);
-    const others = members.filter((u) => u.id !== viewer.id);
-    // A member has read up to the later of what they last opened and what they last sent.
-    const receipts = members.map((u) => ({
-      participant_fbid: String(u.pk),
-      watermark_timestamp_ms: ms([u.last_seen_at, u.last_sent_at].filter(Boolean).sort().pop()),
-    }));
-    const thread = {
-      __typename: 'XFBIGDirectViewerThread',
-      id: String(c.pk),
-      thread_key: String(c.pk),
-      marked_as_unread: false,
-      last_activity_timestamp_ms: ms(c.last_message_at || c.created_at),
-      slide_read_receipts: receipts,
-      thread_title: others.map((u) => u.username).join(', '),
-      thread_image_url: null,
-      viewer_id: String(viewer.pk),
-      users: others.map((u) => ({ ...present.user(db, u, null, { withFriendship: false }), interop_messaging_user_fbid: String(u.pk) })),
-      usersWithoutViewer: others.map((u) => ({ id: String(u.pk), is_internal_user: false })),
-      is_group: others.length > 1,
-      thread_id: String(c.pk),
-      thread_fbid: String(c.pk),
-      nicknames: [],
-      is_pin: false,
-      thread_subtype: null,
-      viewer: { id: viewerUser.id, interop_messaging_user_fbid: String(viewer.pk), profile_pic_url: viewerUser.profile_pic_url },
-      is_muted: false,
-    };
-    if (messages > 0) thread.slide_messages = slideMessages(db, c.id, messages);
-    return { node: { __typename: 'SlideThread', id: `slide_thread:${c.pk}`, as_ig_direct_thread: thread }, cursor: String(c.pk) };
-  });
+  const members = db
+    .prepare(
+      `SELECT u.*, cm.last_seen_at,
+         (SELECT MAX(created_at) FROM messages WHERE conversation_id = cm.conversation_id AND sender_id = u.id AND deleted_at IS NULL) AS last_sent_at
+       FROM conversation_members cm JOIN users u ON u.id = cm.user_id WHERE cm.conversation_id = ?`
+    )
+    .all(c.id);
+  const others = members.filter((u) => u.id !== viewer.id);
+  // A member has read up to the later of what they last opened and what they last sent.
+  const receipts = members.map((u) => ({
+    participant_fbid: String(u.pk),
+    watermark_timestamp_ms: ms([u.last_seen_at, u.last_sent_at].filter(Boolean).sort().pop()),
+  }));
+  const thread = {
+    __typename: 'XFBIGDirectViewerThread',
+    id: String(c.pk),
+    thread_key: String(c.pk),
+    marked_as_unread: false,
+    last_activity_timestamp_ms: ms(c.last_message_at || c.created_at),
+    slide_read_receipts: receipts,
+    thread_title: others.map((u) => u.username).join(', '),
+    thread_image_url: null,
+    viewer_id: String(viewer.pk),
+    // Every local thread is in the inbox: there are no message requests,
+    // spam or other folders here.
+    folder: 'INBOX',
+    system_folder: 'INBOX',
+    // The thread list items require each member's friendship_status
+    // (blocking, is_restricted), relative to the viewer.
+    users: others.map((u) => ({ ...present.user(db, u, viewer.id), interop_messaging_user_fbid: String(u.pk) })),
+    usersWithoutViewer: others.map((u) => ({ id: String(u.pk), is_internal_user: false })),
+    is_group: others.length > 1,
+    thread_id: String(c.pk),
+    thread_fbid: String(c.pk),
+    nicknames: [],
+    is_pin: false,
+    thread_subtype: null,
+    viewer: { id: viewerUser.id, username: viewerUser.username, full_name: viewerUser.full_name, interop_messaging_user_fbid: String(viewer.pk), profile_pic_url: viewerUser.profile_pic_url },
+    is_muted: false,
+  };
+  if (messages > 0) thread.slide_messages = slideMessages(db, c.id, messages, c.pk);
+  return { node: { __typename: 'SlideThread', id: `slide_thread:${c.pk}`, as_ig_direct_thread: thread }, cursor: String(c.pk) };
 }
 
 /** Ranked share-sheet items for the Direct picker's null state. */
@@ -228,6 +281,16 @@ function createHomeOperations(db) {
         pinned_threads_v2: [],
       },
     };
+  }
+
+  function slideThread(vars, ctx) {
+    const viewer = viewerOf(ctx);
+    const first = Number(vars.__relay_internal__pv__IGDInitialMessagePageCountrelayprovider);
+    const edge = viewerThread(db, viewer, vars.thread_fbid, { messages: Number.isInteger(first) && first > 0 ? Math.min(first, 100) : 20 });
+    if (!edge) return { get_slide_thread_nullable: null };
+    // No admins, pinned messages or event chats locally.
+    Object.assign(edge.node.as_ig_direct_thread, { admin_user_ids: [], pinned_messages: [], pinned_messages_metadata: [] });
+    return { get_slide_thread_nullable: edge.node };
   }
 
   const operations = {
@@ -318,6 +381,84 @@ function createHomeOperations(db) {
     IGDChatTabsContentOffMsysQuery(vars, ctx) {
       const first = Number(vars.__relay_internal__pv__IGDMaxUnreadMessagesCountrelayprovider);
       return mailbox(vars, ctx, { messages: Number.isInteger(first) && first > 0 ? Math.min(first, 50) : 20 });
+    },
+
+    // The Direct inbox page's thread list. Professional accounts read the same
+    // threads by system and inbox folder (primary); there are none locally,
+    // but the connection is the same list for any reader.
+    PolarisDirectInboxQuery(vars, ctx) {
+      const first = Number(vars.__relay_internal__pv__IGDMaxUnreadMessagesCountrelayprovider);
+      const out = mailbox(vars, ctx, { messages: Number.isInteger(first) && first > 0 ? Math.min(first, 50) : 20 });
+      const box = out.get_slide_mailbox_for_iris_subscription;
+      box.threads_by_system_folder_and_ig_inbox_folder = { edges: box.threads_by_folder.edges, page_info: EMPTY_PAGE };
+      return out;
+    },
+
+    useIGDSystemFolderUnreadThreadCountQuery(vars, ctx) {
+      const viewer = viewerOf(ctx);
+      const since = Number(vars.newer_than_timestamp_ms) || 0;
+      const edges = String(vars.folder || 'INBOX') === 'INBOX' ? mailboxThreads(db, viewer, 50).filter((e) => Number(e.node.as_ig_direct_thread.last_activity_timestamp_ms) >= since) : [];
+      return {
+        get_slide_mailbox_for_iris_subscription: {
+          __typename: 'SlideMailbox',
+          id: `slide_mailbox:${viewer.pk}`,
+          threads_by_folder: { edges, page_info: EMPTY_PAGE },
+        },
+      };
+    },
+
+    IGDThreadListHeaderAccountSwitcherOffMsysQuery(vars, ctx) {
+      const me = present.user(db, users.getById(db, viewerOf(ctx).id), null, { withFriendship: false });
+      return { viewer: { xdt_user: { id: me.id, username: me.username, is_verified: false } } };
+    },
+
+    PolarisAutomaticPreviewsDisabledContextProviderQuery(vars, ctx) {
+      viewerOf(ctx);
+      return { xdt_get_igd_automatic_previews_disabled: { disabled: false } };
+    },
+
+    useFeatureLimitsOffMsysQuery(vars, ctx) {
+      viewerOf(ctx);
+      return { xfb_ix_ig_account_status_web: { profile_wording_enabled: false }, xfb_feature_limits: { limits: [] } };
+    },
+
+    PolarisDirectInboxQPInterstitialQuery(vars, ctx) {
+      viewerOf(ctx);
+      return { xfb_viewer: { eligible_promotions: { nodes: [] } } };
+    },
+
+    IGDInboxTrayQuery(vars, ctx) {
+      viewerOf(ctx);
+      return { response: { inbox_tray_items: [] } };
+    },
+
+    // One thread of the viewer's (header, thread view, chat tab), by
+    // thread_fbid (the thread key); null for a thread the viewer is not in.
+    // Messages: newest first, up to the client's IGDInitialMessagePageCount.
+    IGDInboxHeaderOffMsysQuery: slideThread,
+    IGDThreadDetailQuery: slideThread,
+    IGDChatTabRootOffMsysQuery: slideThread,
+
+    // Opening a thread marks it read up to now for the viewer (the same as
+    // the v1 "seen" endpoint); the answer is the viewer's new read receipt.
+    useIGDMarkThreadAsReadMutation(vars, ctx) {
+      const viewer = viewerOf(ctx);
+      const c = viewerConversation(db, viewer, vars.metadata && vars.metadata.ig_thread_igid);
+      if (!c) throw badRequest('Unknown thread');
+      messages.markSeen(db, c.id, viewer.id);
+      const row = db.prepare('SELECT last_seen_at FROM conversation_members WHERE conversation_id = ? AND user_id = ?').get(c.id, viewer.id);
+      return {
+        xig_direct_item_seen_mutation_with_slide_messaging_response: { __typename: 'XFBSlideReadReceipt', participant_eimu_id: String(viewer.pk), watermark_timestamp_ms: ms(row.last_seen_at) },
+      };
+    },
+
+    // Whether the message the client marked read is one of that thread's.
+    useIGDMarkThreadAsReadValidationMutation(vars, ctx) {
+      const viewer = viewerOf(ctx);
+      const c = viewerConversation(db, viewer, vars.metadata && vars.metadata.ig_thread_igid);
+      const id = String((vars.data && vars.data.message_id) ?? '');
+      const found = c && /^\d{1,30}$/.test(id) ? db.prepare('SELECT 1 FROM messages WHERE conversation_id = ? AND pk = ? AND deleted_at IS NULL').get(c.id, id) : null;
+      return { xig_direct_mark_read_id_validation: Boolean(found) };
     },
 
     // Activity status is on for every local account (the accounts API reports

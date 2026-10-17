@@ -20,7 +20,7 @@ const backendApp = require('./backend');
 const backendConfig = require('./backend/config');
 const { createClone, classify } = require('./clone');
 const { personalize, viewerObject } = require('./shell/personalize');
-const { parseAnswer, homeRoute, profileRoute, storiesRoute, activityRoute, errorRoute } = require('./shell/signedInRoute');
+const { parseAnswer, homeRoute, profileRoute, storiesRoute, activityRoute, directInboxRoute, reelsRoute, errorRoute } = require('./shell/signedInRoute');
 const { routeKind } = require('./shell/templates');
 const { createPatcher } = require('./shell/bundlePatches');
 const { openPinnedClient } = require('./pinnedClient');
@@ -326,7 +326,8 @@ function canonicalDocPath(req) {
   // The activity feed is a signed-in route only; with no viewer the path keeps
   // its own (unacquired) document rather than the anonymous home page.
   if (kind === 'activity' && cloneInstance && cloneInstance.viewerFor(req)) return '/';
-  if (/^\/direct\/(t|thread)\//.test(req.path)) return '/direct/inbox/';
+  if (/^\/(direct\/inbox|reels)\/?$/.test(req.path) && cloneInstance && cloneInstance.viewerFor(req)) return '/';
+  if (/^\/direct\/(t|thread)\//.test(req.path)) return cloneInstance && cloneInstance.viewerFor(req) ? '/' : '/direct/inbox/';
   if (/^\/(reel|reels|tv)\/[A-Za-z0-9_-]+/.test(req.path)) return '/';
   return req.originalUrl;
 }
@@ -345,6 +346,10 @@ function signedInRouteFor(req) {
   const kind = routeKind(req.path);
   if (kind === 'home') return homeRoute();
   if (kind === 'activity') return activityRoute();
+  if (/^\/direct\/inbox\/?$/.test(req.path)) return directInboxRoute();
+  const thread = /^\/direct\/t\/(\d{1,30})\/?$/.exec(req.path);
+  if (thread) return directInboxRoute(thread[1]);
+  if (/^\/reels\/?$/.test(req.path)) return reelsRoute();
   if ((kind === 'profile' || kind === 'stories') && cloneInstance) {
     const segments = req.path.split('/').filter(Boolean);
     const user = cloneInstance.userByUsername(kind === 'stories' ? segments[1] : segments[0]);

@@ -90,7 +90,7 @@ test('signed-in route: default, no login markup, pinned answers only', async (t)
 
 test('signed-in stories and not-found routes, from pinned answers only', async (t) => {
   const answers = {};
-  for (const m of ['PolarisFeedRoot.react', 'PolarisStoriesMediaRoot.entrypoint', 'PolarisStoriesMediaRoot.react', 'PolarisErrorRoot.entrypoint', 'PolarisErrorRoot.react', 'PolarisActivityFeedRoot.entrypoint', 'PolarisActivityFeedRoot.react']) answers[`${m}|`] = answerAt(100);
+  for (const m of ['PolarisFeedRoot.react', 'PolarisStoriesMediaRoot.entrypoint', 'PolarisStoriesMediaRoot.react', 'PolarisErrorRoot.entrypoint', 'PolarisErrorRoot.react', 'PolarisActivityFeedRoot.entrypoint', 'PolarisActivityFeedRoot.react', 'PolarisDirectInboxRoot.entrypoint', 'PolarisDirectInboxRoot.react', 'PolarisClipsTabRoot.entrypoint', 'PolarisClipsTabRoot.react']) answers[`${m}|`] = answerAt(100);
   const s = await startCloneServer({}, { snapshot: { revision: '100', documents: { '/': documentAt(100), '/accounts/emailsignup/': documentAt(100) }, answers } });
   t.after(() => s.close());
   const viewer = new Browser(s.base);
@@ -139,6 +139,24 @@ test('signed-in stories and not-found routes, from pinned answers only', async (
     const anon = await get(new Browser(s.base), '/notifications/');
     assert.strictEqual(anon.status, 404);
     assert.ok(!anon.text.includes('Log into Instagram'));
+  });
+
+  await t.test('/direct/inbox/, a /direct/t/ thread and /reels/: their client roots, signed in only', async () => {
+    const expected = [
+      ['/direct/inbox/', 'PolarisDirectInboxRoot', {}, 'DirectInboxPage'],
+      ['/direct/t/340282366841710300/', 'PolarisDirectInboxRoot', { thread_key: '340282366841710300' }, 'DirectThreadPage'],
+      ['/reels/', 'PolarisClipsTabRoot', { shortcode: null }, 'reelsTab'],
+    ];
+    for (const [p, root, params, pageID] of expected) {
+      const res = await get(viewer, p);
+      assert.strictEqual(res.status, 200, p);
+      const route = initialize(res.text);
+      assert.deepStrictEqual(route.rootView.entryPoint, { __dr: `${root}.entrypoint` }, p);
+      assert.deepStrictEqual(route.params, params, p);
+      assert.deepStrictEqual(route.polarisRouteConfig, { pageID }, p);
+      const anon = await get(new Browser(s.base), p);
+      assert.strictEqual(anon.status, 404, `${p} signed out: no document`);
+    }
   });
 
   await t.test('a client route name cannot be taken as a username', async () => {
