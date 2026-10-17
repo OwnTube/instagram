@@ -318,22 +318,104 @@ function sendAsset(res, entry, target) {
 /* Bootloader endpoint and web manifest                                */
 /* ------------------------------------------------------------------ */
 
+const revisionOf = (html) => (/"consistency":\{"rev":(\d+)\}/.exec(html) || [])[1] || '';
+const answerKey = (name, rev) => `boot:${new URL(config.upstream).origin}:${name}||${rev}`;
+
 /**
  * The stored bootloader answers for a signed-in route (by requested module
  * name), for the client revision of `html` (ClientConsistency rev), or null
  * when any of them is not stored.
  */
 async function routeAnswers(html, modules) {
-  const rev = (/"consistency":\{"rev":(\d+)\}/.exec(html) || [])[1] || '';
+  const rev = revisionOf(html);
   const answers = [];
   for (const name of modules) {
-    const key = `boot:${new URL(config.upstream).origin}:${name}||${rev}`;
+    const key = answerKey(name, rev);
     const entry = cache.get(key) || (bootloaderStore ? await bootloaderStore.read(key) : undefined);
     const answer = entry ? parseAnswer(entry.body.toString('utf8')) : null;
     if (!answer) return null;
     answers.push(answer);
   }
   return answers;
+}
+
+/**
+ * Revision self-healing for the signed-in routes. The route's code comes from
+ * stored bootloader answers of the page's own revision; Instagram ships new
+ * revisions often, so a freshly fetched document can be of a revision whose
+ * answers are not stored. Answers of another revision are never mixed in (the
+ * client's ClientConsistency would ask for a refresh: the reload loop). Instead:
+ *
+ *  1. fetch the missing answers for the page's revision, once, anonymously,
+ *     through the same request the client itself makes (skipped offline and
+ *     during an upstream cooldown, which fetchUpstream enforces);
+ *  2. else serve the last document this route was served from consistently
+ *     (stored per route root, with its revision), whose answers are stored;
+ *  3. else report it (the caller serves the anonymous page) in /__loader/health.
+ */
+const revisionState = { served: {}, healedByFetch: 0, servedPinned: 0, unhealed: 0, recent: [] };
+const pinnedKey = (route) => `good:${new URL(config.upstream).origin}:${route.root}`;
+const pinnedWritten = new Map();
+
+function noteRevision(event) {
+  revisionState.recent.unshift({ at: new Date().toISOString(), ...event });
+  if (revisionState.recent.length > 20) revisionState.recent.pop();
+}
+
+async function fetchRouteAnswers(modules, rev) {
+  for (const name of modules) {
+    const key = answerKey(name, rev);
+    if (cache.get(key) || (bootloaderStore && (await bootloaderStore.read(key)))) continue;
+    const url = `${config.upstream}/ajax/bootloader-endpoint/?modules=${encodeURIComponent(name)}&__d=www&__a=1&__rev=${rev}`;
+    const upstream = await fetchUpstream(url, { headers: { accept: '*/*' } });
+    const answer = upstream.status === 200 ? parseAnswer(upstream.body.toString('utf8')) : null;
+    // Only an answer of the requested revision is kept (hblp.consistency.rev).
+    if (!answer || String(answer.hsrp.hblp?.consistency?.rev) !== rev) throw new Error(`no answer for ${name} at rev ${rev} (status ${upstream.status})`);
+    const entry = { body: upstream.body, contentType: upstream.headers.get('content-type') || 'application/x-javascript' };
+    cache.set(key, entry);
+    if (bootloaderStore) await bootloaderStore.write(key, entry);
+  }
+}
+
+async function routeWithAnswers(route, html) {
+  const rev = revisionOf(html);
+  let answers = await routeAnswers(html, route.answers);
+  if (answers) {
+    revisionState.served[route.root] = rev;
+    if (documentStore && pinnedWritten.get(route.root) !== rev) {
+      pinnedWritten.set(route.root, rev);
+      documentStore.write(pinnedKey(route), { body: Buffer.from(html, 'utf8'), contentType: 'text/html; charset=utf-8', rev });
+    }
+    return { html, answers };
+  }
+  if (rev) {
+    try {
+      await fetchRouteAnswers(route.answers, rev);
+      answers = await routeAnswers(html, route.answers);
+      if (answers) {
+        revisionState.healedByFetch += 1;
+        noteRevision({ root: route.root, rev, how: 'fetched the answers for the page revision' });
+        return routeWithAnswers(route, html);
+      }
+    } catch (error) {
+      noteRevision({ root: route.root, rev, how: 'fetch skipped or failed', reason: error.message });
+    }
+  }
+  const pinned = documentStore ? await documentStore.read(pinnedKey(route)) : undefined;
+  if (pinned) {
+    const pinnedHtml = pinned.body.toString('utf8');
+    const pinnedAnswers = await routeAnswers(pinnedHtml, route.answers);
+    if (pinnedAnswers) {
+      revisionState.servedPinned += 1;
+      revisionState.served[route.root] = revisionOf(pinnedHtml);
+      noteRevision({ root: route.root, rev, how: `served the last consistent document (rev ${revisionOf(pinnedHtml)})` });
+      return { html: pinnedHtml, answers: pinnedAnswers };
+    }
+  }
+  revisionState.unhealed += 1;
+  noteRevision({ root: route.root, rev, how: 'no answers for this revision and no consistent document: anonymous page served' });
+  recordFailure({ kind: 'revision', status: 0, url: route.root, reason: `no bootloader answers for rev ${rev || '(none)'}` });
+  return null;
 }
 
 /* ------------------------------------------------------------------ */
@@ -415,6 +497,7 @@ app.get('/__loader/health', (req, res) => {
       : { mounted: false },
     clone: cloneInstance ? { mounted: true, health: '/__clone/health' } : { mounted: false },
     shell: { templates: templates.available(), forceDropPrefetches, bundlePatches: patcher.report() },
+    revisions: revisionState,
     recentFailures: failures.slice(0, 25),
   });
 });
@@ -695,9 +778,12 @@ function signedInRouteFor(req) {
 async function sendHtml(req, res, status, html, { fromTemplate = false } = {}) {
   const ctx = cloneInstance ? cloneInstance.documentContext(req, res) : { viewer: null, csrfToken: null, encryption: null };
   const stats = {};
-  const route = !fromTemplate && process.env.SHELL_SIGNED_IN_HOME === '1' && ctx.viewer ? signedInRouteFor(req) : null;
-  const signedInHome = Boolean(route);
-  const feedRoot = route ? await routeAnswers(html, route.answers) : null;
+  // Signed-in viewers get the signed-in route (opt out: SHELL_SIGNED_IN_HOME=0).
+  const route = !fromTemplate && process.env.SHELL_SIGNED_IN_HOME !== '0' && ctx.viewer ? signedInRouteFor(req) : null;
+  const healed = route ? await routeWithAnswers(route, html) : null;
+  if (healed) html = healed.html;
+  const signedInHome = Boolean(healed);
+  const feedRoot = healed ? healed.answers : null;
   const out = personalize(html, { ...ctx, identity: fromTemplate, signedInHome, feedRoot, route, routeUrl: req.path, toLocal: mapUrl, dropPrefetches: fromTemplate || forceDropPrefetches, stats });
   if (cloneInstance) {
     const mentionsKey = /public_?key/i.test(html);

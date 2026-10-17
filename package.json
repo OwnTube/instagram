@@ -24,6 +24,7 @@
     "verify:genuine-profile": "node scripts/genuine-profile-check.js",
     "verify:genuine-create": "node scripts/genuine-create-check.js",
     "verify:genuine-engage": "node scripts/genuine-engage-check.js",
+    "audit:routes": "node scripts/route-audit.js",
     "cache:status": "node scripts/asset-cache.js status",
     "cache:warm": "node scripts/asset-cache.js warm"
   },

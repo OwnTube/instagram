@@ -89,7 +89,9 @@ async function submitForm(session, base, { username, password }) {
   await sleep(2000);
   await evaluate(session, "[...document.querySelectorAll('[role=button]')].find((e) => (e.innerText || '').trim() === 'Submit')?.click()");
   await sleep(7000);
-  return { formText: text, filled: filled.every(Boolean), after: await evaluate(session, 'document.body.innerText'), url: await evaluate(session, 'location.href') };
+  // What the user sees now: the signed-in app (its New post nav) or a visible login form.
+  const view = await evaluateIsolated(session, "JSON.stringify({ nav: Boolean(document.querySelector('svg[aria-label=\"New post\"]')), login: [...document.querySelectorAll('input[type=password]')].some((e) => e.getBoundingClientRect().width > 0) && /Log into Instagram|Log in/.test(document.body.innerText) })").then(JSON.parse).catch(() => ({}));
+  return { formText: text, filled: filled.every(Boolean), after: await evaluate(session, 'document.body.innerText'), url: await evaluate(session, 'location.href'), view };
 }
 
 async function main() {
@@ -122,6 +124,7 @@ async function main() {
     watchExternal(session, base);
     const created = await submitForm(session, base, { username, password: PASSWORD });
     await captureScreenshot(session, path.join(SCRATCH, 'created.png'));
+    await captureScreenshot(session, path.join(ROOT, 'test-artifacts', 'screenshots', 'signup-01-after-submit.png'));
     check('the form rendered and was filled', created.filled);
     check('"Mobile number or email" is not on the form', !/Mobile number or email/.test(created.formText));
     check('"You may receive notifications from us." is not on the form', !/You may receive notifications from us/.test(created.formText));
@@ -132,6 +135,7 @@ async function main() {
     const who = await me(session);
     check('the browser is signed in as the new user', who.status === 200 && who.username === username, JSON.stringify(who));
     check('the form left the sign-up page (redirect followed)', !/emailsignup/.test(created.url), created.url);
+    check('after sign-up the browser shows the signed-in app, not the login page', created.view.nav && !created.view.login, JSON.stringify(created.view));
 
     await session.cdp.send('Network.clearBrowserCookies');
     const dup = await submitForm(session, base, { username, password: PASSWORD });

@@ -163,8 +163,8 @@ React error #418 and "Route definition unavailable": SOLVED (checklist P4).
 
 How the signed-in route is built from the anonymous `/` document plus Instagram's
 own public bootloader answer for `PolarisFeedRoot.react`: docs/REVERSE-ENGINEERING.md
-sections 2-7 (`src/shell/signedInRoute.js`, `SHELL_SIGNED_IN_HOME=1`, off by
-default). The earlier conclusion that anonymous material could not provide the
+sections 2-7 (`src/shell/signedInRoute.js`). On by default for a signed-in
+viewer since P0 below; `SHELL_SIGNED_IN_HOME=0` opts out. The earlier conclusion that anonymous material could not provide the
 feed root was wrong: the bootloader endpoint, asked anonymously, returns it.
 
 Feed answers (`src/clone/graphql.js`, `src/runtime/graphqlContract.js`):
@@ -341,8 +341,54 @@ Each item: status, root cause, change, tests, screenshot (in
 - Search, notifications page, stories viewer, Direct thread view: NOT yet
   verified in the browser (APIs exist and are tested at API level).
 
+### P0 Login flash, sign-up back to login, homepage flash, revisions: DONE (verified offline)
+
+Reproduced in a real browser first (`.scratch/repro/signup-flow.js`,
+`.scratch/repro/home-load.js`; screenshots `test-artifacts/screenshots/repro-*`).
+
+- Sign-up landed on the login page. Root cause: the signed-in route was behind
+  `SHELL_SIGNED_IN_HOME=1`, off by default, so after the genuine form signed the
+  browser in (current_user 200) the redirect to `/` served the anonymous
+  document. Fix: the route is the default for a signed-in viewer
+  (`src/server.js` sendHtml); `SHELL_SIGNED_IN_HOME=0` opts out.
+- Login page visible for seconds before the feed (the "auth flash"). Root
+  cause: the anonymous `/` document carries the server-rendered login page in
+  the SSR mount (`<div id="mount_0_0_*" style="content-visibility:hidden">`).
+  With SSR disabled, `CometSSRClientInjector.ssrInit` takes the
+  "SSR is disabled from server" path, which calls
+  `CometSSRContentRevealer.unhideElement`: it removes the splash screen and
+  reveals the mount at once, so the login markup showed until the client's
+  first commit (1.2 s to 5.8 s in the repro). Fix: the signed-in route keeps
+  the mount element and drops only its children (`emptySSRMount`,
+  `src/shell/signedInRoute.js`). After: no login text or password field at any
+  sample of the timeline.
+- Homepage "renders then changes": no reload or navigation remains on `/`
+  (one main-frame navigation in the timeline). Remaining, genuine client
+  behaviour: a blank white page between the splash removal (about 0.8 s) and
+  the first commit (2.4 s to 4.4 s across runs), because the client removes
+  the splash on its SSR-disabled path. Not patched.
+- Revision-aware answers: the route's code is a stored bootloader answer of the
+  page's revision. A new upstream revision without a stored answer used to
+  fall back silently to the anonymous page (the sign-up bug again). Now
+  (`routeWithAnswers`, `src/server.js`): fetch the answer for that revision
+  once (anonymous, skipped offline and during a cooldown); else serve the last
+  document this route was served from consistently; else the anonymous page,
+  reported. Answers of another revision are never mixed in. State in
+  `/__loader/health` -> `revisions`.
+
+Tests: test/signed-in-route.test.js (default route, no login markup, anonymous
+page unchanged, self-healing by fetch and by the last consistent document,
+opt-out); test/shell.test.js (`emptySSRMount`); `npm run verify:genuine-signup`
+now asserts the signed-in app is shown after sign-up (12/12).
+
+Route audit (`node scripts/route-audit.js`, offline): see the table in
+docs/REVERSE-ENGINEERING.md section 13.
+
 ## Next tasks
 
 1. P6 in order: search, notifications, stories viewer, Direct threads; each with a
    DB check and a screenshot.
-2. Make `SHELL_SIGNED_IN_HOME` the default once the above hold.
+2. Signed-in post, stories and Direct inbox routes on a direct load: each needs
+   its route's entry point, props and bootloader answer from a real document
+   or answer, not stored yet (document fetches were throttled; offline those
+   routes answer 504 rather than a stand-in).

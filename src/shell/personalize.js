@@ -22,7 +22,7 @@
  */
 
 const { editJsonBlocks, isDefineTuple, prefetchKey, REMOVE } = require('./sjs');
-const { isLoginHomeInitialize, toSignedInRoute, homeRoute, isSSRInit, disableAnonymousSSR, insertFeedRoot } = require('./signedInRoute');
+const { isLoginHomeInitialize, toSignedInRoute, homeRoute, isSSRInit, disableAnonymousSSR, insertFeedRoot, emptySSRMount } = require('./signedInRoute');
 
 const RUNTIME_TAG = '<script src="/__clone/runtime.js"></script>';
 const STATIC_CDN = /^https:\/\/static\.cdninstagram\.com\//;
@@ -79,6 +79,7 @@ function personalize(html, { viewer = null, csrfToken, encryption, dropPrefetche
   const spec = route || homeRoute();
   const docDefines = new Set();
   let initTuple = null;
+  let ssrMount = null;
   if (homeSwitch) identity = true;
 
   const visit = (node) => {
@@ -98,6 +99,7 @@ function personalize(html, { viewer = null, csrfToken, encryption, dropPrefetche
     }
     if (homeSwitch && isSSRInit(node)) {
       disableAnonymousSSR(node);
+      ssrMount = node[3][0].eid || null;
       counts.ssrDisabled = (counts.ssrDisabled || 0) + 1;
       return undefined;
     }
@@ -183,6 +185,9 @@ function personalize(html, { viewer = null, csrfToken, encryption, dropPrefetche
     out = done.html;
     counts.feedRootResources = done.inserted;
     counts.feedRootUnmapped = done.missing.length;
+    const emptied = emptySSRMount(out, ssrMount);
+    out = emptied.html;
+    counts.ssrMarkupRemoved = emptied.removed;
   }
   if (out.includes('__CLONE_')) out = replacePlaceholders(out, viewer, csrfToken, escapeHtml);
   out = out.replace(/<head\b[^>]*>/i, (open) => `${open}${RUNTIME_TAG}`);

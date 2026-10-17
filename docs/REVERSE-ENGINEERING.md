@@ -280,3 +280,69 @@ logged-out-only bindings of section 9.
 The profile header reads `viewer.user` from PolarisProfilePageContentQuery and
 the posts tab reads `xdt_viewer.user.id` from PolarisProfilePostsQuery; both
 are null-dereferenced if absent, so the answers carry them.
+
+## 13. Signed-in document: login flash and route audit
+
+The anonymous `/` document's SSR mount holds the server-rendered login page.
+With `ssrInit({enabled:false})` the client's `CometSSRClientInjector` runs its
+"SSR is disabled from server" helper, which calls
+`CometSSRContentRevealer.unhideElement(eid)`: the splash screen is removed and
+the mount's `content-visibility` cleared immediately, before the client's own
+first commit. The hidden login markup therefore became visible for seconds on
+every signed-in load. The signed-in route now empties the mount (the element
+stays; `emptySSRMount` in `src/shell/signedInRoute.js`). The splash removal on
+that path is the client's own behaviour and is left as is, so a blank page
+remains until the first commit.
+
+Route audit, strictly offline (`node scripts/route-audit.js`, 2026-10-17;
+"504" is the loader's explicit "origin not contacted" answer for a document
+that is not stored, never a redirect or a stand-in page):
+
+| Route | Anonymous | Signed in |
+| --- | --- | --- |
+| `/` | 200, anonymous page | 200, signed-in route (PolarisFeedRoot) |
+| `/<local user>/` | 200, anonymous page | 200, signed-in route (PolarisProfilePostsTabRoot) |
+| `/<unknown user>/` | 200, anonymous page | 200, anonymous page |
+| `/p/<code>/`, `/stories/<user>/` | 200, anonymous page | 200, anonymous page (no signed-in route yet) |
+| `/accounts/emailsignup/` | 200 | 200, anonymous page |
+| `/explore/`, `/explore/search/`, `/reels/`, `/direct/inbox/`, `/accounts/activity/`, `/accounts/login/`, `/accounts/password/reset/`, `/create/select/` | 504 (document not stored) | 504 |
+| `/accounts/edit/` | 501 (not implemented) | 501 |
+
+Inside the signed-in app the client reaches Direct, profile, post and
+creation views through its own router (verified by the genuine checks);
+the gaps above are direct loads only.
+
+## 14. Client revisions: live, pinned, hybrid
+
+Instagram ships client revisions often (the store holds 1050627067; upstream
+answered 1050642531 during this work). A page and every bootloader answer it
+uses must share one revision (`ClientConsistency`, section 10).
+
+- Live: always the newest document; the signed-in route breaks whenever its
+  answers are not stored for that revision, and every new revision costs
+  upstream requests.
+- Pinned: one reviewed revision served until it is deliberately moved
+  (`scripts/refresh-client.js` moves documents and answers together); stable
+  and offline-safe, but stale.
+- Hybrid (implemented, `routeWithAnswers` in `src/server.js`): serve the page's
+  revision when its answers are stored or can be fetched once; otherwise the
+  last document the route was served from consistently (kept per route root in
+  the document store); report the rest in `/__loader/health` -> `revisions`.
+
+Comparison with Meowcord (https://github.com/meowcorded/meowcord, read
+2026-10-17; a self-hosted Discord clone serving a patched Discord web client,
+AGPL-3.0): it pins a reviewed client in `client/release.json` (build number,
+version hash, index and asset hashes), and `scripts/client-release.js`
+refuses an unreviewed build ("Unreviewed client release") before publishing;
+`scripts/client.js` publishes only when every asset was fetched. Its client
+patches are git diffs applied to a pinned Equicord commit
+(`client/vencord.json`, `client/equicord-patches/`), a failed apply aborts the
+build, and `scripts/vencord-check.mjs` loads the build headless and reports
+patches that had no effect. Taken from it: verifying consistency before
+serving rather than after (answers of another revision are refused, the
+last consistent document is served instead). Not taken: source-level patches
+(this loader has no client source; its few bundle patches are module-scoped
+find/replace with a stated reason, `src/shell/bundlePatches.js`, and
+`patcher.report()` in `/__loader/health` lists those that did not apply).
+A broader patch layer is not justified by the current bugs: each P0 cause was
+in the loader's own document handling, not in client code.

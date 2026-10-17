@@ -20,13 +20,20 @@ function clearSrcCache() {
   for (const key of Object.keys(require.cache)) if (key.startsWith(SRC)) delete require.cache[key];
 }
 
-async function startFakeOrigin() {
+/** `handler(req)` may answer a request itself ({ status, type, body }); else the default document. */
+async function startFakeOrigin(handler = null) {
   const received = [];
   const server = http.createServer((req, res) => {
     let body = '';
     req.on('data', (c) => (body += c));
     req.on('end', () => {
       received.push({ method: req.method, url: req.url, cookie: req.headers.cookie || null, headers: req.headers, body });
+      const own = handler && handler(req);
+      if (own) {
+        res.writeHead(own.status || 200, { 'content-type': own.type || 'text/html; charset=utf-8' });
+        res.end(own.body);
+        return;
+      }
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'set-cookie': 'sessionid=UPSTREAM; Path=/' });
       res.end('<!doctype html><html><head></head><body>upstream document</body></html>');
     });
@@ -37,12 +44,13 @@ async function startFakeOrigin() {
 
 /**
  * Start the whole server. Pass `dir` to reuse a data directory (a restart);
- * `keepDir` leaves it on close so a second server can open it.
+ * `keepDir` leaves it on close so a second server can open it; `origin` is a
+ * handler for the stand-in upstream (see startFakeOrigin).
  */
-async function startCloneServer(extraEnv = {}, { dir: reuseDir, keepDir = false } = {}) {
+async function startCloneServer(extraEnv = {}, { dir: reuseDir, keepDir = false, origin = null } = {}) {
   fs.mkdirSync(TEST_ROOT, { recursive: true });
   const dir = reuseDir || fs.mkdtempSync(path.join(TEST_ROOT, 'clone-'));
-  const fake = await startFakeOrigin();
+  const fake = await startFakeOrigin(origin);
   const env = {
     UPSTREAM_ORIGIN: fake.origin,
     BACKEND_DB: path.join(dir, 'db.sqlite'),

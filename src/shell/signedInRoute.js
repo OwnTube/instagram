@@ -1,7 +1,8 @@
 'use strict';
 
 /**
- * Signed-in home route (SHELL_SIGNED_IN_HOME=1, off by default until verified).
+ * Signed-in home route: on by default for a signed-in viewer (opt out with
+ * SHELL_SIGNED_IN_HOME=0, which serves every visitor the anonymous document).
  *
  * Built from the anonymous `/` document plus Instagram's own bootloader-endpoint
  * answer for `PolarisFeedRoot.react` (stored in .cache/bootloader). Contracts
@@ -200,6 +201,32 @@ function disableAnonymousSSR(node) {
   return node;
 }
 
+/**
+ * The anonymous document's server render: the login homepage markup inside the
+ * SSR mount (`<div id="<eid>" style="content-visibility:hidden">`). With SSR
+ * disabled the client never hydrates it, but `comet_ssr_unhide_early` reveals
+ * the mount before the client's own first commit replaces it, so a signed-in
+ * viewer saw the logged-out login page for seconds. A signed-in route keeps the
+ * mount element and drops only its children (a document with no server render,
+ * like Instagram's own signed-in pages); the splash screen covers the page
+ * until the client renders. Returns { html, removed } (removed: characters).
+ */
+function emptySSRMount(html, eid) {
+  if (!eid) return { html, removed: 0 };
+  const open = new RegExp(`<div id="${eid.replace(/[^\w-]/g, '')}"[^>]*>`).exec(html);
+  if (!open) return { html, removed: 0 };
+  const start = open.index + open[0].length;
+  const tags = /<div\b|<\/div>/g;
+  tags.lastIndex = start;
+  let depth = 1;
+  let m;
+  while ((m = tags.exec(html))) {
+    depth += m[0] === '<div' ? 1 : -1;
+    if (depth === 0) return { html: html.slice(0, start) + html.slice(m.index), removed: m.index - start };
+  }
+  return { html, removed: 0 };
+}
+
 /** The stored endpoint answer's payload ({allResources, hsrp, jsmods}), or null. */
 function parseAnswer(text) {
   try {
@@ -291,4 +318,4 @@ function insertFeedRoot(html, answers, docDefines, toLocal, initTuple, root = FE
   return { html: html.slice(0, at) + parts.join('') + html.slice(at), inserted: tags.length, missing };
 }
 
-module.exports = { isLoginHomeInitialize, toSignedInHome, toSignedInRoute, homeRoute, profileRoute, isSSRInit, disableAnonymousSSR, insertFeedRoot, parseAnswer, FEED_ROOT, LOGGED_OUT_ONLY, NO_LOCAL_SERVICE };
+module.exports = { emptySSRMount, isLoginHomeInitialize, toSignedInHome, toSignedInRoute, homeRoute, profileRoute, isSSRInit, disableAnonymousSSR, insertFeedRoot, parseAnswer, FEED_ROOT, LOGGED_OUT_ONLY, NO_LOCAL_SERVICE };

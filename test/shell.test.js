@@ -238,3 +238,14 @@ test('pages name no Facebook cross-site probe (this origin has no Facebook sessi
   assert.match(out, /"cross_site_request_url":null/);
   assert.match(out, /"machine_id":"m"/, 'the rest of the site data is unchanged');
 });
+
+test("the signed-in route drops the anonymous server render's markup, keeping the mount element", () => {
+  const { emptySSRMount } = require('../src/shell/signedInRoute');
+  const html = '<body><div id="mount_0_0_a" style="content-visibility:hidden"><div><div>Log into Instagram</div></div><div>x</div></div><script>after</script></body>';
+  const out = emptySSRMount(html, 'mount_0_0_a');
+  assert.strictEqual(out.html, '<body><div id="mount_0_0_a" style="content-visibility:hidden"></div><script>after</script></body>');
+  assert.strictEqual(out.removed, '<div><div>Log into Instagram</div></div><div>x</div>'.length);
+  assert.strictEqual(emptySSRMount(html, null).html, html, 'no server render named, nothing removed');
+  assert.strictEqual(emptySSRMount(html, 'mount_other').html, html);
+  assert.strictEqual(emptySSRMount('<div id="m"><div>unclosed', 'm').removed, 0, 'unbalanced markup is left alone');
+});

@@ -139,6 +139,9 @@ async function openSession(browserWsUrl) {
           status: null,
           failed: null,
           fromCache: false,
+          // CDP monotonic seconds; `end` set when loading finishes or fails.
+          start: msg.params.timestamp,
+          end: null,
         });
         break;
       case 'Network.responseReceived': {
@@ -158,11 +161,15 @@ async function openSession(browserWsUrl) {
         if (entry && typeof msg.params.encodedDataLength === 'number') {
           entry.encodedDataLength = msg.params.encodedDataLength;
         }
+        if (entry) entry.end = msg.params.timestamp;
         break;
       }
       case 'Network.loadingFailed': {
         const entry = session.requests.get(msg.params.requestId);
-        if (entry) entry.failed = msg.params.errorText + (msg.params.blockedReason ? ` (blocked: ${msg.params.blockedReason})` : '');
+        if (entry) {
+          entry.failed = msg.params.errorText + (msg.params.blockedReason ? ` (blocked: ${msg.params.blockedReason})` : '');
+          entry.end = msg.params.timestamp;
+        }
         break;
       }
       case 'Runtime.consoleAPICalled':
