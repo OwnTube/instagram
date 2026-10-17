@@ -363,15 +363,27 @@ Each item: status, root cause, change, tests, screenshot (in
   story with a full page load instead of the client's router, because a route
   definition (/ajax/bulk-route-definitions/) is needed and no genuine sample
   of that response exists here; none is fabricated.
-- Direct: the inbox (`/direct/inbox/`) and a thread (`/direct/t/<key>/`) are
-  the signed-in PolarisDirectInboxRoot route. Checked in the browser with
-  `.scratch/probe-route.js`: the inbox lists the thread with its last message
-  and unread state; the thread page shows the header, the messages and "Seen".
-  NOT working yet: sending from the thread page (its composer needs
-  `ZenonGraphQLMWThriftMessageSender`, the notes tray needs
-  `IGDInboxTray.react`, the chat tab needs `IGDChatTabRootOffMsys.react`; none
-  is in the snapshot, see docs/CLIENT-PINNING.md). Sending through the chat
-  tabs on the home page works (genuine feed check).
+- Direct: `scripts/genuine-direct-check.js` 8/8, strict offline, on snapshot
+  rev1050701999-20261017T075357Z (the active rev1050682636 snapshot lacks the
+  composer's and the notes tray's modules). The inbox (`/direct/inbox/`) and a
+  thread (`/direct/t/<key>/`) are the signed-in PolarisDirectInboxRoot route:
+  the inbox lists B's thread with its last message; the thread page shows the
+  header and messages; opening it marks it read (useIGDMarkThreadAsReadMutation,
+  conversation_members.last_seen_at); a reply typed in the thread composer and
+  sent with Enter goes through IGDirectTextSendMutation, is stored (messages
+  row) and is shown after B's message; signed out the path is a 404.
+  Fixed on the way: a chat tab opened over the thread page (the thread URL now
+  keeps the inbox route's page id, `DirectInboxPage`, the id
+  useShouldHideChatTabs lists); the thread composer threw on a missing
+  `thread_subtype`; messages had no `sender`, so avatars fell back to a
+  missing image; and every pinned document carried its acquisition-time
+  ServerTimeData, which set the client's clock back (a new message was dated
+  23 minutes early and listed above older ones). Now the shell writes this
+  response's time there (src/shell/personalize.js).
+  Not covered: sending through the home page's chat tabs (no check exercises
+  it); live delivery of incoming messages (the client's realtime gateway,
+  DGW/MQTT, has no local counterpart and logs
+  `unsupported_environment_retry_with_mqtt`; new messages appear on reload).
 - Reels: `/reels/` is the signed-in PolarisClipsTabRoot route and
   PolarisClipsHomeRootQuery answers an empty connection (local accounts
   publish photos only). NOT working yet: the viewer container
@@ -423,8 +435,7 @@ docs/REVERSE-ENGINEERING.md section 13.
 ## Next tasks
 
 1. Activate the snapshot built from acquisition 20261017T074937Z once it is
-   verified, then re-check Direct sending, the notes tray, the chat tab and
-   Reels in the browser (`.scratch/probe-route.js`, then a genuine check each).
+   verified, then re-run the genuine checks and Reels on it.
 2. Explore: the client bundles never name its root module (only a route
    definition does), so `/explore/` stays a 404 until a genuine route
    definition or document for it is available.

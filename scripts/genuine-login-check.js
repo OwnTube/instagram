@@ -10,7 +10,15 @@
  *      contract (username + password only, no contact point);
  *   2. a wrong password typed into the genuine form is refused, with no session;
  *   3. the right password signs the browser in as that user (current_user,
- *      ds_user_id) and the form follows the same-site redirect.
+ *      ds_user_id) and the form follows the same-site redirect;
+ *   4. in a narrow window (800x600, below the login homepage's 1024px layout
+ *      breakpoint) a reload, after the client has reported its window in the
+ *      `wd` cookie, is served without the stored wide server render and has
+ *      no page error. (The first narrow visit, before any `wd` report, still
+ *      gets the stored render; its hydration error, if any, is reported.)
+ *
+ * The login flow runs in a 1280x900 window, as the other genuine checks do:
+ * the stored server render was made for a wide window.
  *
  * Page and bundles come from the active pinned client snapshot (or
  * CLIENT_SNAPSHOT_ID) without any request to www.instagram.com (upstream guard).
@@ -125,14 +133,19 @@ async function main() {
     check('an account was created with username and password only', created.status === 'SUCCESS', JSON.stringify(created.errors));
     const session = await openSession(browserWsUrl);
     watchExternal(session, base);
+    await session.cdp.send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false });
 
+    // Each page error is tagged with the step it happened in.
+    const stage = (name) => session.exceptions.forEach((e) => { e.stage = e.stage || name; });
     const wrong = await loginThroughForm(session, base, username, 'wrong password 1');
+    stage('the wrong-password login');
     await captureScreenshot(session, path.join(SCRATCH, 'wrong.png'));
     check('the genuine form sent useCDSWebLoginMutation', wrong.filled && wrong.sent && wrong.status === 200, `status ${wrong.status}`);
     check('a wrong password is refused with no session', (await me(session)).status === 401 && /incorrect/i.test(wrong.text));
 
     await session.cdp.send('Network.clearBrowserCookies');
     const right = await loginThroughForm(session, base, username, PASSWORD);
+    stage('the right-password login');
     await captureScreenshot(session, path.join(SCRATCH, 'right.png'));
     const who = await me(session);
     check('the right password signs the browser in as that user', right.sent && who.status === 200 && who.username === username, JSON.stringify(who));
@@ -143,6 +156,23 @@ async function main() {
     check('no upstream request was attempted by the server (upstream guard)', upstreamGuard.attempts.length === 0, upstreamGuard.attempts.map((a) => `${a.method} ${a.url}`).slice(0, 5).join(' '));
     if (session.cspRefused.length) console.log(`INFO  ${session.cspRefused.length} external load(s) refused by the offline CSP (never sent): ${[...new Set(session.cspRefused)].slice(0, 3).join(' ')}`);
     if (stalls.length) console.log(`WARN  the client stalled on ${stalls.length} load(s) and was reloaded: ${stalls.join(', ')}`);
+    stage('the login flow');
+
+    // 4. A narrow window.
+    await session.cdp.send('Network.clearBrowserCookies');
+    await session.cdp.send('Emulation.setDeviceMetricsOverride', { width: 800, height: 600, deviceScaleFactor: 1, mobile: false });
+    const firstNarrow = session.exceptions.length;
+    await loadMounted(session, `${base}/`);
+    const firstVisitErrors = session.exceptions.splice(firstNarrow);
+    for (const e of firstVisitErrors) console.log(`INFO  first narrow visit (no window report yet, stored wide render): ${e.text.split('\n')[0].slice(0, 120)}`);
+    const reported = await evaluate(session, "(document.cookie.match(/(?:^|; )wd=([^;]+)/) || [])[1] || null");
+    await loadMounted(session, `${base}/`);
+    stage('the narrow-window reload');
+    const narrowServed = await evaluate(session, "[...document.querySelectorAll('script[type=\"application/json\"]')].some((e) => /\"ssrInit\",null,\\[\\{\"enabled\":false/.test(e.textContent))");
+    const narrowForm = await evaluate(session, "Boolean(document.querySelector('input[type=password]'))");
+    check('a narrow window reports its size (wd cookie) and its reload gets no stored wide render', reported === '800x600' && narrowServed && narrowForm, `wd ${reported}, server render disabled ${narrowServed}, login form ${narrowForm}`);
+
+    for (const e of session.exceptions) console.log(`INFO  page error during ${e.stage || 'unknown step'}: ${e.text.split('\n')[0].slice(0, 160)}${e.url ? ` at ${e.url.replace(base, '')}` : ''}`);
     check('no uncaught page errors', session.exceptions.length === 0, session.exceptions.map((e) => e.text).join('; ').slice(0, 300));
   } finally {
     child.kill('SIGKILL');

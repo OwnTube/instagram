@@ -15,9 +15,14 @@
  *   prefetches   Relay prefetches are upstream data for upstream accounts.
  *                With dropPrefetches they are removed, so the client issues
  *                the query itself and our GraphQL endpoint answers it.
- *   server time  ServerTimeData (the response's own clock reading) becomes
- *                this server's time; a pinned document's would set the
- *                client's clock back to when it was acquired.
+ *   server time  Where the server render is dropped, ServerTimeData (the response's own
+ *                clock reading) becomes this server's time; a pinned
+ *                document's would set the client's clock back to when it
+ *                was acquired.
+ *   no SSR       With serverRender false the page's server render is not
+ *                hydrated (ssrInit disabled, the SSR mount emptied) and the
+ *                client renders the page itself; for a browser whose window
+ *                the stored render does not fit (src/server.js).
  *   runtime      /__clone/runtime.js is inserted as the first script.
  *
  * The output is per-browser (it carries the CSRF token) and must be served
@@ -73,7 +78,7 @@ function replacePlaceholders(str, viewer, csrfToken, escape = (x) => x) {
  * the anonymous page to a signed-in route: `route` (src/shell/signedInRoute.js,
  * default the home feed) at `routeUrl`.
  */
-function personalize(html, { viewer = null, csrfToken, encryption, dropPrefetches = false, identity = false, signedInHome = false, feedRoot = null, route = null, routeUrl = '/', toLocal = (u) => u, stats, now = Date.now() } = {}) {
+function personalize(html, { viewer = null, csrfToken, encryption, dropPrefetches = false, identity = false, signedInHome = false, feedRoot = null, route = null, routeUrl = '/', toLocal = (u) => u, stats, now = Date.now(), serverRender = true } = {}) {
   if (typeof html !== 'string' || !html) return html;
   const counts = { encryption: 0, csrf: 0, viewer: 0, prefetchesDropped: 0, placeholders: 0, signedInRoute: 0 };
   // The experimental signed-in route needs identity that agrees with it.
@@ -100,7 +105,7 @@ function personalize(html, { viewer = null, csrfToken, encryption, dropPrefetche
       counts.signedInRoute += 1;
       return REMOVE;
     }
-    if (homeSwitch && isSSRInit(node)) {
+    if ((homeSwitch || !serverRender) && isSSRInit(node)) {
       disableAnonymousSSR(node);
       ssrMount = node[3][0].eid || null;
       counts.ssrDisabled = (counts.ssrDisabled || 0) + 1;
@@ -128,7 +133,11 @@ function personalize(html, { viewer = null, csrfToken, encryption, dropPrefetche
     // ServerTime compares these with the page load's own timing and, when they
     // disagree by more than the transfer time, offsets every client clock
     // reading (message and seen timestamps, relative times) by the difference.
-    if (isDefineTuple(node) && node[0] === 'ServerTimeData' && node[2] && typeof node[2].serverTime === 'number') {
+    // Only where the server-rendered markup is dropped (the signed-in route,
+    // or serverRender false), so nothing on the page was rendered at the
+    // stored time. A page that keeps its markup keeps the time it was
+    // rendered at (hydration compares time-dependent output with it).
+    if ((homeSwitch || !serverRender) && isDefineTuple(node) && node[0] === 'ServerTimeData' && node[2] && typeof node[2].serverTime === 'number') {
       node[2].serverTime = now;
       node[2].timeOfRequestStart = now;
       node[2].timeOfResponseStart = now;
@@ -207,6 +216,11 @@ function personalize(html, { viewer = null, csrfToken, encryption, dropPrefetche
     out = done.html;
     counts.feedRootResources = done.inserted;
     counts.feedRootUnmapped = done.missing.length;
+    const emptied = emptySSRMount(out, ssrMount);
+    out = emptied.html;
+    counts.ssrMarkupRemoved = emptied.removed;
+  }
+  if (!serverRender && !(homeSwitch && counts.signedInRoute)) {
     const emptied = emptySSRMount(out, ssrMount);
     out = emptied.html;
     counts.ssrMarkupRemoved = emptied.removed;

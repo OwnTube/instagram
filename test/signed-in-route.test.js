@@ -7,7 +7,8 @@
  *
  *  - a signed-in viewer gets the signed-in route by default, with none of the
  *    anonymous page's server-rendered login markup (the login flash);
- *  - an anonymous visitor still gets the page's own server render;
+ *  - an anonymous visitor still gets the page's own server render, unless
+ *    their window (the `wd` cookie) is narrower than the render's layout;
  *  - a route whose answers the snapshot does not hold (here the profile) is
  *    served as the page's own route and reported in diagnostics; nothing is
  *    fetched to fill it, and no answer of another revision is used;
@@ -59,6 +60,22 @@ test('signed-in route: default, no login markup, pinned answers only', async (t)
   await t.test('an anonymous visitor keeps the page and its server render', async () => {
     const html = await get(new Browser(s.base), '/');
     assert.ok(html.includes('Log into Instagram') && !html.includes('PolarisFeedRoot'));
+  });
+
+  await t.test("a window narrower than the stored render's layout gets the page without its server render", async () => {
+    // The client reports its window in the `wd` cookie; at or below the login
+    // homepage's 1024px breakpoint it lays the page out differently from the
+    // stored (wide) render, so that render is not hydrated.
+    const narrow = new Browser(s.base);
+    narrow.jar.set('wd', '800x600');
+    const html = await get(narrow, '/');
+    assert.match(html, /"enabled":false/, 'server render disabled');
+    assert.match(html, /<div id="mount_0_0_t" style="content-visibility:hidden"><\/div>/, 'the mount stays, empty');
+    assert.ok(!html.includes('Log into Instagram'), 'no stored markup to hydrate');
+    const wide = new Browser(s.base);
+    wide.jar.set('wd', '1280x900');
+    const kept = await get(wide, '/');
+    assert.ok(kept.includes('Log into Instagram') && /"enabled":true/.test(kept), 'a wide window keeps the server render');
   });
 
   await t.test('a route the snapshot cannot answer is reported, not fetched or mixed', async () => {

@@ -360,6 +360,24 @@ function signedInRouteFor(req) {
 }
 
 /**
+ * Whether the stored server render fits this browser's window. The stored
+ * documents were rendered for a wide window (the login homepage's wide
+ * layout); the client lays the page out from the window itself
+ * (useMatchViewport, e.g. CAAFetaLoginHomepageLayout's `max-width: 1024px`),
+ * so in a narrower window it renders other markup than the stored one and
+ * hydration fails (React #418). The client reports its window in the `wd`
+ * cookie (`<width>x<height>`, written on load and resize), which Instagram's
+ * server uses for its own render; a reported width at or below the
+ * breakpoint gets the page without its server render. With no report (a
+ * first visit) the stored render is kept, as the server's own guess would be.
+ */
+const NARROW_LAYOUT_MAX_WIDTH = 1024;
+function serverRenderFits(req) {
+  const wd = /(?:^|;\s*)wd=(\d{1,5})x\d{1,5}(?:;|$)/.exec(req.headers.cookie || '');
+  return !wd || Number(wd[1]) > NARROW_LAYOUT_MAX_WIDTH;
+}
+
+/**
  * Send an HTML document after per-request personalisation (our encryption key,
  * this browser's CSRF token, the clone viewer). The result is specific to one
  * browser, so it is never cacheable by anyone else.
@@ -372,7 +390,7 @@ function sendHtml(req, res, status, html) {
   const withAnswers = route ? routeWithAnswers(route, html) : null;
   const signedInHome = Boolean(withAnswers);
   const feedRoot = withAnswers ? withAnswers.answers : null;
-  const out = personalize(html, { ...ctx, identity: false, signedInHome, feedRoot, route, routeUrl: req.path, toLocal: mapUrl, dropPrefetches: forceDropPrefetches, stats });
+  const out = personalize(html, { ...ctx, identity: false, signedInHome, feedRoot, route, routeUrl: req.path, toLocal: mapUrl, dropPrefetches: forceDropPrefetches, serverRender: serverRenderFits(req), stats });
   if (withAnswers && route.status) status = route.status;
   if (cloneInstance) {
     const mentionsKey = /public_?key/i.test(html);

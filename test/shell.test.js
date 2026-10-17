@@ -73,13 +73,6 @@ test('personalize', async (t) => {
     assert.match(personalize(anonymousPage(), { encryption: OURS, identity: true }), /"USER_ID":"0"/);
   });
 
-  await t.test("the page's server time is this response's, not the stored page's", () => {
-    const stored = { serverTime: 1700000000000, timeOfRequestStart: 1699999999900.5, timeOfResponseStart: 1699999999950.2 };
-    const html = page([{ define: [['ServerTimeData', [], stored, 5]] }]);
-    const out = personalize(html, { encryption: OURS, now: 1800000000000 });
-    assert.match(out, /"ServerTimeData",\[\],\{"serverTime":1800000000000,"timeOfRequestStart":1800000000000,"timeOfResponseStart":1800000000000\}/);
-  });
-
   await t.test('markup in a display name cannot break out of a JSON block', () => {
     const name = '</script><img src=x onerror=alert(1)>';
     const out = personalize(anonymousPage(), { viewer: viewer({ display_name: name }), csrfToken: 'x', encryption: OURS, identity: true });
@@ -264,4 +257,36 @@ test("the signed-in route drops the anonymous server render's markup, keeping th
   assert.strictEqual(emptySSRMount(html, null).html, html, 'no server render named, nothing removed');
   assert.strictEqual(emptySSRMount(html, 'mount_other').html, html);
   assert.strictEqual(emptySSRMount('<div id="m"><div>unclosed', 'm').removed, 0, 'unbalanced markup is left alone');
+});
+
+test("the signed-in route's server time is this response's; a server-rendered page keeps its own", () => {
+  const init = ['CometPlatformRootClient', 'initialize', [], [{
+    expectedPreloaders: [],
+    additional_roots: [{ __dr: 'CAAIGLoginHomepageRoot.react' }],
+    initialRouteInfo: { route: { actorID: '0', routePath: '/', url: '/', rootView: { resource: { __dr: 'CAAIGLoginHomepageRoot.react' } } } },
+    ssrEnabled: true,
+  }]];
+  const stored = { serverTime: 1700000000000, timeOfRequestStart: 1699999999900.5, timeOfResponseStart: 1699999999950.2 };
+  const html = page([{ define: [['ServerTimeData', [], stored, 5], ['CurrentUserInitialData', [], { USER_ID: '0' }, 1]] }, { require: [init] }]);
+  const answer = { allResources: [], hsrp: { hsdp: {}, hblp: { rsrcMap: {}, compMap: {} } }, jsmods: { define: [], require: [] } };
+  const kept = personalize(html, { viewer: viewer(), encryption: OURS, now: 1800000000000 });
+  assert.ok(kept.includes(JSON.stringify(stored)), 'the server-rendered page keeps the time it was rendered at');
+  const on = personalize(html, { viewer: viewer(), encryption: OURS, signedInHome: true, feedRoot: answer, now: 1800000000000 });
+  assert.ok(on.includes('"ServerTimeData",[],{"serverTime":1800000000000,"timeOfRequestStart":1800000000000,"timeOfResponseStart":1800000000000}'));
+});
+
+test('serverRender false: the stored render is not hydrated and the clock is this response', () => {
+  const stored = { serverTime: 1700000000000, timeOfRequestStart: 1700000000000, timeOfResponseStart: 1700000000000 };
+  const html = page(
+    [{ define: [['ServerTimeData', [], stored, 5]] }, { require: [['CometSSRClientInjector', 'ssrInit', null, [{ enabled: true, eid: 'mount_0_0_x' }]]] }],
+    '<div id="mount_0_0_x" style="content-visibility:hidden"><div><span>Log into Instagram</span></div></div>',
+  );
+  const stats = {};
+  const out = personalize(html, { encryption: OURS, serverRender: false, now: 1800000000000, stats });
+  assert.match(out, /"ssrInit",null,\[\{"enabled":false,"eid":"mount_0_0_x"\}\]/);
+  assert.match(out, /<div id="mount_0_0_x" style="content-visibility:hidden"><\/div>/);
+  assert.ok(!out.includes('Log into Instagram'));
+  assert.match(out, /"serverTime":1800000000000/);
+  assert.ok(stats.ssrMarkupRemoved > 0);
+  assert.ok(personalize(html, { encryption: OURS }).includes('Log into Instagram'), 'kept by default');
 });

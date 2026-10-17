@@ -12,7 +12,13 @@
  *   - absolute URLs to Instagram's static CDN (scripts the Bootloader inserts,
  *     stylesheets, fonts, images, fetches) are sent through this origin's
  *     /__ig asset proxy, which keeps them on disk, so the page never loads code
- *     from Instagram directly and works offline from the local store.
+ *     from Instagram directly and works offline from the local store;
+ *   - the client's window-size hint cookies (`wd`, `dpr`) are written for this
+ *     origin: the client sets every cookie with `Domain=.instagram.com`
+ *     (CookieDomain), which a browser refuses here, and the server reads `wd`
+ *     to decide whether the stored server render fits the window. Every other
+ *     cookie the client writes (csrftoken, ds_user_id, ...) is left as it is,
+ *     so it cannot replace this server's own.
  *
  * It holds no secret and reads no cookie.
  */
@@ -160,6 +166,23 @@
     }
     return setAttr.apply(this, arguments);
   };
+
+  var HINT_COOKIE = /^\s*(?:wd|dpr)=/;
+  var cookieProp = Object.getOwnPropertyDescriptor(Document.prototype, 'cookie');
+  if (cookieProp && cookieProp.set) {
+    Object.defineProperty(Document.prototype, 'cookie', {
+      configurable: true,
+      enumerable: cookieProp.enumerable,
+      get: cookieProp.get,
+      set: function (value) {
+        if (typeof value === 'string' && HINT_COOKIE.test(value)) {
+          value = value.replace(/;\s*domain=[^;]*/gi, '');
+          if (location.protocol !== 'https:') value = value.replace(/;\s*secure(?=;|$)/gi, '');
+        }
+        return cookieProp.set.call(this, value);
+      },
+    });
+  }
 
   var realFetch = window.fetch;
   if (realFetch) {
