@@ -137,7 +137,7 @@ async function main() {
     const reqs = [...session.requests.values()];
     const friendly = (r) => ((r.postData || '').match(/fb_api_req_friendly_name=([^&]+)/) || [])[1] || null;
     const unanswered = [...new Set(reqs.filter((r) => friendly(r) && r.status && r.status !== 200).map((r) => `${friendly(r)}:${r.status}`))];
-    const failed = [...new Set(reqs.filter((r) => !friendly(r) && r.status >= 400).map((r) => `${r.status} ${new URL(r.url).pathname}`))];
+    const failed = [...new Set(reqs.filter((r) => !friendly(r) && r.status >= 400).map((r) => { const u = new URL(r.url); const mods = u.pathname.startsWith('/ajax/bootloader-endpoint') ? ` ${u.searchParams.get('modules') || ''}|${u.searchParams.get('nb_modules') || ''}@${u.searchParams.get('__rev') || ''}` : ''; return `${r.status} ${u.pathname}${mods}`; }))];
     check('every operation, module and image the creation flow asked for was answered', unanswered.length === 0 && failed.length === 0, [...unanswered, ...failed].join(', '));
     const errors = session.consoleMessages.filter((m) => m.level === 'error').map((m) => m.text.replace(/\s+/g, ' ').slice(0, 160));
     if (errors.length) console.log(`INFO  console errors: ${[...new Set(errors)].join(' | ')}`);

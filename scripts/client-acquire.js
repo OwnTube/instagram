@@ -7,8 +7,9 @@
  * src/upstream.js; a page load cannot start it.
  *
  * One bounded, anonymous pass (no cookies of any account, no login):
- *   1. the navigation documents / and /accounts/emailsignup/ - both must be
- *      200 HTML of the SAME revision, else the pass stops;
+ *   1. the navigation documents (/, /accounts/emailsignup/, /accounts/login/,
+ *      /accounts/password/reset/) - all must be 200 HTML of the SAME revision,
+ *      else the pass stops;
  *   2. the bootloader-endpoint answers for the modules the client needs (the
  *      signed-in routes' roots and the lazily loaded modules already known),
  *      each asked for that revision; an answer declaring another revision is
@@ -29,7 +30,7 @@
  *   node scripts/client-snapshot.js verify <id> --browser
  *   node scripts/client-snapshot.js activate <id>
  *
- *   NODE_USE_ENV_PROXY=1 node scripts/client-acquire.js [--modules A,B] [--max-assets N] [--dry-run]
+ *   NODE_USE_ENV_PROXY=1 node scripts/client-acquire.js [--modules A,B] [--set 'A,B|C'] [--max-assets N] [--dry-run]
  */
 
 const crypto = require('node:crypto');
@@ -47,7 +48,9 @@ const { ROUTES } = require('./client-snapshot');
 const ORIGIN = 'https://www.instagram.com';
 const BOOT_DIR = process.env.BOOTLOADER_CACHE_DIR || '.cache/bootloader';
 const ASSET_DIR = process.env.ASSET_CACHE_DIR || '.cache/assets';
-const DOCUMENTS = ['/', '/accounts/emailsignup/'];
+// Public anonymous pages. A pass fetches all of them at one revision; a page
+// cannot be added to an existing snapshot later (it would be another revision).
+const DOCUMENTS = ['/', '/accounts/emailsignup/', '/accounts/login/', '/accounts/password/reset/'];
 const PAUSE_MS = Number(process.env.ACQUIRE_PAUSE_MS || 3000);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const sha256 = (b) => crypto.createHash('sha256').update(b).digest('hex');
@@ -83,6 +86,14 @@ function moduleSets() {
   }
   const extra = option('--modules', '');
   for (const m of extra.split(',').filter(Boolean)) sets.set(`${m}|`, { modules: m, nbModules: '' });
+  // A set the client requests as one (comma-joined modules, optional
+  // non-blocking part), exactly as /__loader/health -> client.missingRequests
+  // names it: --set "A.react,B.react|C.react" (repeatable).
+  process.argv.forEach((a, i) => {
+    if (a !== '--set' || !process.argv[i + 1]) return;
+    const [modules, nbModules = ''] = process.argv[i + 1].split('|');
+    sets.set(`${modules}|${nbModules}`, { modules, nbModules });
+  });
   return [...sets.values()];
 }
 
@@ -111,7 +122,7 @@ async function main() {
     const at = new Date().toISOString();
     try {
       const res = await fetchUpstream(url, { headers });
-      provenance.requests.push({ kind, url, status: res.status, sha256: sha256(res.body), bytes: res.body.length, contentType: res.headers.get('content-type'), at });
+      provenance.requests.push({ kind, url, finalUrl: res.finalUrl, status: res.status, sha256: sha256(res.body), bytes: res.body.length, contentType: res.headers.get('content-type'), at });
       if (res.status !== 200) {
         provenance.stoppedReason = `${kind} ${url}: HTTP ${res.status}`;
         return null;
@@ -131,6 +142,15 @@ async function main() {
     for (const p of DOCUMENTS) {
       const res = await get('document', `${ORIGIN}${p}`, NAVIGATION);
       if (!res) return 1;
+      const landed = new URL(res.finalUrl).pathname;
+      if (landed !== p) {
+        // Redirected (e.g. a page that needs a session): the bytes are not
+        // this page, so they are not stored under its path.
+        provenance.requests[provenance.requests.length - 1].refused = `redirected to ${landed}`;
+        console.log(`  refused document ${p}: redirected to ${landed}`);
+        await sleep(PAUSE_MS);
+        continue;
+      }
       const text = res.body.toString('utf8');
       const rev = revisionOfText(text);
       if (!/text\/html/.test(res.headers.get('content-type') || '') || !rev) {

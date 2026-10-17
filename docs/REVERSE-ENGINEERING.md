@@ -305,9 +305,9 @@ that is not stored, never a redirect or a stand-in page):
 | `/` | 200, anonymous page | 200, signed-in route (PolarisFeedRoot) |
 | `/<local user>/` | 200, anonymous page | 200, signed-in route (PolarisProfilePostsTabRoot) |
 | `/<unknown user>/` | 200, anonymous page | 200, anonymous page |
-| `/p/<code>/`, `/stories/<user>/` | 200, anonymous page | 200, anonymous page (no signed-in route yet) |
+| `/p/<code>/`, `/stories/<user>/` | 200, anonymous page | 200, anonymous page with login markup (no signed-in route yet; docs/CLIENT-PINNING.md) |
 | `/accounts/emailsignup/` | 200 | 200, anonymous page |
-| `/explore/`, `/explore/search/`, `/reels/`, `/direct/inbox/`, `/accounts/activity/`, `/accounts/login/`, `/accounts/password/reset/`, `/create/select/` | 504 (document not stored) | 504 |
+| `/explore/`, `/explore/search/`, `/reels/`, `/direct/inbox/`, `/accounts/activity/`, `/accounts/login/`, `/accounts/password/reset/`, `/create/select/` | 404 (not in the pinned snapshot) | 404 |
 | `/accounts/edit/` | 501 (not implemented) | 501 |
 
 Inside the signed-in app the client reaches Direct, profile, post and

@@ -102,7 +102,11 @@ async function main() {
   await api.signup(null, { username, fullName: 'Restart Check' });
 
   const { child: chrome, browserWsUrl } = await launchChromium(path.join(SCRATCH, 'profile'));
-  const signedIn = `(() => { const t = document.body ? document.body.innerText : ''; const m = document.querySelector('[id^=mount_]'); return Boolean(m && getComputedStyle(m).contentVisibility === 'visible' && /Home/.test(t) && !/Log into Instagram|Create new account/.test(t)); })()`;
+  // Signed in: the mount is visible, the shell links to the viewer's profile,
+  // and none of the logged-out page's login markup is present.
+  const signedIn = `(() => { const t = document.body ? document.body.innerText : ''; const m = document.querySelector('[id^=mount_]'); return Boolean(m && getComputedStyle(m).contentVisibility === 'visible' && document.querySelector('a[href="/${username}/"]') && !/Log into Instagram|Create new account|Sign up/.test(t)); })()`;
+  // The first signed-in visit opens "Turn on Notifications"; dismiss it as a user would.
+  const dismiss = "(() => { const b = [...document.querySelectorAll('button')].find((e) => (e.innerText || '').trim() === 'Not Now'); b && b.click(); return Boolean(b); })()";
   let second = null;
   try {
     const session = await openSession(browserWsUrl);
@@ -113,6 +117,8 @@ async function main() {
     await session.cdp.send('Page.navigate', { url: `${base}/` });
     const cold = await waitFor(session, signedIn, 45000);
     await sleep(1500);
+    await session.cdp.send('Runtime.evaluate', { expression: dismiss });
+    await sleep(800);
     await shot(session, 'pin-D-1-signed-in-home-cold.png');
     check('cold load: the signed-in home renders from the pinned client', cold);
 
@@ -129,6 +135,8 @@ async function main() {
     await session.cdp.send('Page.reload', {});
     const after = await waitFor(session, signedIn, 45000);
     await sleep(1500);
+    await session.cdp.send('Runtime.evaluate', { expression: dismiss });
+    await sleep(800);
     await shot(session, 'pin-D-2-signed-in-home-after-restart.png');
     const me = await session.cdp.send('Runtime.evaluate', { expression: "fetch('/api/v1/accounts/current_user/').then(async (r) => (await r.json()).user?.username)", awaitPromise: true, returnByValue: true });
     check('after restart: the session persists and the signed-in home renders', after && me.result.value === username, me.result.value);

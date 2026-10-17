@@ -107,3 +107,55 @@ Every component that can make a network request, classified:
 
 The test snapshots are fixtures (synthetic documents in Instagram's
 bootstrap shape); the genuine browser checks run against the real snapshot.
+
+## Current snapshot (2026-10-17)
+
+Active: `rev1050669561-20261017T030543Z`, revision 1050669561, status
+`active`, built from acquisition `20261017T030239Z` (2 documents, 15 answers,
+136 new assets; 153 requests, all 200, none refused) plus the local asset
+store. 15 documents, 15 answers, 7508 assets (152.5 MB), known missing 0.
+Routes: home and profile supported (the previously missing
+`PolarisProfilePostsTabRoot.entrypoint`, `PolarisCreationModal.next.react`,
+`PolarisEmptyProfileOtherUsers.react`, `PolarisProfileNewUserActivatorsUnit.react`
+and `PolarisFollowingActionsModal.next.react` are all present at this
+revision). Bundle patches: all 4 apply.
+
+Verification (`client:verify --browser`, real snapshot, upstream guard on):
+login 9/9, signup 13/13, feed 18/18, engage 9/9 (core: pass, so `verified`);
+create 9/10, profile 9/10 (scope: PARTIAL).
+- create: the client asked `/ajax/bootloader-endpoint/?modules=
+  PolarisImmersiveFeedPostModal.react,PolarisFeedEmptySULWrapper.react`
+  (one combined set); the snapshot holds each module's own answer but not
+  that set, so it is a 404. Needs one more acquisition pass
+  (`--set 'PolarisImmersiveFeedPostModal.react,PolarisFeedEmptySULWrapper.react|'`).
+- profile: one bootloader request 404'd during verification; a standalone
+  re-run passed 10/10, so the failing set was not reproduced (the check now
+  prints the full `modules|nb_modules@rev` key).
+
+The second acquisition pass (20261017T031253Z, for the combined set and
+the roots below) got HTTP 429 at its third document and stopped; nothing
+was built from it and the active snapshot is unchanged. It is not retried
+during the cooldown.
+
+Restart (`scripts/pinned-restart-check.js`, server as a child process with
+the guard preloaded): 7/7 - cold and warm signed-in loads, restart keeps
+the same snapshot and the session, no browser request left the origin,
+neither process attempted an upstream request.
+
+### Route report (direct loads, `npm run audit:routes`, 0 upstream attempts)
+
+| Route | Anonymous | Signed in | Status |
+| --- | --- | --- | --- |
+| `/` | anonymous page | signed-in route (PolarisFeedRoot) | working |
+| `/<local user>/` | anonymous page | signed-in route (PolarisProfilePostsTabRoot) | working |
+| `/accounts/emailsignup/` | sign-up page | sign-up page | working anonymous; signed-in behaviour unverified |
+| `/p/<code>/`, `/stories/<user>/`, `/<unknown user>/` | anonymous page | anonymous page with login markup | broken signed in (needs PolarisPostRoot / PolarisStoriesMediaRoot answers) |
+| `/explore/`, `/explore/search/`, `/reels/`, `/direct/inbox/`, `/accounts/activity/`, `/create/select/` | 404 not in snapshot | 404 | unsupported as direct loads |
+| `/accounts/login/`, `/accounts/password/reset/` | 404 not in snapshot | 404 | unsupported (documents in the next acquisition pass) |
+| `/accounts/edit/` | 501 | 501 | unsupported (no local handler for the document) |
+
+Inside the app the client reaches the post modal, likes/comments, creation
+and the chat tabs through its own router (genuine checks). In-app navigation
+to explore, reels, Direct inbox and notifications asks for a route
+definition, which is answered "unavailable", so the client loads the URL as
+a page: a 404 today.
