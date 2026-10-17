@@ -3,7 +3,7 @@
 /**
  * Database access layer.
  *
- * Uses `node:sqlite`, the SQLite binding built into Node 24. That choice is
+ * Uses `node:sqlite`, the SQLite binding built into Node 22.13+. That choice is
  * deliberate:
  *   - no native compilation and no extra dependency, so the backend stays
  *     deployable in this environment exactly as the loader is;

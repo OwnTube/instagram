@@ -14,6 +14,7 @@
  * upstream guard and refused. Sessions here are synthetic.
  */
 
+const { tempDir } = require('./paths');
 const { test } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -22,7 +23,6 @@ const { installUpstreamGuard } = require('../scripts/lib/upstream-guard');
 const { writeSnapshot, documentAt } = require('./snapshot-fixture');
 
 const SRC = path.join(__dirname, '..', 'src');
-const TEST_ROOT = path.join(__dirname, '..', '.scratch', 'test');
 const guard = installUpstreamGuard();
 
 const ALICE = 'alice-session-value';
@@ -49,8 +49,7 @@ function loadWithEnv(modulePath, env) {
 
 /** Start the loader (no backend) on a fixture snapshot. */
 async function startLoader(env) {
-  fs.mkdirSync(TEST_ROOT, { recursive: true });
-  const dir = fs.mkdtempSync(path.join(TEST_ROOT, 'isolation-'));
+  const dir = tempDir('isolation-');
   writeSnapshot(dir, {
     documents: { '/': documentAt('100', { body: '<div id="who">anonymous</div>' }) },
     assets: { [ASSET_URL]: { body: 'console.log("pinned asset");', contentType: 'application/javascript' } },

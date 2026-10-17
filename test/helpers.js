@@ -10,6 +10,7 @@
  * rather than calling services directly.
  */
 
+const { tempDir } = require('./paths');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -19,12 +20,10 @@ const backendApp = require('../src/backend');
 
 // Test databases live under the project-local .scratch/ tree (gitignored), never
 // in the system temp directory, so no test artifact leaves the workspace.
-const TEST_ROOT = path.join(__dirname, '..', '.scratch', 'test');
 
 /** Fresh temporary database file, removed on cleanup. */
 function tempDbFile() {
-  fs.mkdirSync(TEST_ROOT, { recursive: true });
-  const dir = fs.mkdtempSync(path.join(TEST_ROOT, 'run-'));
+  const dir = tempDir('run-');
   return { file: path.join(dir, 'test.db'), dir };
 }
 

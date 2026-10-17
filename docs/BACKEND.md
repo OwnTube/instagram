@@ -63,7 +63,7 @@ src/backend/
 
 ## Database choice
 
-`node:sqlite`, the SQLite binding built into Node 24.
+`node:sqlite`, the SQLite binding built into Node (unflagged from 22.13; see `src/nodeVersion.js`).
 
 - No native compilation and no extra dependency, so the backend deploys exactly
   the way the loader already does.

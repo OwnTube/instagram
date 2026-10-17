@@ -5,8 +5,13 @@ anonymous HTML documents, JavaScript bundles, stylesheets, images and
 bootloader answers of ONE client revision) together with a local
 compatibility backend that answers the client's own API calls. The server
 serves the snapshot installed in `.cache/client/`; `client/` is the packaged
-copy that `npm run client:setup` installs from, offline (see
+copy that `npm run client:setup` installs from (see
 [Fresh install and upgrade](#fresh-install-and-upgrade)).
+
+**Requirements:** Node.js **22.13 or newer** (the backend uses the built-in
+`node:sqlite`, unflagged from 22.13; tested on 22.22). `package.json` declares
+`engines.node >=22.13.0` and `src/server.js` exits at once with a readable
+message on an older Node. `.nvmrc` selects 22.
 
 **Client serving is pinned-only.** The server never fetches, refreshes or
 substitutes the client at runtime: there is no live mode, no fallback to
@@ -28,7 +33,9 @@ The served client changes only through operator commands:
 | `npm run client:activate -- <id>` | Serves a verified snapshot (re-checks every hash); the previous one is kept for rollback. |
 | `npm run client:rollback` | Re-activates the previous snapshot that still validates. |
 | `npm run client:status` | Active snapshot, history, routes, scope, integrity. |
-| `npm run client:setup [-- --activate]` | Installs the packaged snapshot in `client/` into `.cache/client/` without any network access: re-hashes every blob, activates it when no valid snapshot is active (keeps a valid active one unless `--activate`). Idempotent. |
+| `npm run client:setup [-- --activate]` | Installs the packaged snapshot in `client/` into `.cache/client/`: re-hashes every blob, activates it when no valid snapshot is active (keeps a valid active one unless `--activate`). Idempotent. When `client/blobs/` is absent it first runs `client:fetch`; otherwise it makes no network request at all. |
+| `npm run client:fetch [-- --artifact URL\|FILE] [--replace]` | Downloads the pinned client artifact named in `client/bundle.json` (`artifact`: name, bytes, sha256, urls), verifies the file's sha256 and then every blob against the committed manifest in a staging directory, and only then renames it into `client/blobs/`. Contacts only the artifact host; Instagram/Meta hosts are refused. A valid `client/blobs/` is never replaced; an invalid one only with `--replace` (moved aside, not deleted). |
+| `npm run client:pack` | (maintainers) Packs `client/` into one deterministic artifact, `client/dist/<name>`, and pins its name, size and sha256 in `bundle.json`. |
 | `npm run client:bundle [-- <id>]` | Writes the active (or named verified) snapshot to `client/`, replacing the previous bundle: its manifest byte for byte, its blobs, `bundle.json`. |
 | `npm run client:bundle-check` | Validates `client/` without installing it. |
 
@@ -117,12 +124,15 @@ Deliberately **not** done:
 
 ## 3. Configuration
 
-All settings are environment variables with sensible defaults (`src/config.js`):
+All settings are environment variables with sensible defaults (`src/config.js`);
+`.env.example` lists every one with its default:
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `CLIENT_DIR` | `.cache/client` | Snapshot store the server serves from |
 | `CLIENT_SNAPSHOT_ID` | (the active one) | Serve this snapshot instead of the active one (used by `client:verify`) |
+| `CLIENT_ARTIFACT` | (`bundle.json` `artifact.urls`) | Where `client:setup`/`client:fetch` get the pinned artifact: an https URL or a file path. Its sha256 must equal the pinned one |
+| `SHELL_SIGNED_IN_HOME` / `SHELL_DROP_PREFETCHES` | `1` / `0` | Serve signed-in visitors the signed-in route document; drop prefetch hints |
 | `ALLOWED_ASSET_HOSTS` | `static.cdninstagram.com,www.instagram.com,instagram.com,scontent.cdninstagram.com` | Hosts whose `/__ig/<host>/...` paths are looked up in the snapshot (anything else is 403) |
 | `HOST` / `PORT` | `0.0.0.0` / `12000` | Listen address |
 | `CACHE_TTL_MS` | `300000` | Browser max-age for pinned static assets |
@@ -179,13 +189,14 @@ backend behaviour. It is off only when `BACKEND_ENABLED=0`.
 | `BACKEND_ENABLED` | `1` | Set to `0` to run the loader without the backend |
 | `BACKEND_PREFIX` | `/__backend` | Mount point for the API |
 | `BACKEND_DB` | `.data/backend.db` | SQLite file (created with migrations on start) |
-| `BACKEND_COOKIE` / `BACKEND_CSRF_COOKIE` | `igloader_session` / `igloader_csrf` | Our own cookies, scoped to the prefix |
+| `BACKEND_COOKIE` / `BACKEND_CSRF_COOKIE` / `BACKEND_VIEWER_COOKIE` | `sessionid` / `csrftoken` / `ds_user_id` | Our own cookies, on our origin, with the names the genuine client reads; the values are issued by this server |
+| `CLONE_DATA_DIR` | the database's directory | Uploaded media |
 | `BACKEND_SECURE_COOKIES` | `false` | Set `1` when serving over HTTPS |
 | `SESSION_TTL_MS` / `SESSION_ROTATE_MS` | `604800000` / `3600000` | Session lifetime and rotation age |
 | `RATE_LIMIT_WINDOW_MS` / `RATE_LIMIT_MAX` | `60000` / `300` | General limiter |
 | `AUTH_RATE_LIMIT_MAX` | `20` | Tighter limiter for `/auth/login` and `/auth/register` |
 | `MAX_PAGE_SIZE` / `DEFAULT_PAGE_SIZE` | `100` / `20` | Pagination bounds |
-| `SCRYPT_COST` | `32768` | scrypt N |
+| `SCRYPT_COST` / `SCRYPT_BLOCK_SIZE` / `SCRYPT_PARALLELISM` / `SCRYPT_KEYLEN` | `32768` / `8` / `1` / `32` | scrypt parameters |
 | `TRUST_PROXY` | `false` | Trust `X-Forwarded-For` for client identity |
 | `BACKEND_VERBOSE` | `true` | Log backend requests |
 
@@ -195,17 +206,53 @@ backend behaviour. It is off only when `BACKEND_ENABLED=0`.
 
 ```bash
 git clone https://github.com/vibecodeforever/instagram.git && cd instagram
-npm ci                    # the four npm dependencies
-npm run client:setup      # offline: client/ -> .cache/client/, every hash checked, activated
-npm start                 # http://localhost:12000
+node --version            # must be 22.13 or newer
+npm ci                    # the npm dependencies
+npm run client:setup      # get + verify the pinned client, install it into .cache/client/
+npm start                 # http://localhost:12000  (PORT=... to change)
 ```
 
-`client:setup` reads only `client/` (layout in `client/README.md`): it checks
-`bundle.json` against the manifest and every blob against its sha256, copies
-what `.cache/client/` lacks, and activates the bundled snapshot if no valid
-snapshot is active. It never contacts Instagram (any network attempt fails
-the command), never falls back to fetching, and fails with the reason and the
-fix if the bundle is missing or altered. Running it again changes nothing.
+What `client:setup` does on a fresh clone:
+
+1. `client/bundle.json` and `client/snapshots/<id>/manifest.json` are committed;
+   the bodies (`client/blobs/`, Meta's files) are not.
+2. With `client/blobs/` absent it downloads the **pinned client artifact**:
+   one file whose name, byte length and sha256 are in `bundle.json`
+   (`artifact`), from `--artifact <url|file>`, else `CLIENT_ARTIFACT`, else
+   `bundle.json` `artifact.urls`. The file is hashed while it downloads into
+   `client/.staging-*/`; a wrong size or hash is rejected. It is then unpacked
+   in staging, every record is checked (the manifest must be the committed
+   one byte for byte, every blob must hash to its name, have the manifest's
+   size, and the set of blobs must be exactly the manifest's), and only then
+   is the staging directory renamed to `client/blobs/`. An interrupted or
+   rejected download leaves nothing behind and changes nothing that existed.
+3. It installs the blobs into `.cache/client/` (re-hashing each) and
+   activates the snapshot unless another valid snapshot is already active.
+4. It prints the hosts it contacted: the artifact host only. It never contacts
+   Instagram or Meta (those hosts are refused by name; every other request
+   in the process runs under the upstream guard and fails the command).
+
+If `.cache/client/` already holds the bundled snapshot, valid, setup
+downloads nothing. If no artifact source is reachable, setup stops with the
+URL it tried; it never substitutes fetching from Instagram. Getting a new
+client from Instagram is a separate, explicit operator command
+(`npm run client:acquire`).
+
+> **Status:** the artifact for the bundled revision
+> (`client-rev1050722040-20261017T170808Z.igrl.gz`, 58,747,347 bytes,
+> sha256 `27ad50d0…6ede9cf`) is pinned in `bundle.json`, and its URL is set to
+> a GitHub release asset of this repository, but **it is not published**:
+> the bodies are Instagram's proprietary client files, and whether to
+> redistribute them is the owner's decision (see [Licensing](#licensing)).
+> Until it is published, a fresh clone needs the artifact file or a
+> `client/blobs/` copy from a machine that has the snapshot
+> (`npm run client:setup -- --artifact /path/to/file`). See
+> `client/README.md` for publishing it.
+
+Configuration: every variable the server reads is listed with its default in
+`.env.example` (`cp .env.example .env`, then `node --env-file=.env src/server.js`).
+If the port is taken the server says which one and exits with status 1
+(`PORT=12001 npm start`).
 
 Upgrading to a newer packaged client:
 
@@ -222,7 +269,9 @@ bundled one is installed alongside it (`npm run client:activate -- <id>` later).
 
 Producing a new bundle (maintainers): `client:acquire` -> `client:build --
 --acquired <dir>` -> `client:verify -- <id> --browser` -> `client:activate --
-<id>` -> `npm run client:bundle` -> commit `client/`.
+<id>` -> `npm run client:bundle` -> `npm run client:pack` -> publish
+`client/dist/<name>` at the URL in `bundle.json` -> commit `client/bundle.json`
+and the manifest.
 
 Then open `http://localhost:12000/`: the pinned client is served from
 `.cache/client/`; nothing is fetched from Instagram.
@@ -242,14 +291,16 @@ evictions) and the most recent resource-loading failures with their causes.
 ### Tests
 
 ```bash
-npm test              # all 75 tests
+npm test              # every suite (364 tests at the last count)
 npm run test:backend  # migrations, auth/CSRF/isolation, API, crypto
 npm run test:loader   # loader rewriting + cache regression
 ```
 
 Tests use `node:test` (no test-framework dependency) and start the real Express
-stack on an ephemeral port against a throwaway database under `.scratch/test/`.
-They make no upstream requests.
+stack on an ephemeral port against a throwaway database under `.scratch/test/`
+(created on demand by `test/paths.js`, so a fresh clone needs no preparation).
+They make no upstream requests and do not need the pinned client installed:
+the suites that serve a client build small synthetic snapshots of their own.
 
 ### Checks and which ones contact Instagram
 
@@ -699,7 +750,7 @@ Instagram's path, not ours.
 
 ### Database and migrations
 
-SQLite via `node:sqlite` (built into Node 24, no native build, no dependency).
+SQLite via `node:sqlite` (built into Node 22.13+ and 24, no native build, no dependency).
 The file `.data/backend.db` is created and migrated on first start; migrations
 are append-only and recorded in `schema_migrations`.
 
@@ -803,3 +854,16 @@ Used consistently, and never upgraded without evidence:
 | `docs/BACKEND.md` | Backend architecture |
 | `docs/api-compatibility.json` | Machine-readable endpoint/compatibility inventory |
 | `.gitignore` | Excludes `node_modules/`, `.data/`, `.scratch/` |
+
+## 11. Licensing
+
+Two different kinds of material are in or around this repository:
+
+| Material | Where | Status |
+| --- | --- | --- |
+| This project's own code and documentation | `src/`, `scripts/`, `test/`, `docs/`, the README, `client/bundle.json` | **No license has been chosen yet.** Until the owner picks one there is no `LICENSE` file, and no rights beyond GitHub's terms are granted. |
+| Instagram's web client: HTML documents, JavaScript, CSS, images, bootloader answers | `client/blobs/`, `.cache/client/blobs/`, the packed artifact `client/dist/*.igrl.gz` | **Meta's proprietary files.** They are not this project's work, no project license covers them, and this project claims no right to redistribute them. They are not committed (`client/blobs/` is gitignored) and the artifact is not published. |
+
+`client/snapshots/<id>/manifest.json` is metadata this project's tools wrote
+(URLs, sizes, sha256 hashes, provenance); it contains no client code.
+This project is not affiliated with or endorsed by Instagram or Meta.

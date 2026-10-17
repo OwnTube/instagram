@@ -22,6 +22,22 @@
  *   node scripts/client-bundle.js check [--bundle DIR]
  *       Validate the bundle without installing it.
  *
+ *   node scripts/client-bundle.js fetch [--artifact URL|FILE] [--replace]
+ *       (setup runs this itself when client/blobs/ is absent.) Get the pinned
+ *       client artifact (bundle.json `artifact`: name, bytes, sha256, urls),
+ *       check its sha256, unpack it into a staging directory, check every blob
+ *       against the committed manifest, then rename the staging blobs into
+ *       client/blobs/. Source: --artifact, else CLIENT_ARTIFACT, else
+ *       bundle.json artifact.urls in order. Only that host is contacted;
+ *       Instagram/Meta hosts are refused. A valid client/blobs/ is never
+ *       replaced; an invalid one only with --replace (it is moved aside, not
+ *       deleted).
+ *
+ *   node scripts/client-bundle.js pack [--out FILE]
+ *       Write the bundle as one artifact (default client/dist/<name>) and pin
+ *       its name, bytes and sha256 in bundle.json, for publishing (see
+ *       client/README.md). Packing is deterministic.
+ *
  * client/ layout:
  *   bundle.json                    { format, snapshot, revision, manifestSha256,
  *                                    blobs, bytes, contentsSha256, exportedAt }
@@ -36,12 +52,14 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { openSnapshotStore, sha256, SNAPSHOT_ID } = require('../src/clientSnapshot');
+const artifact = require('./lib/client-artifact');
 
 const ROOT = path.join(__dirname, '..');
 const BUNDLE_FORMAT = 1;
 const DEFAULT_BUNDLE = path.join(ROOT, 'client');
 
 class BundleError extends Error {}
+class BlobsAbsent extends BundleError {}
 
 /** Every blob a manifest references: sha256 -> bytes. */
 function referencedBlobs(manifest) {
@@ -67,7 +85,7 @@ function readBundle(dir = DEFAULT_BUNDLE) {
   const where = path.relative(ROOT, dir) || dir;
   const descriptorFile = path.join(dir, 'bundle.json');
   if (!fs.existsSync(descriptorFile)) {
-    throw new BundleError(`no client bundle: ${path.join(where, 'bundle.json')} does not exist. The pinned client ships in client/ (see client/README.md); setup never downloads it.`);
+    throw new BundleError(`no client bundle: ${path.join(where, 'bundle.json')} does not exist. The pinned client is described by client/ (see client/README.md).`);
   }
   let d;
   try {
@@ -79,7 +97,7 @@ function readBundle(dir = DEFAULT_BUNDLE) {
   if (!SNAPSHOT_ID.test(String(d.snapshot))) throw new BundleError(`${where}/bundle.json: invalid snapshot id`);
   const store = openSnapshotStore(dir);
   if (!fs.existsSync(path.join(dir, 'blobs'))) {
-    throw new BundleError(`${where}/blobs/ is absent: this checkout has the bundle's manifest but not its bodies (${d.blobs} blobs, ${d.bytes} bytes). Put them in ${where}/blobs/ (see client/README.md) and run setup again; setup never downloads them.`);
+    throw new BlobsAbsent(`${where}/blobs/ is absent: this checkout has the bundle's manifest but not its bodies (${d.blobs} blobs, ${d.bytes} bytes). npm run client:setup gets them from the pinned client artifact (see client/README.md).`);
   }
   const manifestFile = store.manifestPath(d.snapshot);
   if (!fs.existsSync(manifestFile)) throw new BundleError(`${where}: manifest of ${d.snapshot} missing (${path.relative(ROOT, manifestFile)})`);
@@ -93,9 +111,111 @@ function readBundle(dir = DEFAULT_BUNDLE) {
   const check = store.validate(manifest, { deep: true, requiredRoutes: ['home'] });
   if (!check.ok) {
     const more = check.errors.length > 5 ? ` (+${check.errors.length - 5} more)` : '';
-    throw new BundleError(`${where}: snapshot ${d.snapshot} failed integrity: ${check.errors.slice(0, 5).join('; ')}${more}. Restore client/ from git (git checkout -- client) or re-export it.`);
+    throw new BundleError(`${where}: snapshot ${d.snapshot} failed integrity: ${check.errors.slice(0, 5).join('; ')}${more}. Reinstall the pinned blobs with npm run client:fetch -- --replace, or re-export the bundle.`);
   }
   return { descriptor: d, manifest, store, stats: check.stats };
+}
+
+/** bundle.json and the committed manifest, checked against each other (no blobs needed). */
+function readDescriptor(dir = DEFAULT_BUNDLE) {
+  const where = path.relative(ROOT, dir) || dir;
+  const file = path.join(dir, 'bundle.json');
+  if (!fs.existsSync(file)) throw new BundleError(`no client bundle: ${path.join(where, 'bundle.json')} does not exist`);
+  const descriptor = JSON.parse(fs.readFileSync(file, 'utf8'));
+  if (descriptor.format !== BUNDLE_FORMAT || !SNAPSHOT_ID.test(String(descriptor.snapshot))) throw new BundleError(`${where}/bundle.json is not a format ${BUNDLE_FORMAT} bundle descriptor`);
+  const manifestFile = openSnapshotStore(dir).manifestPath(descriptor.snapshot);
+  if (!fs.existsSync(manifestFile)) throw new BundleError(`${where}: manifest of ${descriptor.snapshot} missing`);
+  const manifestRaw = fs.readFileSync(manifestFile);
+  if (sha256(manifestRaw) !== descriptor.manifestSha256) throw new BundleError(`${where}: manifest of ${descriptor.snapshot} does not match bundle.json`);
+  const referenced = referencedBlobs(JSON.parse(manifestRaw.toString('utf8')));
+  if (referenced.size !== descriptor.blobs || contentsDigest(referenced) !== descriptor.contentsSha256) throw new BundleError(`${where}: the manifest's blob list does not match bundle.json`);
+  return { descriptor, manifestRaw, referenced };
+}
+
+async function pack({ bundleDir = DEFAULT_BUNDLE, outFile = null, log = console.log } = {}) {
+  const { descriptor } = readBundle(bundleDir);
+  const { manifestRaw, referenced } = readDescriptor(bundleDir);
+  const name = artifact.artifactName(descriptor);
+  const out = outFile || path.join(bundleDir, 'dist', name);
+  const result = await artifact.packArtifact({ bundleDir, descriptor, manifestRaw, blobs: referenced, outFile: out });
+  const previous = descriptor.artifact || {};
+  const urls = previous.name === name && Array.isArray(previous.urls) ? previous.urls : [];
+  descriptor.artifact = { name, bytes: result.bytes, sha256: result.sha256, urls };
+  fs.writeFileSync(path.join(bundleDir, 'bundle.json'), `${JSON.stringify(descriptor, null, 1)}\n`);
+  log(`packed ${descriptor.snapshot} (revision ${descriptor.revision}) into ${path.relative(ROOT, result.file) || result.file}: ${result.bytes} bytes, sha256 ${result.sha256}`);
+  log(urls.length ? `bundle.json artifact.urls: ${urls.join(', ')}` : 'bundle.json has no artifact.urls yet: publish the file and add its URL there (see client/README.md)');
+  return { ...result, descriptor };
+}
+
+/**
+ * Put the pinned client's blobs into bundleDir/blobs from the artifact, all or
+ * nothing. Returns { installed, source, hosts }.
+ */
+async function fetchBlobs({ bundleDir = DEFAULT_BUNDLE, source = null, replace = false, fetchImpl = globalThis.fetch, log = console.log } = {}) {
+  const { descriptor, manifestRaw, referenced } = readDescriptor(bundleDir);
+  const blobsDir = path.join(bundleDir, 'blobs');
+  let aside = null;
+  if (fs.existsSync(blobsDir)) {
+    let valid = true;
+    try {
+      readBundle(bundleDir);
+    } catch (error) {
+      if (!(error instanceof BundleError)) throw error;
+      valid = false;
+    }
+    if (valid) {
+      log(`${path.relative(ROOT, blobsDir)} already holds the pinned client: nothing fetched`);
+      return { installed: false, source: null, hosts: [] };
+    }
+    if (!replace) throw new BundleError(`${path.relative(ROOT, blobsDir)} exists but fails integrity; it is not replaced automatically. Run again with --replace to move it aside and install the pinned artifact.`);
+    aside = `${blobsDir}.invalid-${new Date().toISOString().replace(/[:.]/g, '')}`;
+  }
+  let pin;
+  try {
+    pin = artifact.artifactPin(descriptor);
+  } catch (error) {
+    throw new BundleError(error.message);
+  }
+  if (!pin) throw new BundleError('client/bundle.json pins no client artifact (no `artifact` entry): this bundle can only be installed from a local client/blobs/');
+  const sources = source ? [source] : process.env.CLIENT_ARTIFACT ? [process.env.CLIENT_ARTIFACT] : pin.urls;
+  if (!sources.length) throw new BundleError(`no source for the pinned client artifact ${pin.name}: bundle.json artifact.urls is empty. Pass --artifact <url|file> or set CLIENT_ARTIFACT (see client/README.md).`);
+
+  const work = fs.mkdtempSync(path.join(bundleDir, '.staging-'));
+  try {
+    const download = path.join(work, pin.name);
+    let got = null;
+    const failures = [];
+    for (const src of sources) {
+      try {
+        got = await artifact.fetchArtifact(src, pin, download, { fetchImpl, log });
+        break;
+      } catch (error) {
+        if (!(error instanceof artifact.ArtifactError)) throw error;
+        failures.push(`${src}: ${error.message}`);
+        log(`  ${error.message}`);
+      }
+    }
+    if (!got) throw new BundleError(`could not get the pinned client artifact ${pin.name} (sha256 ${pin.sha256.slice(0, 16)}…):\n  ${failures.join('\n  ')}`);
+    log(`artifact ${pin.name}: ${pin.bytes} bytes, sha256 ok; unpacking`);
+    const staged = path.join(work, 'unpacked');
+    try {
+      const { blobs } = await artifact.unpackArtifact(download, staged, descriptor, { manifestRaw, referenced });
+      log(`unpacked ${blobs} blobs; every blob hashes to its name and the set equals the manifest's`);
+    } catch (error) {
+      throw new BundleError(error.message);
+    }
+    // Rename into place only now that everything is verified.
+    if (aside) {
+      fs.renameSync(blobsDir, aside);
+      log(`moved the invalid ${path.relative(ROOT, blobsDir)} aside to ${path.relative(ROOT, aside)}`);
+    }
+    fs.renameSync(path.join(staged, 'blobs'), blobsDir);
+    readBundle(bundleDir);
+    log(`installed ${path.relative(ROOT, blobsDir)} (snapshot ${descriptor.snapshot}, revision ${descriptor.revision})`);
+    return { installed: true, source: got.source, hosts: got.hosts };
+  } finally {
+    fs.rmSync(work, { recursive: true, force: true });
+  }
 }
 
 /** Copy one blob unless the destination already holds exactly those bytes. Returns true if written. */
@@ -204,23 +324,56 @@ function exportBundle({ id = null, clientDir = process.env.CLIENT_DIR || path.jo
   return descriptor;
 }
 
-function main() {
+/** True when clientDir already holds the bundled snapshot, complete and valid. */
+function installedLocally(bundleDir, clientDir) {
+  try {
+    const { descriptor } = readDescriptor(bundleDir);
+    const target = openSnapshotStore(clientDir);
+    const check = target.validate(target.load(descriptor.snapshot), { deep: true, requiredRoutes: ['home'] });
+    return check.ok ? descriptor : null;
+  } catch {
+    return null;
+  }
+}
+
+async function main() {
   const [cmd, arg] = process.argv.slice(2);
   const value = (name) => {
     const i = process.argv.indexOf(name);
     return i >= 0 ? process.argv[i + 1] : undefined;
   };
   const bundleDir = value('--bundle') ? path.resolve(value('--bundle')) : DEFAULT_BUNDLE;
-  // Setup and check work from local files only: any network attempt is a failure.
+  const clientDir = process.env.CLIENT_DIR || path.join(ROOT, '.cache', 'client');
+  // The artifact download gets the real fetch, explicitly; everything else
+  // runs under the upstream guard, so any other network attempt fails the command.
+  const realFetch = globalThis.fetch;
   const guard = require('./lib/offline').strictOffline();
+  const hosts = [];
+  const getBlobs = async () => {
+    const r = await fetchBlobs({ bundleDir, source: value('--artifact') || null, replace: process.argv.includes('--replace'), fetchImpl: realFetch });
+    hosts.push(...r.hosts);
+  };
   try {
-    if (cmd === 'setup') setup({ bundleDir, activate: process.argv.includes('--activate') });
+    if (cmd === 'setup') {
+      const blobsPresent = fs.existsSync(path.join(bundleDir, 'blobs'));
+      const local = !blobsPresent && !process.argv.includes('--activate') && installedLocally(bundleDir, clientDir);
+      if (local) {
+        console.log(`${local.snapshot} (revision ${local.revision}) is already installed and valid in ${path.relative(ROOT, clientDir) || clientDir}; nothing fetched`);
+        // Still report which snapshot is active.
+        const state = openSnapshotStore(clientDir).readState();
+        console.log(`active: ${state.active}`);
+      } else {
+        if (!blobsPresent) await getBlobs();
+        setup({ bundleDir, clientDir, activate: process.argv.includes('--activate') });
+      }
+    } else if (cmd === 'fetch') await getBlobs();
+    else if (cmd === 'pack') await pack({ bundleDir, outFile: value('--out') ? path.resolve(value('--out')) : null });
     else if (cmd === 'check') {
       const { descriptor, stats } = readBundle(bundleDir);
       console.log(`bundle ${descriptor.snapshot} (revision ${descriptor.revision}): ${descriptor.blobs} blobs, ${descriptor.bytes} bytes: integrity ok`);
     } else if (cmd === 'export') exportBundle({ id: arg && !arg.startsWith('--') ? arg : null, outDir: value('--out') ? path.resolve(value('--out')) : DEFAULT_BUNDLE });
     else {
-      console.error('usage: node scripts/client-bundle.js setup [--activate] [--bundle DIR] | check [--bundle DIR] | export [<id>] [--out DIR]');
+      console.error('usage: node scripts/client-bundle.js setup [--activate] [--artifact URL|FILE] [--replace] [--bundle DIR] | fetch [--artifact URL|FILE] [--replace] | pack [--out FILE] | check [--bundle DIR] | export [<id>] [--out DIR]');
       return 2;
     }
   } catch (error) {
@@ -232,9 +385,13 @@ function main() {
     console.error(`client bundle: ${guard.attempts.length} network attempt(s) made; this must not happen`);
     return 1;
   }
+  console.log(`hosts contacted: ${hosts.length ? [...new Set(hosts)].join(', ') : 'none'}`);
   return 0;
 }
 
-if (require.main === module) process.exitCode = main();
+if (require.main === module) main().then((code) => (process.exitCode = code), (error) => {
+  console.error(error);
+  process.exitCode = 1;
+});
 
-module.exports = { setup, exportBundle, readBundle, referencedBlobs, contentsDigest, BundleError };
+module.exports = { setup, exportBundle, readBundle, readDescriptor, pack, fetchBlobs, referencedBlobs, contentsDigest, BundleError, BlobsAbsent };

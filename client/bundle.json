@@ -6,5 +6,13 @@
  "blobs": 8794,
  "bytes": 178416858,
  "contentsSha256": "e65167a00d57bb0101c1f453dcf7ef17bcb4ab792e8916d99a48bf08ced1cb2f",
- "exportedAt": "2026-10-17T17:17:06.020Z"
+ "exportedAt": "2026-10-17T17:17:06.020Z",
+ "artifact": {
+  "name": "client-rev1050722040-20261017T170808Z.igrl.gz",
+  "bytes": 58747347,
+  "sha256": "27ad50d0d5939791ba01f4142ada168656a5c0be7b7d747f743d9f9ec6ede9cf",
+  "urls": [
+   "https://github.com/vibecodeforever/instagram/releases/download/client-rev1050722040-20261017T170808Z/client-rev1050722040-20261017T170808Z.igrl.gz"
+  ]
+ }
 }

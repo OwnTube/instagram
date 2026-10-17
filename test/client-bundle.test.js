@@ -6,6 +6,7 @@
  * snapshot, and refusing a missing or altered bundle with a clear message.
  */
 
+const { tempDir } = require('./paths');
 const { test } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -14,12 +15,10 @@ const { writeSnapshot } = require('./snapshot-fixture');
 const { openSnapshotStore, sha256 } = require('../src/clientSnapshot');
 const { setup, exportBundle, readBundle, BundleError } = require('../scripts/client-bundle');
 
-const ROOT = path.join(__dirname, '..', '.scratch', 'test');
 const quiet = () => {};
 
 function workdir() {
-  fs.mkdirSync(ROOT, { recursive: true });
-  const dir = fs.mkdtempSync(path.join(ROOT, 'bundle-'));
+  const dir = tempDir('bundle-');
   return { dir, source: path.join(dir, 'source'), bundle: path.join(dir, 'bundle'), client: path.join(dir, 'client'), cleanup: () => fs.rmSync(dir, { recursive: true, force: true }) };
 }
 
@@ -101,18 +100,18 @@ test('a missing or altered bundle fails with an actionable message and installs 
   const w = workdir();
   t.after(w.cleanup);
   sourceStore(w.source);
-  throwsBundle(() => setup({ bundleDir: w.bundle, clientDir: w.client, log: quiet }), /no client bundle: .*bundle\.json does not exist.*never downloads/);
+  throwsBundle(() => setup({ bundleDir: w.bundle, clientDir: w.client, log: quiet }), /no client bundle: .*bundle\.json does not exist/);
 
   const d = exportBundle({ clientDir: w.source, outDir: w.bundle, log: quiet });
   fs.renameSync(path.join(w.bundle, 'blobs'), path.join(w.dir, 'blobs-aside'));
-  throwsBundle(() => setup({ bundleDir: w.bundle, clientDir: w.client, log: quiet }), /blobs\/ is absent: .*manifest but not its bodies/);
+  throwsBundle(() => setup({ bundleDir: w.bundle, clientDir: w.client, log: quiet }), /blobs\/ is absent: .*manifest but not its bodies.*pinned client artifact/);
   fs.renameSync(path.join(w.dir, 'blobs-aside'), path.join(w.bundle, 'blobs'));
   const store = openSnapshotStore(w.bundle);
   const m = store.load(d.snapshot);
   const blob = store.blobPath(m.assets['https://static.cdninstagram.com/b.js'].sha256);
 
   fs.writeFileSync(blob, 'NEW'); // same size, different bytes
-  throwsBundle(() => setup({ bundleDir: w.bundle, clientDir: w.client, log: quiet }), /failed integrity: asset .*hash mismatch.*git checkout -- client/);
+  throwsBundle(() => setup({ bundleDir: w.bundle, clientDir: w.client, log: quiet }), /failed integrity: asset .*hash mismatch.*client:fetch -- --replace/);
   fs.rmSync(blob);
   throwsBundle(() => setup({ bundleDir: w.bundle, clientDir: w.client, log: quiet }), /failed integrity: asset .*missing/);
   fs.writeFileSync(blob, 'new');

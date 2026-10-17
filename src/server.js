@@ -14,6 +14,10 @@
  * activate, rollback), never a side effect of a request.
  */
 
+// First: an unsupported Node fails here with a readable message, not deep in
+// the require graph (node:sqlite).
+require('./nodeVersion').assertSupportedNode();
+
 const express = require('express');
 const config = require('./config');
 const backendApp = require('./backend');
@@ -406,10 +410,29 @@ function sendHtml(req, res, status, html) {
 
 /* ------------------------------------------------------------------ */
 
-function start() {
+/**
+ * A startup error the operator can act on: the port is taken or not
+ * permitted. Any other error is not ours to explain and is rethrown.
+ */
+function listenErrorMessage(error, { host, port }) {
+  if (error && error.code === 'EADDRINUSE') {
+    return `port ${port} on ${host} is already in use (another server, perhaps another instance of this one). Stop it, or start this one on another port: PORT=${port + 1} npm start`;
+  }
+  if (error && error.code === 'EACCES') {
+    return `not permitted to listen on port ${port} on ${host}. Use a port above 1023: PORT=12000 npm start`;
+  }
+  return null;
+}
+
+function start({ onListenError = (message) => { console.error(`[loader] cannot start: ${message}`); process.exit(1); } } = {}) {
   const server = app.listen(config.port, config.host, () => {
     console.log(`[loader] listening on http://${config.host}:${config.port}`);
     console.log(`[loader] health: http://localhost:${config.port}/__loader/health`);
+  });
+  server.on('error', (error) => {
+    const message = listenErrorMessage(error, config);
+    if (!message) throw error;
+    onListenError(message, error);
   });
   return server;
 }
@@ -418,4 +441,4 @@ if (require.main === module) {
   start();
 }
 
-module.exports = { app, start };
+module.exports = { app, start, listenErrorMessage };

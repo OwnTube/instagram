@@ -5,8 +5,9 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
 const { createPasswordCodec, encryptLikeClient, PasswordFormatError } = require('../src/clone/passwordEncryption');
+const { TEST_ROOT } = require('./paths');
 
-const DIR = path.join(__dirname, '..', '.scratch', 'test', `codec-${process.pid}`);
+const DIR = path.join(TEST_ROOT, `codec-${process.pid}`);
 
 test('enc_password decryption', async (t) => {
   fs.rmSync(DIR, { recursive: true, force: true });

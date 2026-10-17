@@ -7,13 +7,14 @@
  * image (`{sprited: 0, uri}`), e.g. the empty feed's illustration.
  */
 
+const { tempDir } = require('./paths');
 const { test } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
 
 test('the manifest collects sprited and plain ixData images from bootloader answers', () => {
-  const dir = fs.mkdtempSync(path.join(__dirname, '..', '.scratch', 'asset-cache-'));
+  const dir = tempDir('asset-cache-');
   const boot = path.join(dir, 'bootloader');
   fs.mkdirSync(boot);
   const answer = {

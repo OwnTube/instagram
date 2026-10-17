@@ -13,6 +13,7 @@
  * client; they prove the serving and lifecycle rules.
  */
 
+const { tempDir } = require('./paths');
 const { test } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -23,14 +24,9 @@ const { openSnapshotStore } = require('../src/clientSnapshot');
 const snapshotCli = require('../scripts/client-snapshot');
 
 const ROOT = path.join(__dirname, '..');
-const TEST_ROOT = path.join(ROOT, '.scratch', 'test');
 const ASSET = 'https://static.cdninstagram.com/rsrc.php/v4/pinned.js';
 const ASSET_PATH = '/__ig/static.cdninstagram.com/rsrc.php/v4/pinned.js';
 
-function tempDir(prefix) {
-  fs.mkdirSync(TEST_ROOT, { recursive: true });
-  return fs.mkdtempSync(path.join(TEST_ROOT, prefix));
-}
 
 const quiet = (fn) => {
   const log = console.log;

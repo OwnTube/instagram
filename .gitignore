@@ -16,3 +16,8 @@ test-artifacts/
 # The packaged client's bodies (Meta's bundles) are not committed until the
 # decision to publish them is made; bundle.json and the manifest are.
 client/blobs/
+# The packed artifact (published as a release file, not committed), setup's
+# staging directories, and an invalid blobs/ that setup --replace moved aside.
+client/dist/
+client/.staging-*/
+client/blobs.invalid-*/

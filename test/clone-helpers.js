@@ -8,6 +8,7 @@
  * the csrftoken cookie, enc_password encrypted to the advertised key).
  */
 
+const { tempDir } = require('./paths');
 const fs = require('node:fs');
 const path = require('node:path');
 const { encryptLikeClient } = require('../src/clone/passwordEncryption');
@@ -16,7 +17,6 @@ const { openSnapshotStore } = require('../src/clientSnapshot');
 const { writeSnapshot } = require('./snapshot-fixture');
 
 const SRC = path.join(__dirname, '..', 'src');
-const TEST_ROOT = path.join(__dirname, '..', '.scratch', 'test');
 
 function clearSrcCache() {
   for (const key of Object.keys(require.cache)) if (key.startsWith(SRC)) delete require.cache[key];
@@ -35,8 +35,7 @@ const guard = installUpstreamGuard();
  * directory already has an active snapshot.
  */
 async function startCloneServer(extraEnv = {}, { dir: reuseDir, keepDir = false, snapshot = {} } = {}) {
-  fs.mkdirSync(TEST_ROOT, { recursive: true });
-  const dir = reuseDir || fs.mkdtempSync(path.join(TEST_ROOT, 'clone-'));
+  const dir = reuseDir || tempDir('clone-');
   const clientDir = path.join(dir, 'client');
   if (snapshot && !openSnapshotStore(clientDir).readState().active) writeSnapshot(clientDir, snapshot);
   const upstreamBefore = guard.attempts.length;

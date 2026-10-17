@@ -1,5 +1,6 @@
 'use strict';
 
+const { tempDir } = require('./paths');
 const { test } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -7,8 +8,7 @@ const path = require('node:path');
 const { createAssetStore } = require('../src/assetStore');
 
 test('asset store round-trips an entry with its validators and keeps urls apart', async () => {
-  fs.mkdirSync(path.join(__dirname, '..', '.scratch'), { recursive: true });
-  const dir = fs.mkdtempSync(path.join(__dirname, '..', '.scratch', 'assets-'));
+  const dir = tempDir('assets-');
   try {
     const store = createAssetStore(dir);
     const entry = { body: Buffer.from([0, 1, 2, 255]), contentType: 'application/javascript', etag: '"abc"', lastModified: 'x' };
