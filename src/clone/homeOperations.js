@@ -50,7 +50,7 @@ const crypto = require('node:crypto');
 const users = require('../backend/services/users');
 const { stories } = require('../backend/services/social');
 const present = require('./present');
-const { unauthorized } = require('../backend/lib/errors');
+const { unauthorized, badRequest } = require('../backend/lib/errors');
 
 const RELATIONSHIP_KINDS = new Set(['follow', 'follow_request', 'follow_accepted']);
 const EMPTY_PAGE = { end_cursor: null, has_next_page: false };
@@ -236,6 +236,18 @@ function createHomeOperations(db) {
         xdt_api__v1__feed__reels_tray: { tray, broadcasts: [] },
         xdt_viewer: { user: { username: me.username, id: me.id, profile_pic_url: me.profile_pic_url } },
       };
+    },
+
+    // The story viewer marks each item seen (PolarisAPIReelSeen):
+    // `xdt_mark_story_reel_seen(reelMediaId, ...)`, an XDTMarkSeenResponse
+    // with no fields the client reads. Recorded like POST
+    // /api/v1/media/seen/ (the viewer must be able to see the story).
+    PolarisAPIReelSeenMutation(vars, ctx) {
+      const viewer = viewerOf(ctx);
+      const pk = String(vars.reelMediaId ?? '').split('_')[0];
+      if (!/^\d{1,30}$/.test(pk)) throw badRequest('Invalid story id');
+      stories.markSeen(db, pk, viewer.id);
+      return { xdt_mark_story_reel_seen: { __typename: 'XDTMarkSeenResponse' } };
     },
 
     PolarisSuggestedUserListQuery(vars, ctx) {

@@ -293,6 +293,24 @@ test('the original client flows, answered by our backend', async (t) => {
     assert.deepStrictEqual((await bob.get('/api/v1/archive/reel/day_shells/')).body.items, []);
   });
 
+  await t.test("the story viewer's seen mutation records the view; it needs a viewer", async () => {
+    const id = await upload(alice, { story: true, width: 1080, height: 1920 });
+    const story = await alice.post('/api/v1/media/configure_to_story/', { upload_id: id });
+    const pk = String(story.body.media.pk);
+    const seen = (b) => b.post('/graphql/query', { doc_id: '1', fb_api_req_friendly_name: 'PolarisAPIReelSeenMutation', variables: { reelId: alicePk, reelMediaId: pk, reelMediaOwnerId: alicePk, reelMediaTakenAt: 0, viewSeenAt: 0 } });
+    const res = await seen(bob);
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.body.data.xdt_mark_story_reel_seen.__typename, 'XDTMarkSeenResponse');
+    const viewers = await alice.get(`/api/v1/media/${pk}/list_reel_media_viewer/`);
+    assert.deepStrictEqual(viewers.body.users.map((u) => u.username), ['bob']);
+    const anon = new Browser(server.base);
+    await anon.visit();
+    assert.strictEqual((await seen(anon)).status, 401, 'no viewer, nothing recorded');
+    assert.deepStrictEqual((await alice.get(`/api/v1/media/${pk}/list_reel_media_viewer/`)).body.users.map((u) => u.username), ['bob']);
+    assert.strictEqual((await seen(bob)).status, 200, 'marking again is idempotent');
+    assert.strictEqual((await alice.get(`/api/v1/media/${pk}/list_reel_media_viewer/`)).body.users.length, 1);
+  });
+
   await t.test('search and activity reflect real records', async () => {
     const found = await carol.get('/api/v1/web/search/topsearch/?query=ali');
     assert.deepStrictEqual(found.body.users.map((u) => u.user.username), ['alice']);
