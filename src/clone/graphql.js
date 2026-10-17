@@ -20,6 +20,7 @@ const posts = require('../backend/services/posts');
 const { feed, stories, follows, comments } = require('../backend/services/social');
 const { badRequest, notFound, unauthorized } = require('../backend/lib/errors');
 const { isPk, pkFromShortcode } = require('../backend/lib/ids');
+const relationships = require('../backend/services/relationships');
 const present = require('./present');
 const { createCaaRegistration, safeNext } = require('./caaRegistration');
 const { createHomeOperations } = require('./homeOperations');
@@ -56,6 +57,37 @@ function createGraphql({ db, contracts = null }) {
     if (vars.username) return users.getByUsername(db, String(vars.username));
     const id = vars.id ?? vars.user_id ?? vars.target_user_id;
     return id && isPk(String(id)) ? users.getByPk(db, String(id)) : null;
+  }
+
+  /**
+   * Apply {add, remove} (user pks) to one of the viewer's lists; returns the
+   * named users' rows. Every pk must be an existing account other than the viewer.
+   */
+  function updateList(viewer, list, { add = [], remove = [] } = {}) {
+    const resolve = (ids) => {
+      if (!Array.isArray(ids)) throw badRequest('Expected a list of user ids');
+      return ids.slice(0, 100).map((pk) => {
+        const row = userFromVars({ id: pk });
+        if (!row) throw notFound('User not found');
+        if (row.id === viewer.id) throw badRequest('You cannot add yourself to your own list');
+        return row;
+      });
+    };
+    const adding = resolve(add ?? []);
+    const removing = resolve(remove ?? []);
+    relationships.update(db, viewer.id, list, { add: adding.map((r) => r.id), remove: removing.map((r) => r.id) });
+    return [...adding, ...removing];
+  }
+
+  function restrictedUser(viewer, row) {
+    return { id: String(row.pk), pk: String(row.pk), friendship_status: { is_restricted: relationships.has(db, viewer.id, row.id, 'restricted') } };
+  }
+
+  function muteAnswer(ctx, field, userKey, list, pk, on) {
+    const viewer = needViewer(ctx);
+    const [row] = updateList(viewer, list, on ? { add: [pk] } : { remove: [pk] });
+    const status = present.friendshipStatus(db, viewer.id, row);
+    return { [field]: { [userKey]: { id: String(row.pk), friendship_status: { muting: status.muting, is_muting_reel: status.is_muting_reel } } } };
   }
 
   /** Set the viewer's like on the post `vars.input.media_id` names; its media id and has_liked. */
@@ -178,6 +210,45 @@ function createGraphql({ db, contracts = null }) {
       }
       return { xdt_destroy_friendship: { id: String(row.pk), username: row.username, friendship_status: present.friendshipStatus(db, viewer.id, row) } };
     },
+
+    // The "Following" menu of a profile (PolarisFollowingActionsModal): its
+    // list toggles send user pks as {add: [pk], remove: [pk]}; each answers
+    // with the changed users' friendship_status.
+    usePolarisSetBestiesMutation(vars, ctx) {
+      const viewer = needViewer(ctx);
+      const changed = updateList(viewer, 'close_friends', vars);
+      return { xdt_set_besties: changed.map((row) => ({ id: String(row.pk), friendship_status: { is_bestie: relationships.has(db, viewer.id, row.id, 'close_friends') } })) };
+    },
+
+    usePolarisUpdateFeedFavoritesMutation(vars, ctx) {
+      const viewer = needViewer(ctx);
+      const changed = updateList(viewer, 'favorites', vars.input || {});
+      return {
+        xig_update_feed_favorites: {
+          user_id_and_relationship_infos: changed.map((row) => ({ relationship_info: { is_feed_favorite: relationships.has(db, viewer.id, row.id, 'favorites') } })),
+        },
+      };
+    },
+
+    usePolarisRestrictMutation(vars, ctx) {
+      const viewer = needViewer(ctx);
+      const changed = updateList(viewer, 'restricted', { add: vars.target_user_ids });
+      return { xdt_api__v1__restrict_action__restrict_many: changed.map((row) => restrictedUser(viewer, row)) };
+    },
+
+    usePolarisUnrestrictMutation(vars, ctx) {
+      const viewer = needViewer(ctx);
+      const [row] = updateList(viewer, 'restricted', { remove: [vars.target_user_id] });
+      return { xdt_api__v1__restrict_action__unrestrict: restrictedUser(viewer, row) };
+    },
+
+    // The menu's Mute panel: posts (friendship_status.muting; their posts
+    // leave the viewer's home feed) and story (is_muting_reel; their reel
+    // moves to the end of the tray), each by the author's pk.
+    usePolarisMutePostsMutation: (vars, ctx) => muteAnswer(ctx, 'xdt_user_mute_posts', 'muted_user', 'muted_posts', vars.target_posts_author_id, true),
+    usePolarisUnmutePostsMutation: (vars, ctx) => muteAnswer(ctx, 'xdt_user_unmute_posts', 'unmuted_user', 'muted_posts', vars.target_posts_author_id, false),
+    usePolarisMuteStoryMutation: (vars, ctx) => muteAnswer(ctx, 'xdt_user_mute_story', 'muted_user', 'muted_stories', vars.target_reel_author_id, true),
+    usePolarisUnmuteStoryMutation: (vars, ctx) => muteAnswer(ctx, 'xdt_user_unmute_story', 'unmuted_user', 'muted_stories', vars.target_reel_author_id, false),
 
     // The profile header's school-partner badge (`xig_user_by_igid_v2
     // .school_partner`): there is no school partner programme locally.

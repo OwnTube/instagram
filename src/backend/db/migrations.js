@@ -273,6 +273,28 @@ const migrations = [
       `);
     },
   },
+  {
+    /*
+     * A viewer's own lists of other accounts, as the original client manages
+     * them from the "Following" menu of a profile: close friends ("besties"),
+     * favorites (feed), restricted, muted posts, muted stories. Each row is one (owner, target, list)
+     * membership; only the owner's own requests read or change it.
+     */
+    id: '0003_relationship_lists',
+    up(db) {
+      db.exec(`
+        CREATE TABLE relationship_lists (
+          owner_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          target_id   TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          list        TEXT NOT NULL CHECK (list IN ('close_friends', 'favorites', 'restricted', 'muted_posts', 'muted_stories')),
+          created_at  TEXT NOT NULL,
+          PRIMARY KEY (owner_id, list, target_id),
+          CHECK (owner_id <> target_id)
+        );
+        CREATE INDEX idx_relationship_lists_target ON relationship_lists(target_id, list);
+      `);
+    },
+  },
 ];
 
 module.exports = { migrations };

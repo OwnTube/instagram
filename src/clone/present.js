@@ -17,6 +17,7 @@
 const { epochSeconds } = require('../backend/lib/ids');
 const { follows } = require('../backend/services/social');
 const posts = require('../backend/services/posts');
+const relationships = require('../backend/services/relationships');
 
 const DEFAULT_AVATAR = '/__clone/static/default-avatar.svg';
 const DEFAULT_MEDIA_SIZE = 1080;
@@ -33,13 +34,15 @@ function friendshipStatus(db, viewerId, target) {
     following: s.following,
     followed_by: s.followedBy,
     blocking: false,
-    muting: false,
+    muting: relationships.has(db, viewerId, target.id, 'muted_posts'),
     is_private: Boolean(target.is_private ?? target.isPrivate),
     incoming_request: s.incomingRequest,
     outgoing_request: s.outgoingRequest,
-    is_bestie: false,
-    is_restricted: false,
-    is_feed_favorite: false,
+    // The viewer's own lists (relationship_lists).
+    is_bestie: relationships.has(db, viewerId, target.id, 'close_friends'),
+    is_restricted: relationships.has(db, viewerId, target.id, 'restricted'),
+    is_feed_favorite: relationships.has(db, viewerId, target.id, 'favorites'),
+    is_muting_reel: relationships.has(db, viewerId, target.id, 'muted_stories'),
   };
 }
 
@@ -222,6 +225,7 @@ function reel(db, authorRow, items, viewerId) {
     can_reply: true,
     can_reshare: false,
     reel_type: 'user_reel',
+    muted: Boolean(authorUser.friendship_status && authorUser.friendship_status.is_muting_reel),
     user: authorUser,
     items: storyItems,
     media_count: storyItems.length,

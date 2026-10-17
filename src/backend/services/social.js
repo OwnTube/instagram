@@ -475,13 +475,16 @@ const stories = {
   tray(db, viewerId) {
     const rows = db
       .prepare(
-        `SELECT s.author_id, MAX(s.created_at) AS latest FROM stories s
+        `SELECT s.author_id, MAX(s.created_at) AS latest,
+           EXISTS (SELECT 1 FROM relationship_lists m WHERE m.owner_id = ? AND m.list = 'muted_stories' AND m.target_id = s.author_id) AS muted
+         FROM stories s
          WHERE s.expires_at > ? AND (s.author_id = ? OR s.author_id IN (
            SELECT followee_id FROM follows WHERE follower_id = ? AND state = 'accepted'))
-         GROUP BY s.author_id ORDER BY (s.author_id = ?) DESC, latest DESC`
+         GROUP BY s.author_id ORDER BY (s.author_id = ?) DESC, muted ASC, latest DESC`
       )
-      .all(nowIso(), viewerId, viewerId, viewerId);
-    return rows.map((r) => ({ authorId: r.author_id, items: this.listActiveByAuthor(db, r.author_id, viewerId) }));
+      .all(viewerId, nowIso(), viewerId, viewerId, viewerId);
+    // Muted accounts' stories stay in the tray, after all the others.
+    return rows.map((r) => ({ authorId: r.author_id, muted: Boolean(r.muted), items: this.listActiveByAuthor(db, r.author_id, viewerId) }));
   },
 
   markSeen(db, storyId, viewerId) {
@@ -763,10 +766,14 @@ const settings = {
 /* --------------------------------- feed ---------------------------------- */
 
 const feed = {
-  /** Home feed: the viewer's own posts and those of accounts they follow (accepted). */
+  /**
+   * Home feed: the viewer's own posts and those of accounts they follow
+   * (accepted), except accounts whose posts the viewer muted.
+   */
   home(db, viewerId, { limit, cursor }) {
     const where = `p.deleted_at IS NULL AND (p.author_id = ? OR p.author_id IN (
-                     SELECT followee_id FROM follows WHERE follower_id = ? AND state = 'accepted'))`;
+                     SELECT followee_id FROM follows WHERE follower_id = ? AND state = 'accepted'))
+                   AND p.author_id NOT IN (SELECT target_id FROM relationship_lists WHERE owner_id = ? AND list = 'muted_posts')`;
     const { items, nextCursor } = paginate(
       { limit, cursor },
       (take, cur) =>
@@ -776,8 +783,8 @@ const feed = {
                 `${posts.POST_SELECT} WHERE ${where} AND (p.created_at < ? OR (p.created_at = ? AND p.id < ?))
                  ORDER BY p.created_at DESC, p.id DESC LIMIT ?`
               )
-              .all(viewerId, viewerId, cur.createdAt, cur.createdAt, cur.id, take)
-          : db.prepare(`${posts.POST_SELECT} WHERE ${where} ORDER BY p.created_at DESC, p.id DESC LIMIT ?`).all(viewerId, viewerId, take),
+              .all(viewerId, viewerId, viewerId, cur.createdAt, cur.createdAt, cur.id, take)
+          : db.prepare(`${posts.POST_SELECT} WHERE ${where} ORDER BY p.created_at DESC, p.id DESC LIMIT ?`).all(viewerId, viewerId, viewerId, take),
       (row) => ({ createdAt: row.created_at, id: row.id })
     );
     return { items: items.map((r) => posts.toPublic(r, { viewerId, ...posts.viewerFlags(db, viewerId, r.id) })), nextCursor };
