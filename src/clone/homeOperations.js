@@ -75,7 +75,7 @@ const posts = require('../backend/services/posts');
 const { stories, messages } = require('../backend/services/social');
 const { notes } = require('../backend/services/notes');
 const present = require('./present');
-const { unauthorized, badRequest } = require('../backend/lib/errors');
+const { unauthorized, badRequest, notFound } = require('../backend/lib/errors');
 
 const RELATIONSHIP_KINDS = new Set(['follow', 'follow_request', 'follow_accepted']);
 const EMPTY_PAGE = { end_cursor: null, has_next_page: false };
@@ -147,39 +147,88 @@ function mutualName(db, viewerId, userId) {
 }
 
 /**
+ * A shared post as the message's XMA content. The client's own mapping of a
+ * shared post (mapToLSAttachment, item_type media_share) is a single-layout
+ * share with the author as header, the image as preview and the caption as
+ * title: SlideMessageStandardXMA. Pressing it opens the client's Direct post
+ * modal from target_id (the media id) and the shortcode it reads from the
+ * last segment of target_url (getIGDShortCodeFromMediaDeeplinkUrl); the URL
+ * is this origin's own post path. A post the viewer can no longer see is a
+ * placeholder XMA.
+ */
+function sharedPostContent(db, postId, viewerId) {
+  const post = present.sharedPost(db, postId, viewerId);
+  if (!post) return { __typename: 'SlideMessageXMAContent', xma_text_body: null, xma: { __typename: 'SlideMessagePlaceholderXMA', title_text: null, caption_body_text: null } };
+  const m = present.media(db, post, viewerId);
+  const still = m.image_versions2.candidates[0] || null;
+  return {
+    __typename: 'SlideMessageXMAContent',
+    xma_text_body: null,
+    xma: {
+      __typename: 'SlideMessageStandardXMA',
+      header_title_text: m.user.username,
+      header_icon: { url: m.user.profile_pic_url },
+      header_subtitle_text: null,
+      title_text: post.caption || null,
+      caption_body_text: null,
+      preview_image: still ? { url: still.url, fallback_url: null, width: still.width, height: still.height, preview_image_decoration_type: null } : null,
+      target_id: m.id,
+      target_url: `/p/${post.code}/`,
+      // The client draws the preview only for a SINGLE (or grid) layout; its
+      // REST mapping of a shared post uses MNLSXMALayoutType.SINGLE.
+      preview_layout_type: still ? 'SINGLE' : null,
+      cta_buttons: [],
+    },
+  };
+}
+
+/**
  * A conversation's newest messages as a SlideMessage connection (newest first,
  * the order of Direct's thread item lists). `senders` maps a member's pk to
- * the SlideUser shown beside their messages (name, avatar).
+ * the SlideUser shown beside their messages (name, avatar). A shared post's
+ * snippet is the client's own wording ("You sent a post by {author}.").
  */
-function slideMessages(db, conversationId, first, threadPk, senders = new Map()) {
+function slideMessages(db, conversationId, first, threadPk, senders = new Map(), viewer = null) {
   const rows = db
     .prepare(
-      `SELECT m.pk, m.body, m.created_at, u.pk AS sender_pk FROM messages m JOIN users u ON u.id = m.sender_id
+      `SELECT m.pk, m.body, m.shared_post_id, m.created_at, u.pk AS sender_pk, u.username AS sender_username FROM messages m JOIN users u ON u.id = m.sender_id
        WHERE m.conversation_id = ? AND m.deleted_at IS NULL ORDER BY m.created_at DESC, m.pk DESC LIMIT ?`
     )
     .all(conversationId, first + 1);
-  const edges = rows.slice(0, first).map((m) => ({
-    node: {
-      __typename: 'SlideMessage',
-      id: String(m.pk),
-      sender_fbid: String(m.sender_pk),
-      sender: senders.get(String(m.sender_pk)) || null,
-      timestamp_ms: ms(m.created_at),
-      igd_snippet: m.body,
-      text_body: m.body,
-      content_type: 'TEXT',
-      content: { __typename: 'SlideMessageText', text_body: m.body },
-      message_id: String(m.pk),
-      thread_fbid: String(threadPk),
-      is_reported: false,
-      is_ai_generated: false,
-      igd_is_forwarded: false,
-      reactions: [],
-      msg_reactions: [],
-      mentions: [],
-    },
-    cursor: String(m.pk),
-  }));
+  const edges = rows.slice(0, first).map((m) => {
+    let snippet = m.body;
+    let content = { __typename: 'SlideMessageText', text_body: m.body };
+    if (m.shared_post_id) {
+      content = sharedPostContent(db, m.shared_post_id, viewer && viewer.id);
+      const author = content.xma.header_title_text;
+      const mine = viewer && String(viewer.pk) === String(m.sender_pk);
+      snippet = author ? `${mine ? 'You' : m.sender_username} sent a post by ${author}.` : `${mine ? 'You' : m.sender_username} sent an attachment.`;
+    }
+    return {
+      node: {
+        __typename: 'SlideMessage',
+        id: String(m.pk),
+        sender_fbid: String(m.sender_pk),
+        sender: senders.get(String(m.sender_pk)) || null,
+        timestamp_ms: ms(m.created_at),
+        igd_snippet: snippet,
+        text_body: m.shared_post_id ? null : m.body,
+        // SlideMessage content types the client names are TEXT and a few
+        // XMA kinds; none names a post share, so a share has none.
+        content_type: m.shared_post_id ? null : 'TEXT',
+        content,
+        message_id: String(m.pk),
+        thread_fbid: String(threadPk),
+        is_reported: false,
+        is_ai_generated: false,
+        igd_is_forwarded: false,
+        reactions: [],
+        msg_reactions: [],
+        mentions: [],
+      },
+      cursor: String(m.pk),
+    };
+  });
   return { edges, page_info: { end_cursor: edges.length ? edges[edges.length - 1].cursor : null, has_next_page: rows.length > first } };
 }
 
@@ -269,7 +318,7 @@ function threadEdge(db, viewer, c, { messages = 0 } = {}) {
         return [String(u.pk), { __typename: 'SlideUser', id: String(u.pk), igid: String(u.pk), name: u.display_name || u.username, user_dict: dict }];
       })
     );
-    thread.slide_messages = slideMessages(db, c.id, messages, c.pk, senders);
+    thread.slide_messages = slideMessages(db, c.id, messages, c.pk, senders, viewer);
   }
   return { node: { __typename: 'SlideThread', id: `slide_thread:${c.pk}`, as_ig_direct_thread: thread }, cursor: String(c.pk) };
 }
@@ -582,6 +631,44 @@ function createHomeOperations(db) {
       const msg = messages.send(db, c.id, viewer.id, text, { clientContext });
       return {
         xig_direct_text_send_with_slide_messaging_response: { __typename: 'SlideMessage', id: String(msg.pk), message_id: String(msg.pk), timestamp_ms: ms(msg.createdAt) },
+      };
+    },
+
+    // The share sheet's Send (IGDMAPISendMediaShare): data {media_id} and
+    // send_data {thread_id} or {recipient_users: a JSON list of account pks},
+    // with offline_threading_id. One recipient shares into the existing
+    // conversation with them; several start a group. A repeated
+    // offline_threading_id returns the original message.
+    IGDirectMediaShareMutation(vars, ctx) {
+      const viewer = viewerOf(ctx);
+      const send = vars.send_data || {};
+      const postId = posts.resolveId(db, String((vars.data && vars.data.media_id) ?? ''));
+      if (!postId) throw notFound('Post not found');
+      let conversationId;
+      if (send.thread_id != null) {
+        const c = viewerConversation(db, viewer, send.thread_id);
+        if (!c) throw badRequest('Unknown thread');
+        conversationId = c.id;
+      } else {
+        let pks;
+        try {
+          pks = JSON.parse(String(send.recipient_users ?? ''));
+        } catch {
+          pks = null;
+        }
+        if (!Array.isArray(pks) || !pks.length || pks.length > 32 || !pks.every((pk) => /^\d{1,30}$/.test(String(pk)))) throw badRequest('recipient_users must list user ids');
+        const ids = pks.map((pk) => {
+          const row = users.getByPk(db, String(pk));
+          if (!row) throw notFound('User not found');
+          return row.id;
+        }).filter((id) => id !== viewer.id);
+        if (!ids.length) throw badRequest('recipient_users must list user ids');
+        conversationId = ids.length === 1 ? messages.findOrCreateDirect(db, viewer.id, ids[0]).id : messages.createConversation(db, viewer.id, ids).id;
+      }
+      const clientContext = send.offline_threading_id != null ? String(send.offline_threading_id).slice(0, 64) : undefined;
+      const msg = messages.send(db, conversationId, viewer.id, '', { clientContext, sharedPostId: postId });
+      return {
+        direct_media_share_with_slide_response: { __typename: 'SlideMessage', id: String(msg.pk), message_id: String(msg.pk), timestamp_ms: ms(msg.createdAt) },
       };
     },
 

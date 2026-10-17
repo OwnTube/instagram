@@ -372,6 +372,17 @@ const migrations = [
       `);
     },
   },
+  {
+    /**
+     * A post shared in Direct: the message names the post. It is not a
+     * foreign key, so a share whose post is later deleted stays a share (shown
+     * as unavailable) instead of turning into an empty text message.
+     */
+    id: '0008_message_shares',
+    up(db) {
+      db.exec('ALTER TABLE messages ADD COLUMN shared_post_id TEXT');
+    },
+  },
 ];
 
 module.exports = { migrations };

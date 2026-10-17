@@ -38,11 +38,13 @@ Active client: `rev1050722040-20261017T170808Z` (revision 1050722040).
 | Explore `/explore/` | no | - | - | **Blocked**: the client never names its root module; no genuine route definition is stored |
 | Notifications | yes | activity suites | genuine-activity check | |
 | Direct inbox, threads, send | yes | direct suites | yes | Not live: the realtime transport is not reproduced, so new messages need a reload (task: do last, per user) |
+| Share a post to Direct (share sheet Send), shared-post card, open from the thread | yes | `test/direct-share.test.js` | yes (`probe-sweep-share2`, `probe-share-thread`, `probe-share-open-post`) | A shared post the viewer can no longer see reads as a placeholder |
 | Notes: share, tray, audience | yes | `test/notes.test.js` | yes (`probe-notes-after-reload`, `probe-notes-mutual`) | |
 | Notes: delete from the tray | yes (server) | `test/notes.test.js` | no | The tray popover module `PolarisInboxTrayItemPopover.react` is not in the snapshot; queued for the next acquisition pass |
 | Stories, story viewer, highlights | yes | stories/highlights suites | yes | |
 | Story archive page `/archive/stories/` | no | - | - | **Blocked**: its root module is not named in the client bundles |
 | Saved posts tab `/<user>/saved/` | no | - | - | **Blocked**: its tab entry point is not named in the bundles (only `PolarisProfileSavedTabEntryPointVariables` is). Saving and unsaving posts works (row below) |
+| Save button on home feed posts | no | - | no | The feed's save button is the client's `cr:5226` slot (it renders `PolarisSaveButtonWithPopover`, whose fragment the client passes it); that module is not in the snapshot. Queued for the next acquisition pass. Saving from the post view works |
 | Save / unsave a post, collection picker | yes | `test/saved-posts.test.js` | yes (`probe-post-save-after`, `probe-post-saved-after-reload`) | Collections cannot be created from the web client in this snapshot; the picker lists existing ones |
 | Close-friends stories | n/a | - | - | Not creatable on web: the story upload (`PolarisAPICreationFinalizeStory`) sends no audience. Close Friends on web covers Notes (done) and the list itself (done) |
 | Notes audience picker | no | - | no | `PolarisInboxTrayComposerAudienceMenu.react` not in the snapshot; queued for the next acquisition pass. Default audience (mutual follows) works |

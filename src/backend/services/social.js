@@ -544,6 +544,7 @@ const messages = {
       senderPk: row.sender_pk ?? null,
       senderUsername: row.sender_username ?? null,
       body: row.body,
+      sharedPostId: row.shared_post_id ?? null,
       clientContext: row.client_context ?? null,
       createdAt: row.created_at,
     };
@@ -627,9 +628,14 @@ const messages = {
       .all(conversationId);
   },
 
-  /** Send a message. A repeated client_context from the same sender returns the original message. */
-  send(db, conversationId, senderId, body, { clientContext } = {}) {
+  /**
+   * Send a message. A repeated client_context from the same sender returns the
+   * original message. `sharedPostId` shares a post (the body may be empty);
+   * the sender must be able to see it.
+   */
+  send(db, conversationId, senderId, body, { clientContext, sharedPostId = null } = {}) {
     this.requireMembership(db, conversationId, senderId);
+    if (sharedPostId) visibility.requireVisiblePost(db, sharedPostId, senderId);
     if (clientContext) {
       const existing = db.prepare('SELECT id FROM messages WHERE sender_id = ? AND client_context = ?').get(senderId, clientContext);
       if (existing) return this.get(db, existing.id, senderId);
@@ -639,8 +645,8 @@ const messages = {
     db.exec('BEGIN');
     try {
       db.prepare(
-        'INSERT INTO messages (id, pk, conversation_id, sender_id, body, client_context, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
-      ).run(id, newPk(), conversationId, senderId, body, clientContext ?? null, now);
+        'INSERT INTO messages (id, pk, conversation_id, sender_id, body, client_context, shared_post_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+      ).run(id, newPk(), conversationId, senderId, body, clientContext ?? null, sharedPostId, now);
       db.prepare('UPDATE conversations SET updated_at = ? WHERE id = ?').run(now, conversationId);
       db.prepare('UPDATE conversation_members SET last_seen_at = ? WHERE conversation_id = ? AND user_id = ?').run(now, conversationId, senderId);
       db.exec('COMMIT');

@@ -285,8 +285,17 @@ function micros(iso) {
   return `${Date.parse(iso)}000`;
 }
 
-function threadItem(m) {
-  return {
+/** The post a Direct message shares, as `viewerId` may see it; null when it is gone or hidden from them. */
+function sharedPost(db, postId, viewerId) {
+  try {
+    return posts.get(db, postId, { viewerId });
+  } catch {
+    return null;
+  }
+}
+
+function threadItem(m, db = null, viewer = null) {
+  const item = {
     item_id: m.pk,
     user_id: m.senderPk,
     timestamp: micros(m.createdAt),
@@ -295,6 +304,13 @@ function threadItem(m) {
     client_context: m.clientContext ?? undefined,
     is_sent_by_viewer: undefined,
   };
+  if (!m.sharedPostId || !db) return item;
+  // A shared post: the media dict the client's media_share mapping reads
+  // (image_versions2, owner, caption); a post the viewer can no longer see
+  // is a placeholder item.
+  const post = sharedPost(db, m.sharedPostId, viewer && viewer.id);
+  const { text, ...rest } = item;
+  return post ? { ...rest, item_type: 'media_share', media_share: media(db, post, viewer && viewer.id) } : { ...rest, item_type: 'placeholder' };
 }
 
 function thread(db, conv, viewer, { members, items, hasOlder, oldestCursor }) {
@@ -309,7 +325,7 @@ function thread(db, conv, viewer, { members, items, hasOlder, oldestCursor }) {
     users: others.map((m) => user(db, m, viewer.id)),
     viewer_id: viewer.pk,
     inviter: user(db, members[0], viewer.id, { withFriendship: false }),
-    items: items.map((m) => ({ ...threadItem(m), is_sent_by_viewer: m.senderId === viewer.id })),
+    items: items.map((m) => ({ ...threadItem(m, db, viewer), is_sent_by_viewer: m.senderId === viewer.id })),
     last_activity_at: Number(micros(conv.updatedAt)),
     muted: false,
     is_group: members.length > 2,
@@ -372,6 +388,7 @@ module.exports = {
   highlightReel,
   thread,
   threadItem,
+  sharedPost,
   activity,
   micros,
 };
