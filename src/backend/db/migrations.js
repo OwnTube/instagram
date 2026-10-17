@@ -309,6 +309,33 @@ const migrations = [
       `);
     },
   },
+  {
+    /*
+     * Story highlights: a named, ordered collection of the owner's own stories
+     * (kept on the profile after the stories expire), with an optional cover.
+     */
+    id: '0005_highlights',
+    up(db) {
+      db.exec(`
+        CREATE TABLE highlights (
+          id              TEXT PRIMARY KEY,
+          pk              TEXT NOT NULL UNIQUE,
+          owner_id        TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          title           TEXT NOT NULL,
+          cover_story_id  TEXT REFERENCES stories(id) ON DELETE SET NULL,
+          created_at      TEXT NOT NULL,
+          updated_at      TEXT NOT NULL
+        );
+        CREATE INDEX idx_highlights_owner ON highlights(owner_id, created_at DESC);
+        CREATE TABLE highlight_items (
+          highlight_id  TEXT NOT NULL REFERENCES highlights(id) ON DELETE CASCADE,
+          story_id      TEXT NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
+          added_at      TEXT NOT NULL,
+          PRIMARY KEY (highlight_id, story_id)
+        );
+      `);
+    },
+  },
 ];
 
 module.exports = { migrations };

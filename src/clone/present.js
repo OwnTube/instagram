@@ -18,6 +18,7 @@ const { epochSeconds } = require('../backend/lib/ids');
 const { follows } = require('../backend/services/social');
 const posts = require('../backend/services/posts');
 const relationships = require('../backend/services/relationships');
+const { highlights } = require('../backend/services/highlights');
 
 const DEFAULT_AVATAR = '/__clone/static/default-avatar.svg';
 const DEFAULT_MEDIA_SIZE = 1080;
@@ -76,6 +77,7 @@ function userInfo(db, row, viewerId = null) {
     follower_count: counts.followers,
     following_count: counts.following,
     media_count: posts.countByAuthor(db, row.id),
+    highlight_reel_count: highlights.count(db, row.id, viewerId),
     is_business: false,
     account_type: 1,
     hd_profile_pic_url_info: { url: avatarOf(row), width: 320, height: 320 },
@@ -238,6 +240,42 @@ function reel(db, authorRow, items, viewerId) {
   };
 }
 
+/**
+ * A highlight as a reel (XDTReelDict, reel_type `highlight_reel`), id
+ * `highlight:<pk>` as polarisGetReelIdFromReelType builds it. Stories stay
+ * in a highlight after they expire.
+ */
+function highlightReel(db, h, viewerId) {
+  const authorUser = user(db, userRow(db, h.ownerId), viewerId);
+  const items = h.items.map((s) => storyItem(db, s, authorUser));
+  const cover = h.cover ? storyItem(db, h.cover, authorUser) : null;
+  const coverUrl = cover && cover.image_versions2.candidates[0] ? cover.image_versions2.candidates[0].url : null;
+  const id = `highlight:${h.pk}`;
+  return {
+    __typename: 'XDTReelDict',
+    id,
+    strong_id__: id,
+    title: h.title,
+    created_at: epochSeconds(h.createdAt),
+    latest_reel_media: items.reduce((m, s) => Math.max(m, s.taken_at), 0),
+    seen: null,
+    can_reply: false,
+    can_reshare: false,
+    reel_type: 'highlight_reel',
+    cover_media: {
+      cropped_image_version: coverUrl ? { url: coverUrl } : null,
+      full_image_version: null,
+      media_id: cover ? cover.id : null,
+      crop_rect: null,
+    },
+    user: authorUser,
+    items,
+    media_count: items.length,
+    media_ids: items.map((s) => s.pk),
+    prefetch_count: 0,
+  };
+}
+
 function micros(iso) {
   return `${Date.parse(iso)}000`;
 }
@@ -324,6 +362,7 @@ module.exports = {
   comment,
   reel,
   storyItem,
+  highlightReel,
   thread,
   threadItem,
   activity,

@@ -6,15 +6,34 @@
  * REST: success is the payload plus `"status": "ok"`; failure is
  * `{ "message", "status": "fail", ... }` with a non-2xx status. A failed
  * operation is never reported as `ok`.
+ *
+ * Comet async requests (cometAsyncFetch: `__a=1` with `__d`, as the client's
+ * getAsyncParams adds them; not Relay's GraphQL requests, which carry the
+ * same params) read the same body from the Comet envelope
+ * `for (;;);{"__ar":1,"payload":...}`; a failure there carries `error` and
+ * `errorSummary`/`errorDescription`, which cometAsyncFetch rejects with.
  */
 
 const { AppError } = require('../backend/lib/errors');
 
+function isCometAsync(req) {
+  // Relay's GraphQL requests carry the same async params but read plain JSON.
+  if (!req || /graphql/.test(req.path)) return false;
+  const params = { ...(req.body && typeof req.body === 'object' ? req.body : {}), ...req.query };
+  return String(params.__a) === '1' && params.__d != null;
+}
+
+function comet(res, httpStatus, envelope) {
+  return res.status(httpStatus).type('application/x-javascript').send(`for (;;);${JSON.stringify({ __ar: 1, ...envelope })}`);
+}
+
 function igOk(res, body = {}, httpStatus = 200) {
+  if (isCometAsync(res.req)) return comet(res, httpStatus, { payload: { ...body, status: 'ok' } });
   return res.status(httpStatus).json({ ...body, status: 'ok' });
 }
 
 function igFail(res, httpStatus, message, extra = {}) {
+  if (isCometAsync(res.req)) return comet(res, httpStatus, { error: httpStatus, errorSummary: message, errorDescription: message, payload: null });
   return res.status(httpStatus).json({ message, ...extra, status: 'fail' });
 }
 
@@ -43,4 +62,4 @@ function privateHeaders(req, res, next) {
   next();
 }
 
-module.exports = { igOk, igFail, errorHandler, privateHeaders };
+module.exports = { isCometAsync, igOk, igFail, errorHandler, privateHeaders };

@@ -96,7 +96,7 @@ function register(router, ctx) {
       restricted_by_viewer: false,
       is_business_account: false,
       is_professional_account: false,
-      highlight_reel_count: 0,
+      highlight_reel_count: info.highlight_reel_count,
       edge_owner_to_timeline_media: {
         count: info.media_count,
         page_info: { has_next_page: Boolean(recent.nextCursor), end_cursor: recent.nextCursor },

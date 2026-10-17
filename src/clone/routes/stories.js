@@ -4,6 +4,7 @@
 
 const users = require('../../backend/services/users');
 const { stories } = require('../../backend/services/social');
+const { highlights } = require('../../backend/services/highlights');
 const { notFound, badRequest } = require('../../backend/lib/errors');
 const { isPk } = require('../../backend/lib/ids');
 const { igOk } = require('../respond');
@@ -50,22 +51,101 @@ function register(router, ctx) {
     return igOk(res, { tray, story_ranking_token: '', has_new_nux_story: false });
   });
 
+  /** The viewer's own archived stories of one day (`archiveDay:<day start>`, as day_shells lists them). */
+  function archiveDayReel(day, viewerId) {
+    if (!viewerId || !/^-?\d+$/.test(day)) return null;
+    const start = Number(day) * 1000;
+    const list = stories
+      .listArchive(db, viewerId)
+      .filter((s) => Date.parse(s.createdAt) >= start && Date.parse(s.createdAt) < start + 86400 * 1000)
+      .reverse();
+    if (!list.length) return null;
+    return { ...present.reel(db, users.getById(db, viewerId), list, viewerId), id: `archiveDay:${day}`, reel_type: 'archive_day_reel' };
+  }
+
+  function highlightReel(pk, viewerId) {
+    if (!isPk(pk)) return null;
+    try {
+      return present.highlightReel(db, highlights.get(db, pk, viewerId), viewerId);
+    } catch (e) {
+      if (e.status === 404) return null;
+      throw e;
+    }
+  }
+
+  // Reel ids are user pks, `highlight:<pk>` or `archiveDay:<day>`
+  // (polarisGetReelIdFromReelType); unknown or invisible ones are left out.
   function reelsMedia(req, res) {
     let ids = req.params_.reel_ids ?? req.params_.user_ids ?? [];
     if (typeof ids === 'string') ids = ids.startsWith('[') ? JSON.parse(ids) : ids.split(',');
     if (!Array.isArray(ids)) throw badRequest('reel_ids must be a list');
+    const viewerId = req.viewer?.id ?? null;
     const reels = {};
     const list = [];
-    for (const pk of ids.map(String).filter(isPk).slice(0, 50)) {
-      const row = users.getByPk(db, pk);
-      const reel = row ? reelFor(row, req.viewer?.id ?? null) : null;
+    for (const id of ids.map(String).slice(0, 50)) {
+      let reel = null;
+      if (id.startsWith('highlight:')) reel = highlightReel(id.slice('highlight:'.length), viewerId);
+      else if (id.startsWith('archiveDay:')) reel = archiveDayReel(id.slice('archiveDay:'.length), viewerId);
+      else if (isPk(id)) {
+        const row = users.getByPk(db, id);
+        reel = row ? reelFor(row, viewerId) : null;
+      }
       if (reel) {
-        reels[pk] = reel;
+        reels[id] = reel;
         list.push(reel);
       }
     }
     return igOk(res, { reels, reels_media: list });
   }
+
+  /*
+   * Highlights, as PolarisStoryAPIActions posts them: media_ids are
+   * "<story pk>_<user pk>", cover is JSON {media_id}. The answer is the
+   * highlight reel under `reel` (normalizeReels reads it).
+   */
+  const parseList = (v, name) => {
+    if (v == null || v === '') return [];
+    let list = v;
+    if (typeof v === 'string') {
+      try {
+        list = JSON.parse(v);
+      } catch {
+        throw badRequest(`${name} must be a JSON list`);
+      }
+    }
+    if (!Array.isArray(list)) throw badRequest(`${name} must be a list`);
+    return list.map((x) => storyRef(x));
+  };
+  const parseCover = (v) => {
+    if (v == null || v === '') return null;
+    let c = v;
+    if (typeof v === 'string') {
+      try {
+        c = JSON.parse(v);
+      } catch {
+        throw badRequest('cover must be JSON');
+      }
+    }
+    return c && c.media_id != null ? storyRef(c.media_id) : null;
+  };
+  router.post('/api/v1/highlights/create_reel/', requireViewer, (req, res) => {
+    const p = req.params_;
+    const h = highlights.create(db, req.viewer.id, { title: p.title, storyPks: parseList(p.media_ids, 'media_ids'), coverPk: parseCover(p.cover) });
+    return igOk(res, { reel: present.highlightReel(db, h, req.viewer.id) });
+  });
+  router.post('/api/v1/highlights/:pk/edit_reel/', requireViewer, (req, res) => {
+    const p = req.params_;
+    const pk = String(req.params.pk).replace(/^highlight:/, '');
+    if (!isPk(pk)) throw badRequest('Invalid highlight id');
+    const h = highlights.edit(db, pk, req.viewer.id, {
+      title: p.title,
+      coverPk: parseCover(p.cover),
+      addPks: parseList(p.added_media_ids, 'added_media_ids'),
+      removePks: parseList(p.removed_media_ids, 'removed_media_ids'),
+    });
+    // Removing every story deletes the highlight: no reel to return then.
+    return igOk(res, h ? { reel: present.highlightReel(db, h, req.viewer.id) } : {});
+  });
   router.get('/api/v1/feed/reels_media/', reelsMedia);
   router.post('/api/v1/feed/reels_media/', reelsMedia);
 

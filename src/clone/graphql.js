@@ -21,6 +21,7 @@ const { feed, stories, follows, comments } = require('../backend/services/social
 const { badRequest, notFound, unauthorized } = require('../backend/lib/errors');
 const { isPk, pkFromShortcode } = require('../backend/lib/ids');
 const relationships = require('../backend/services/relationships');
+const { highlights } = require('../backend/services/highlights');
 const present = require('./present');
 const { createCaaRegistration, safeNext } = require('./caaRegistration');
 const { createHomeOperations } = require('./homeOperations');
@@ -99,6 +100,24 @@ function createGraphql({ db, contracts = null }) {
     return { id: present.mediaId(post), has_liked: Boolean(post.likedByViewer) };
   }
 
+  function highlightsTray(vars, ctx) {
+    const row = userFromVars(vars);
+    if (!row) throw notFound('User not found');
+    const viewerId = ctx.viewer?.id ?? null;
+    const all = highlights.listByOwner(db, row.id, viewerId);
+    const start = vars.after ? all.findIndex((h) => `highlight:${h.pk}` === String(vars.after)) + 1 : 0;
+    const take = limitOf({ first: vars.first ?? vars.max_highlights_to_fetch_on_pagination }, 50);
+    const page = all.slice(start, start + take);
+    const more = start + take < all.length;
+    // Keyed by the operation's alias for xdt_api__v1__user_id__paginated_highlights_tray_connection.
+    return {
+      highlights: {
+        edges: page.map((h) => ({ node: present.highlightReel(db, h, viewerId), cursor: `highlight:${h.pk}` })),
+        page_info: { end_cursor: more ? `highlight:${page[page.length - 1].pk}` : null, has_next_page: more, has_previous_page: false, start_cursor: null },
+      },
+    };
+  }
+
   const resolvers = {
     PolarisFeedTimelineRootV2Query(vars, ctx) {
       const viewer = needViewer(ctx);
@@ -127,6 +146,15 @@ function createGraphql({ db, contracts = null }) {
         // profile grid reads it unconditionally when signed in.
         xdt_viewer: ctx.viewer ? { user: { id: String(ctx.viewer.pk) } } : null,
       };
+    },
+
+    // The profile's highlights tray (and its pagination query): the owner's
+    // highlights, newest first, as highlight reels.
+    PolarisProfileStoryHighlightsTrayContentQuery(vars, ctx) {
+      return highlightsTray(vars, ctx);
+    },
+    ProfileStoryHighlightsTrayContentQuery_connection(vars, ctx) {
+      return highlightsTray(vars, ctx);
     },
 
     PolarisProfilePageContentQuery(vars, ctx) {

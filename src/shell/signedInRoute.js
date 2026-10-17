@@ -39,13 +39,20 @@ const FEED_ROOT = 'PolarisFeedRoot';
  *    PolarisFeedMobileTopNavigation, which has its own logged-in branch and
  *    renders nothing on wide screens;
  *  - `cr:4477` -> PolarisDesktopNavLoggedOutContainer (the "Log In" / "Sign Up"
- *    buttons; only consumer: PolarisDesktopNav).
+ *    buttons; only consumer: PolarisDesktopNav);
+ *  - `cr:7459` -> PolarisProfileStoryHighlightsTrayLegacy: PolarisProfileStoryHighlightsTray
+ *    renders the Relay tray (`cr:7462 ?? cr:9493`, PolarisProfileStoryHighlightsTray.next)
+ *    for a signed-in viewer given `highlightsQuery`, and the legacy tray
+ *    whenever cr:7459 is bound, except where the Relay tray renders while
+ *    logged out (crawlers), so the two never show together. The legacy tray
+ *    reads redux, which that Relay query fills
+ *    (subscribeToPolarisRelayUserHighlights), so signed in it is the Relay tray.
  * Each is replaced with the answer's own unbound form `{"__rc":[null,null]}`.
  * Other logged-out bindings are gated by the client itself (cr:7457 by
  * useHasLoggedOutMobileTopNav, cr:4197 by useShouldShowLoggedOutCallToAction)
  * and are left as delivered.
  */
-const LOGGED_OUT_ONLY = new Set(['cr:2696', 'cr:4477']);
+const LOGGED_OUT_ONLY = new Set(['cr:2696', 'cr:4477', 'cr:7459']);
 
 /**
  * Bindings for services this server does not have, left unbound so the client
@@ -105,7 +112,7 @@ function homeRoute() {
  * (`id`, `number_of_preloaded_posts`, default 12) and
  * PolarisProfilePostsTabRoot.react (`userID`, `userFullName`),
  * PolarisProfileRoot.react (`polaris_preload`, below); the switches
- * for queries we have no content for (highlights, suggested users, SEO pool)
+ * for queries we have no content for (suggested users, SEO pool)
  * are off.
  */
 function profileRoute(user) {
@@ -120,7 +127,7 @@ function profileRoute(user) {
       id: pk,
       userID: pk,
       userFullName: user.display_name || null,
-      enable_highlights_query: false,
+      enable_highlights_query: true,
       enable_suggested_users_query: false,
       enable_seo_crawling_pool: false,
       // PolarisPreloadConstants.POLARIS_PRELOAD_PROP: the server's preloader

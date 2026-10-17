@@ -203,6 +203,8 @@ test('a signed-in viewer does not get the logged-out desktop top navigation bind
         ['cr:2696', ['PolarisDesktopNav.react'], { __rc: ['PolarisDesktopNav.react', null] }, -1],
         ['cr:4477', ['PolarisDesktopNavLoggedOutContainer.react'], { __rc: ['PolarisDesktopNavLoggedOutContainer.react', null] }, -1],
         ['cr:7457', ['PolarisMobileTopNavLoggedOut.react'], { __rc: ['PolarisMobileTopNavLoggedOut.react', null] }, -1],
+        ['cr:7459', ['PolarisProfileStoryHighlightsTrayLegacy.react'], { __rc: ['PolarisProfileStoryHighlightsTrayLegacy.react', null] }, -1],
+        ['cr:9493', ['PolarisProfileStoryHighlightsTray.next.react'], { __rc: ['PolarisProfileStoryHighlightsTray.next.react', null] }, -1],
       ],
       require: [],
     },
@@ -213,6 +215,9 @@ test('a signed-in viewer does not get the logged-out desktop top navigation bind
   const byId = Object.fromEntries(block.define.map((d) => [d[0], d]));
   assert.deepStrictEqual(byId['cr:2696'], ['cr:2696', [], { __rc: [null, null] }, -1]);
   assert.deepStrictEqual(byId['cr:4477'], ['cr:4477', [], { __rc: [null, null] }, -1]);
+  // The legacy highlights tray gives way to the Relay tray (one tray, not two).
+  assert.deepStrictEqual(byId['cr:7459'], ['cr:7459', [], { __rc: [null, null] }, -1]);
+  assert.deepStrictEqual(byId['cr:9493'][2], { __rc: ['PolarisProfileStoryHighlightsTray.next.react', null] });
   // Gated by the client itself (useHasLoggedOutMobileTopNav): delivered as is.
   assert.deepStrictEqual(byId['cr:7457'][2], { __rc: ['PolarisMobileTopNavLoggedOut.react', null] });
 });
