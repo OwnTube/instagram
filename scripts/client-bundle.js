@@ -78,6 +78,9 @@ function readBundle(dir = DEFAULT_BUNDLE) {
   if (d.format !== BUNDLE_FORMAT) throw new BundleError(`${where}/bundle.json: format ${d.format}, expected ${BUNDLE_FORMAT}`);
   if (!SNAPSHOT_ID.test(String(d.snapshot))) throw new BundleError(`${where}/bundle.json: invalid snapshot id`);
   const store = openSnapshotStore(dir);
+  if (!fs.existsSync(path.join(dir, 'blobs'))) {
+    throw new BundleError(`${where}/blobs/ is absent: this checkout has the bundle's manifest but not its bodies (${d.blobs} blobs, ${d.bytes} bytes). Put them in ${where}/blobs/ (see client/README.md) and run setup again; setup never downloads them.`);
+  }
   const manifestFile = store.manifestPath(d.snapshot);
   if (!fs.existsSync(manifestFile)) throw new BundleError(`${where}: manifest of ${d.snapshot} missing (${path.relative(ROOT, manifestFile)})`);
   const raw = fs.readFileSync(manifestFile);

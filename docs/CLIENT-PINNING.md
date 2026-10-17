@@ -119,11 +119,42 @@ bootstrap shape); the genuine browser checks run against the real snapshot.
 
 ## Current snapshot (2026-10-17)
 
-Active: `rev1050701999-20261017T075357Z`, revision 1050701999, built from
-acquisition `20261017T074937Z` plus the local stores. Rollback:
-`rev1050682636-20261017T042512Z` (the previous active snapshot, kept
-verified; `client:rollback` returns to it). 15 documents, 32 answers, 8744
-assets (173.1 MB), known missing 0, integrity ok, all 4 bundle patches apply.
+Active: `rev1050722040-20261017T153014Z`, revision 1050722040, built from
+acquisition `20261017T152635Z` plus the local stores. Rollback:
+`rev1050701999-20261017T075357Z` (kept verified; `client:rollback` returns to
+it). 15 documents, 39 answers, 8743 assets (8766 unique blobs, 174.2 MB),
+known missing 0, integrity ok, all 4 bundle patches apply. This is the
+snapshot packaged in `client/` (`npm run client:setup`, below).
+
+Acquisition 20261017T152635Z (anonymous, one bounded pass, provenance in the
+manifest): 3 documents (`/`, `/accounts/emailsignup/`, and the not-found page
+`/no..such..account/`, which answered 200 where a 404 is expected, so the pass
+stopped there and did not store it), 39 bootloader answers and 47 assets, all
+at 200; nothing retried. New against the previous snapshot: the Direct
+"New message" dialog (`IGDOmniPickerDialogRoot.react`) and its search list.
+
+Verification (`client-snapshot.js verify rev1050722040-20261017T153014Z
+--browser`, upstream guard on): login 10/10, signup 13/13, feed 18/18, engage
+9/9, create 10/10, profile 10/10; scope complete; then activated. Also on it:
+restart 7/7, Direct 9/9, activity 8/8, search 9/9, stories 8/9 (same tray
+limitation as before), and the New-message search lists local accounts
+(`IGDOmniPickerSearchResultsListQuery`, items carrying `__isShareSheetItem`).
+
+### Packaged copy (`client/`)
+
+`npm run client:bundle` writes the active snapshot to `client/` in the store's
+layout (manifest byte for byte, its blobs, `bundle.json`); `npm run
+client:setup` installs it into `.cache/client/` offline, re-hashing every
+blob, activating it only when no valid snapshot is active (or with
+`--activate`), idempotently. Fresh-install proof (a clone in
+`.scratch/fresh-install/`, every step in a network namespace with only
+loopback): setup, integrity, active == packaged, the server serving the
+packaged revision, misses as explicit 404s with 0 upstream attempts, repeated
+setup a no-op, an existing valid snapshot kept, altered bundles refused; the
+login, signup and feed browser checks passed from that clone. The bodies
+(`client/blobs/`) are not committed pending the publishing decision.
+
+### Previous snapshot rev1050701999-20261017T075357Z
 
 Acquisition 20261017T074937Z (anonymous, one bounded pass; provenance in the
 manifest): 143 requests: 2 documents, 32 bootloader answers and 108 assets at

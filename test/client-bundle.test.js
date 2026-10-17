@@ -104,6 +104,9 @@ test('a missing or altered bundle fails with an actionable message and installs 
   throwsBundle(() => setup({ bundleDir: w.bundle, clientDir: w.client, log: quiet }), /no client bundle: .*bundle\.json does not exist.*never downloads/);
 
   const d = exportBundle({ clientDir: w.source, outDir: w.bundle, log: quiet });
+  fs.renameSync(path.join(w.bundle, 'blobs'), path.join(w.dir, 'blobs-aside'));
+  throwsBundle(() => setup({ bundleDir: w.bundle, clientDir: w.client, log: quiet }), /blobs\/ is absent: .*manifest but not its bodies/);
+  fs.renameSync(path.join(w.dir, 'blobs-aside'), path.join(w.bundle, 'blobs'));
   const store = openSnapshotStore(w.bundle);
   const m = store.load(d.snapshot);
   const blob = store.blobPath(m.assets['https://static.cdninstagram.com/b.js'].sha256);

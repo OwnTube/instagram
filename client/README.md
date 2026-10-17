@@ -32,3 +32,13 @@ npm run client:bundle                # (maintainers) replace it with the active 
 unreadable, the manifest does not match it, or any blob is missing or does not
 hash to its name; restore the directory (`git checkout -- client`) or re-export
 it. It never fetches a replacement.
+
+## Getting the bodies
+
+`bundle.json` and the manifest are committed. Whether `blobs/` is committed
+too, or published separately, is pending a decision (see the project status).
+Until then a checkout without `client/blobs/` makes `client:setup` stop with
+"client/blobs/ is absent". Put the exported `blobs/` directory (from
+`npm run client:bundle` on a machine holding the snapshot) at `client/blobs/`;
+setup checks every blob against the committed manifest, so bodies from any
+copy are accepted only if they are exactly the packaged ones.
