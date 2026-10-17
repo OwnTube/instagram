@@ -24,7 +24,7 @@ const backendApp = require('./backend');
 const backendConfig = require('./backend/config');
 const { createClone, classify } = require('./clone');
 const { personalize, viewerObject } = require('./shell/personalize');
-const { parseAnswer, homeRoute, profileRoute, storiesRoute, activityRoute, directInboxRoute, reelsRoute, errorRoute } = require('./shell/signedInRoute');
+const { parseAnswer, homeRoute, profileRoute, storiesRoute, activityRoute, directInboxRoute, reelsRoute, postRoute, errorRoute } = require('./shell/signedInRoute');
 const { routeKind } = require('./shell/templates');
 const { createPatcher } = require('./shell/bundlePatches');
 const { openPinnedClient } = require('./pinnedClient');
@@ -340,13 +340,13 @@ function canonicalDocPath(req) {
  * The signed-in route for a document request (src/shell/signedInRoute.js):
  * the home feed; an existing local account's profile (posts tab) or stories;
  * the client's own not-found route (HTTP 404) for a profile or stories URL
- * naming no local account. Anything else keeps the page's own route.
- * (Posts: PolarisPostRoot renders its content only through `cr:2882`, which
- * the anonymously acquired answer leaves unbound, so a post page would show
- * the 404 page for an existing post; it is not switched. See
- * docs/CLIENT-PINNING.md.)
+ * naming no local account; a post page (`/p/` or `/reel/` + shortcode) for a
+ * post the viewer may see, else the not-found route. A post page needs the
+ * desktop post page modules in the snapshot (postRoute); without them it
+ * falls back to the page's own route, as before. Anything else keeps the
+ * page's own route.
  */
-function signedInRouteFor(req) {
+function signedInRouteFor(req, viewer = null) {
   const kind = routeKind(req.path);
   if (kind === 'home') return homeRoute();
   if (kind === 'activity') return activityRoute();
@@ -354,6 +354,11 @@ function signedInRouteFor(req) {
   const thread = /^\/direct\/t\/(\d{1,30})\/?$/.exec(req.path);
   if (thread) return directInboxRoute(thread[1]);
   if (/^\/reels\/?$/.test(req.path)) return reelsRoute();
+  const permalink = /^\/(p|reel)\/([A-Za-z0-9_-]{1,64})\/?$/.exec(req.path);
+  if (permalink && cloneInstance) {
+    const post = cloneInstance.postByCode(permalink[2], viewer);
+    return post ? postRoute(post, permalink[1]) : errorRoute(req.path);
+  }
   if ((kind === 'profile' || kind === 'stories') && cloneInstance) {
     const segments = req.path.split('/').filter(Boolean);
     const user = cloneInstance.userByUsername(kind === 'stories' ? segments[1] : segments[0]);
@@ -390,7 +395,7 @@ function sendHtml(req, res, status, html) {
   const ctx = cloneInstance ? cloneInstance.documentContext(req, res) : { viewer: null, csrfToken: null, encryption: null };
   const stats = {};
   // Signed-in viewers get the signed-in route (opt out: SHELL_SIGNED_IN_HOME=0).
-  const route = process.env.SHELL_SIGNED_IN_HOME !== '0' && ctx.viewer ? signedInRouteFor(req) : null;
+  const route = process.env.SHELL_SIGNED_IN_HOME !== '0' && ctx.viewer ? signedInRouteFor(req, ctx.viewer) : null;
   const withAnswers = route ? routeWithAnswers(route, html) : null;
   const signedInHome = Boolean(withAnswers);
   const feedRoot = withAnswers ? withAnswers.answers : null;

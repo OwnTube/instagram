@@ -212,7 +212,7 @@ function personalize(html, { viewer = null, csrfToken, encryption, dropPrefetche
 
   let { html: out } = editJsonBlocks(html, visit);
   if (homeSwitch && counts.signedInRoute) {
-    const done = insertFeedRoot(out, feedRoot, docDefines, toLocal, initTuple, spec.root, spec.entryPoint);
+    const done = insertFeedRoot(out, feedRoot, docDefines, toLocal, initTuple, spec.root, spec.entryPoint, spec.bindings || {});
     out = done.html;
     counts.feedRootResources = done.inserted;
     counts.feedRootUnmapped = done.missing.length;

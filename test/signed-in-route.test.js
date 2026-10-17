@@ -17,7 +17,7 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { startCloneServer, Browser } = require('./clone-helpers');
+const { startCloneServer, Browser, pngBytes } = require('./clone-helpers');
 const { answerAt, sjs } = require('./snapshot-fixture');
 
 function documentAt(rev) {
@@ -188,4 +188,67 @@ test('signed-in stories and not-found routes, from pinned answers only', async (
   });
 
   await t.test('no upstream attempt', () => assert.deepStrictEqual(s.upstream, []));
+});
+
+test('signed-in post page: PolarisPostRoot with cr:2882 bound, only when the snapshot holds the desktop post root', async (t) => {
+  // PolarisPostRoot.react's answer leaves cr:2882 unbound, as the anonymous answer does.
+  const unbound = { define: [['cr:2882', [], { __rc: [null, null] }, -1]], require: [] };
+  const answers = { 'PolarisFeedRoot.react|': answerAt(100), 'PolarisErrorRoot.entrypoint|': answerAt(100), 'PolarisErrorRoot.react|': answerAt(100), 'PolarisPostRoot.entrypoint|': answerAt(100), 'PolarisPostRoot.react|': answerAt(100, { jsmods: unbound }) };
+  const withRoot = { ...answers, 'PolarisDesktopPostRoot.react|': answerAt(100) };
+  const get = (b, p) => b.get(p, { headers: { accept: 'text/html', 'sec-fetch-site': 'none' } });
+  const blocks = (html) => [...html.matchAll(/<script type="application\/json"[^>]*data-sjs>(.*?)<\/script>/g)].map((m) => JSON.parse(m[1]));
+  const initialize = (html) => blocks(html).flatMap((b) => b.require || []).find((r) => r[0] === 'CometPlatformRootClient' && r[1] === 'initialize')[3][0].initialRouteInfo.route;
+  const defines = (html) => blocks(html).flatMap((b) => (b.define || []).concat(...(b.require || []).filter((r) => r[0] === 'ServerJSDefine').map((r) => r[3] || [])));
+  const post = async (s, b) => {
+    const id = String(Date.now());
+    await b.request('POST', `/rupload_igphoto/fb_uploader_${id}`, { raw: pngBytes(), headers: { 'content-type': 'image/png', 'x-instagram-rupload-params': JSON.stringify({ upload_id: id }) } });
+    return (await b.post('/api/v1/media/configure/', { upload_id: id, caption: 'permalink' })).body.media;
+  };
+
+  await t.test('with the desktop post root: the post route, its props from the post, cr:2882 bound', async () => {
+    const s = await startCloneServer({}, { snapshot: { revision: '100', documents: { '/': documentAt(100) }, answers: withRoot } });
+    t.after(() => s.close());
+    const author = new Browser(s.base);
+    const a = await author.signup(s, { username: 'post_author' });
+    const media = await post(s, author);
+    const viewer = new Browser(s.base);
+    const v = await viewer.signup(s, { username: 'post_viewer' });
+    for (const prefix of ['p', 'reel']) {
+      const res = await get(viewer, `/${prefix}/${media.code}/`);
+      assert.strictEqual(res.status, 200, prefix);
+      const route = initialize(res.text);
+      assert.strictEqual(route.actorID, String(v.pk));
+      assert.deepStrictEqual(route.rootView.entryPoint, { __dr: 'PolarisPostRoot.entrypoint' });
+      assert.strictEqual(route.tracePolicy, 'polaris.postPage');
+      assert.deepStrictEqual(route.polarisRouteConfig, { pageID: 'postPage' });
+      assert.strictEqual(route.params.shortcode, media.code);
+      assert.strictEqual(route.params.permalink_key, prefix);
+      assert.strictEqual(route.rootView.props.media_id, String(media.pk));
+      assert.strictEqual(route.rootView.props.media_owner_id, String(a.pk));
+      assert.deepStrictEqual(route.rootView.props.polaris_preload.media.request, { method: 'GET', url: '/api/v1/media/{media_id}/info/', params: { path: { media_id: String(media.pk) }, query: {} } });
+      assert.ok(!/Log into Instagram/.test(res.text), 'no login markup');
+      assert.ok(res.text.includes('["cr:2882",["PolarisDesktopPostRoot.react"],{"__rc":["PolarisDesktopPostRoot.react",null]},-1]'), 'cr:2882 bound to the desktop post root');
+    }
+    // The media request the preloader spec names answers the post.
+    const info = await viewer.get(`/api/v1/media/${media.pk}/info/`);
+    assert.strictEqual(info.body.items[0].code, media.code);
+    // An unknown shortcode: the client's not-found route.
+    const missing = await get(viewer, '/p/NoSuchCode1/');
+    assert.strictEqual(missing.status, 404);
+    assert.deepStrictEqual(initialize(missing.text).rootView.entryPoint, { __dr: 'PolarisErrorRoot.entrypoint' });
+    assert.deepStrictEqual(s.upstream, []);
+  });
+
+  await t.test('without it (the current snapshot): the page keeps its own route and the gap is reported', async () => {
+    const s = await startCloneServer({}, { snapshot: { revision: '100', documents: { '/': documentAt(100) }, answers } });
+    t.after(() => s.close());
+    const author = new Browser(s.base);
+    await author.signup(s, { username: 'post_author2' });
+    const media = await post(s, author);
+    const res = await get(author, `/p/${media.code}/`);
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(initialize(res.text).actorID, '0', 'not switched');
+    const health = await author.get('/__loader/health');
+    assert.ok(health.body.client.missingRequests.some((m) => m.kind === 'route' && m.key === 'PolarisPostRoot'), JSON.stringify(health.body.client.missingRequests));
+  });
 });

@@ -42,9 +42,12 @@ Active client: `rev1050722040-20261017T170808Z` (revision 1050722040).
 | Notes: delete from the tray | yes (server) | `test/notes.test.js` | no | The tray popover module `PolarisInboxTrayItemPopover.react` is not in the snapshot; queued for the next acquisition pass |
 | Stories, story viewer, highlights | yes | stories/highlights suites | yes | |
 | Story archive page `/archive/stories/` | no | - | - | **Blocked**: its root module is not named in the client bundles |
+| Saved posts tab `/<user>/saved/` | no | - | - | **Blocked**: its tab entry point is not named in the bundles (only `PolarisProfileSavedTabEntryPointVariables` is). Saving and unsaving posts works |
+| Close-friends stories | n/a | - | - | Not creatable on web: the story upload (`PolarisAPICreationFinalizeStory`) sends no audience. Close Friends on web covers Notes (done) and the list itself (done) |
+| Notes audience picker | no | - | no | `PolarisInboxTrayComposerAudienceMenu.react` not in the snapshot; queued for the next acquisition pass. Default audience (mutual follows) works |
 | Post archive | n/a | - | - | Not a web feature: the genuine post menu (`PolarisPostOptionsPopover.next.react`) has no archive item. Its own-post items are delete, edit, hide from grid, commenting and like count |
 | Own-post options menu | partial | - | no | `PolarisPostFastOptionsModal.react` not in the snapshot; queued for the next acquisition pass |
-| `/p/<code>/` direct load | no | - | - | Needs `PolarisDesktopPostRoot.react` (bound to `cr:2882`) and `PolarisDesktopPostPage.react`. The page module is not in the snapshot; the next acquisition pass will request both. The pass on 2026-10-17 22:14Z hit a 429 (cooldown until 23:18Z) |
+| `/p/<code>/` direct load | yes (route, gated on the snapshot) | `signed-in-route.test.js` | not yet | Needs `PolarisDesktopPostRoot.react` (bound to `cr:2882`) and `PolarisDesktopPostPage.react`. The page module is not in the snapshot; the next acquisition pass will request both. The pass on 2026-10-17 22:14Z hit a 429 (cooldown until 23:18Z) |
 | Post modal inside the app | yes | - | yes | |
 | Reels upload, feed playback, profile grid | yes | `reels.test.js` | yes (`3a5a485`) | |
 | Reels tab `/reels/` layout | partial | - | yes (`probe-reels-before`) | **Blocked**: the route renders the client's mobile viewer, which fills the width. The desktop vertical layout (`PolarisClipsTabDesktopContainerImpl`) is only reachable through the in-app immersive modal. The signed-in desktop Reels-tab root is not in the snapshot |

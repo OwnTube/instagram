@@ -31,6 +31,7 @@ const fs = require('node:fs');
 const { attachViewer, csrfCheck, ensureCsrfCookie } = require('./session');
 const { resolveSession } = require('../backend/lib/auth');
 const users = require('../backend/services/users');
+const posts = require('../backend/services/posts');
 
 const RUNTIME_SOURCE = fs.readFileSync(path.join(__dirname, '..', 'shell', 'runtime.js'), 'utf8');
 const { igOk, igFail, errorHandler, privateHeaders } = require('./respond');
@@ -418,6 +419,17 @@ function createClone({ db, dataDir = '.data', logger = console, env = process.en
     return user && user.status === 'active' ? user : null;
   }
 
+  /** A post `viewer` may see, by shortcode (a post page's subject), or null. */
+  function postByCode(code, viewer) {
+    const id = posts.resolveId(db, String(code));
+    if (!id) return null;
+    try {
+      return posts.get(db, id, { viewerId: viewer ? viewer.id : null });
+    } catch {
+      return null;
+    }
+  }
+
   /** What a page needs to be personalised for this browser. */
   function documentContext(req, res) {
     const found = viewerFor(req);
@@ -428,7 +440,7 @@ function createClone({ db, dataDir = '.data', logger = console, env = process.en
     };
   }
 
-  return { router, codec, media, graphql, config, classify, viewerFor, userByUsername, documentContext, recordDocument };
+  return { router, codec, media, graphql, config, classify, viewerFor, userByUsername, postByCode, documentContext, recordDocument };
 }
 
 module.exports = { createClone, classify };

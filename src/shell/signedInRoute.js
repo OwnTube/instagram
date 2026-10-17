@@ -66,7 +66,9 @@ const LOGGED_OUT_ONLY = new Set(['cr:2696', 'cr:4477', 'cr:7459']);
  */
 const NO_LOCAL_SERVICE = new Set(['cr:5380']);
 
-function forSignedInViewer(define) {
+function forSignedInViewer(define, bindings = {}) {
+  const bound = bindings[define[0]];
+  if (bound) return [define[0], [bound], { __rc: [bound, null] }, define[3]];
   return LOGGED_OUT_ONLY.has(define[0]) || NO_LOCAL_SERVICE.has(define[0]) ? [define[0], [], { __rc: [null, null] }, define[3]] : define;
 }
 const FEED_PARAMS = { create_live: false, create_long_video: false, create_post: false, from_share: false, yr: false, scs: false, flo: false, variant: null };
@@ -249,6 +251,59 @@ function reelsRoute() {
 }
 
 /**
+ * A post page (`/p/{shortcode}/`, `/reel/{shortcode}/`):
+ * XPolarisPostControllerRouteBuilder `/{permalink_key}/{shortcode}/{?slug}/`
+ * with its default params. PolarisPostRoot.entrypoint preloads the "more
+ * posts" grid (routeProps.media_owner_id); PolarisPostRoot.react reads
+ * routeParams.shortcode and routeProps media_id (the media pk: the client
+ * keys posts by `id.split("_")[0]`), media_owner_id and
+ * polaris_preload.media, and renders the page through `cr:2882`, which the
+ * anonymous answer leaves unbound (its fallback is the 404 page).
+ *
+ * `polaris_preload.media` is a preloader spec in the shape
+ * bootstrapPolarisPreloader reads ({request: {method, url, params}, ...}),
+ * not enabled, so usePolarisPreloadedGetQuery issues the request itself: the
+ * client's own media info request (PolarisPostActionLoadPost:
+ * `/api/v1/media/{media_id}/info/` with {path: {media_id}, query: {}}).
+ *
+ * `cr:2882` is bound to PolarisDesktopPostRoot.react. It is the desktop post
+ * page root: it reads routeProps.media_id, renders PolarisShell under the page
+ * ID, and lazily loads PolarisDesktopPostPage.react. Nothing else in the
+ * bundles references it. This binding is an inference from that evidence,
+ * not a recorded server answer. The route is served only when the snapshot
+ * holds all three answers below; otherwise the page falls back as before
+ * (routeWithAnswers).
+ */
+const POST_PARAMS = { chaining: false, preserve_img_index: false, viewer: false, show_insights: false, slug: null };
+function postRoute(post, permalinkKey = 'p') {
+  const mediaId = String(post.pk);
+  return {
+    entryPoint: 'PolarisPostRoot',
+    root: 'PolarisPostRoot',
+    answers: ['PolarisPostRoot.entrypoint', 'PolarisPostRoot.react', 'PolarisDesktopPostRoot.react'],
+    bindings: { 'cr:2882': 'PolarisDesktopPostRoot.react' },
+    props: {
+      media_id: mediaId,
+      media_owner_id: String(post.authorPk),
+      polaris_preload: {
+        media: {
+          request: { method: 'GET', url: '/api/v1/media/{media_id}/info/', params: { path: { media_id: mediaId }, query: {} } },
+          preloadEnabledOnInit: false,
+          preloadEnabledOnNav: false,
+          preloaderID: null,
+        },
+      },
+    },
+    params: { ...POST_PARAMS, permalink_key: permalinkKey, shortcode: post.code },
+    routePath: '/{permalink_key}/{shortcode}/{?slug}/',
+    tracePolicy: 'polaris.postPage',
+    pageID: 'postPage',
+    // usePolarisIsOnPostPage: entity_type `post`.
+    entityKeyConfig: { entity_type: { source: 'constant', value: 'post' } },
+  };
+}
+
+/**
  * The client's own "page not available" route (PolarisErrorRoot: entry point
  * with no preloads, root rendering PolarisHttp404Page), for a URL that names
  * nothing here, e.g. a profile of no local account. Its route props
@@ -394,7 +449,7 @@ function attr(value) {
  * Returns { html, inserted, missing }; `missing` lists resource hashes the
  * answer names but does not map (they cannot be served and are reported).
  */
-function insertFeedRoot(html, answers, docDefines, toLocal, initTuple, root = FEED_ROOT, entryPoint = root) {
+function insertFeedRoot(html, answers, docDefines, toLocal, initTuple, root = FEED_ROOT, entryPoint = root, bindings = {}) {
   // One answer, or several (a route whose entry point and root component are
   // answered separately); each is applied the way HasteResponse.handle does.
   const list = Array.isArray(answers) ? answers : [answers];
@@ -423,7 +478,7 @@ function insertFeedRoot(html, answers, docDefines, toLocal, initTuple, root = FE
     for (const d of jsmods.define || []) {
       if (!Array.isArray(d) || seenDefines.has(d[0])) continue;
       seenDefines.add(d[0]);
-      define.push(forSignedInViewer(d));
+      define.push(forSignedInViewer(d, bindings));
     }
     if (answer.hsrp.hsdp) require.push(['HasteSupportData', 'handle', null, [answer.hsrp.hsdp]]);
     require.push(['Bootloader', 'handlePayload', null, [hblp]]);
@@ -456,4 +511,4 @@ function insertFeedRoot(html, answers, docDefines, toLocal, initTuple, root = FE
   return { html: html.slice(0, at) + parts.join('') + html.slice(at), inserted: tags.length, missing };
 }
 
-module.exports = { emptySSRMount, isLoginHomeInitialize, toSignedInHome, toSignedInRoute, homeRoute, profileRoute, storiesRoute, activityRoute, directInboxRoute, reelsRoute, errorRoute, isSSRInit, disableAnonymousSSR, insertFeedRoot, parseAnswer, FEED_ROOT, LOGGED_OUT_ONLY, NO_LOCAL_SERVICE };
+module.exports = { emptySSRMount, isLoginHomeInitialize, toSignedInHome, toSignedInRoute, homeRoute, profileRoute, storiesRoute, activityRoute, directInboxRoute, reelsRoute, postRoute, errorRoute, isSSRInit, disableAnonymousSSR, insertFeedRoot, parseAnswer, FEED_ROOT, LOGGED_OUT_ONLY, NO_LOCAL_SERVICE };
