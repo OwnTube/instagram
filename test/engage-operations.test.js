@@ -52,6 +52,24 @@ test('like and comment operations', async (t) => {
     assert.strictEqual((await gql(ann, 'usePolarisCommentCreateMutation', { data: { comment_text: '   ', media_id: mediaId } })).status, 400);
   });
 
+  await t.test('comment likes set and clear the heart, count and notify the author', async () => {
+    const created = (await gql(bob, 'usePolarisCommentCreateMutation', { data: { comment_text: 'thanks', media_id: mediaId } })).body.data.xig_comment_create.comment_dict;
+    const like = (b) => gql(b, 'PolarisCommentActionsLikeMutation', { input: { comment_id: String(created.pk), actor_id: '1', client_mutation_id: '1' } });
+    const listed = async (b) => (await b.get(`/api/v1/media/${media.pk}/comments/`)).body.comments.find((c) => String(c.pk) === String(created.pk));
+    const res = await like(ann);
+    assert.strictEqual(res.status, 200, res.text.slice(0, 200));
+    assert.deepStrictEqual(res.body.data, { xig_comment_like: { __typename: 'XIGCommentLikeMutationResponse' } });
+    assert.strictEqual((await like(ann)).status, 200, 'liking twice is not an error');
+    assert.deepStrictEqual([(await listed(ann)).comment_like_count, (await listed(ann)).has_liked_comment], [1, true]);
+    assert.deepStrictEqual([(await listed(bob)).comment_like_count, (await listed(bob)).has_liked_comment], [1, false]);
+    const n = db.prepare("SELECT body FROM notifications n JOIN users u ON u.id = n.user_id WHERE u.pk = ? AND n.kind = 'comment_like'").all(String(b.pk));
+    assert.deepStrictEqual(n.map((r) => r.body), ['liked your comment: thanks']);
+    const un = await gql(ann, 'PolarisCommentActionsUnlikeMutation', { input: { comment_id: String(created.pk), actor_id: '1', client_mutation_id: '2' } });
+    assert.deepStrictEqual(un.body.data, { xig_comment_unlike: { __typename: 'XIGCommentUnlikeMutationResponse' } });
+    assert.deepStrictEqual([(await listed(ann)).comment_like_count, (await listed(ann)).has_liked_comment], [0, false]);
+    assert.strictEqual((await gql(ann, 'PolarisCommentActionsLikeMutation', { input: { comment_id: '999999' } })).status, 404);
+  });
+
   await t.test('the mutations need a session', async () => {
     const anon = new Browser(server.base);
     await anon.visit();

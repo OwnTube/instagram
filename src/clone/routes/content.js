@@ -163,7 +163,7 @@ function register(router, ctx) {
     const result = comments.list(db, post.id, page(req, { fallback: 20 }), viewerId(req));
     const mediaId = present.mediaId(post);
     return igOk(res, {
-      comments: result.items.map((c) => present.comment(db, c, mediaId)),
+      comments: result.items.map((c) => present.comment(db, c, mediaId, viewerId(req))),
       comment_count: post.commentCount,
       caption: null,
       has_more_comments: Boolean(result.nextCursor),
@@ -199,7 +199,7 @@ function register(router, ctx) {
     const parentId = parentRef ? comments.resolveId(db, parentRef) : undefined;
     if (parentRef && !parentId) throw notFound('Comment not found');
     const c = comments.create(db, post.id, req.viewer.id, { body: text, parentId });
-    const shaped = present.comment(db, c, present.mediaId(post));
+    const shaped = present.comment(db, c, present.mediaId(post), req.viewer.id);
     return igOk(res, {
       ...shaped,
       comment: shaped,

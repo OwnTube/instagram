@@ -127,7 +127,7 @@ test('pk and shortcode invariants', async (t) => {
       "INSERT INTO users (id, username, username_ci, created_at, updated_at) VALUES ('u1', 'Old', 'old', ?, ?)"
     ).run(now, now);
     db.prepare("INSERT INTO posts (id, author_id, created_at, updated_at) VALUES ('p1', 'u1', ?, ?)").run(now, now);
-    assert.deepStrictEqual(migrate(db), ['0002_client_compat', '0003_relationship_lists', '0004_story_likes', '0005_highlights', '0006_notes', '0007_video', '0008_message_shares']);
+    assert.deepStrictEqual(migrate(db), ['0002_client_compat', '0003_relationship_lists', '0004_story_likes', '0005_highlights', '0006_notes', '0007_video', '0008_message_shares', '0009_comment_likes']);
     const user = db.prepare('SELECT pk FROM users').get();
     const p = db.prepare('SELECT pk, code FROM posts').get();
     assert.match(user.pk, /^\d+$/);

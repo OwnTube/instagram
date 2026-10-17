@@ -31,6 +31,7 @@ Active client: `rev1050722040-20261017T170808Z` (revision 1050722040).
 | Signup, login, logout | yes | auth suites | genuine-signup/login checks | |
 | Home feed, empty feed, post rendering | yes | feed suites | genuine-feed check | |
 | Likes, comments, persistence | yes | `engage-operations` | genuine-engage check; post modal like (`probe-post-liked`, `probe-post-like-after-reload`) | In the post modal opened from a profile grid, the heart fills at once but the count text updates on the next load. This is the client's own behaviour: `PolarisAPILikePostMutation` selects only `id` and `has_liked`, and the profile grid's Relay-to-Redux sync (`syncPolarisRelayProfileUserTimeline`) copies the grid's earlier `like_count` back |
+| Comment likes, replies | yes | `engage-operations` | yes (`probe-sweep-comment-reply`, `probe-comment-liked-after-reload`) | A comment like notifies the comment's author |
 | Profile, grid, follow lists | yes | profile suites | genuine-profile check | |
 | Profile photo change/remove | yes | `profile-picture` | yes (`3786953`) | |
 | Profile Message button | yes | `profile-message` | yes (`2932deb`) | |

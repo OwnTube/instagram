@@ -465,7 +465,7 @@ function createHomeOperations(db) {
       const rows = db.prepare('SELECT kind, COUNT(*) AS n FROM notifications WHERE user_id = ? AND read_at IS NULL GROUP BY kind').all(viewer.id);
       const counts = { comments: 0, likes: 0, relationships: 0, usertags: 0 };
       for (const r of rows) {
-        if (r.kind === 'like') counts.likes += r.n;
+        if (r.kind === 'like' || r.kind === 'comment_like') counts.likes += r.n;
         else if (r.kind === 'comment') counts.comments += r.n;
         else if (RELATIONSHIP_KINDS.has(r.kind)) counts.relationships += r.n;
       }

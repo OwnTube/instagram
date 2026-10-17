@@ -15,7 +15,7 @@
  */
 
 const { epochSeconds } = require('../backend/lib/ids');
-const { follows } = require('../backend/services/social');
+const { follows, comments } = require('../backend/services/social');
 const posts = require('../backend/services/posts');
 const relationships = require('../backend/services/relationships');
 const { highlights } = require('../backend/services/highlights');
@@ -165,7 +165,8 @@ function media(db, post, viewerId = null) {
   };
 }
 
-function comment(db, c, postPkWithAuthor) {
+function comment(db, c, postPkWithAuthor, viewerId = null) {
+  const likes = comments.likeState(db, c.id, viewerId);
   const created = epochSeconds(c.createdAt);
   return {
     pk: c.pk,
@@ -188,8 +189,8 @@ function comment(db, c, postPkWithAuthor) {
     type: c.parentId ? 2 : 0,
     status: 'Active',
     parent_comment_id: c.parentPk ?? null,
-    comment_like_count: 0,
-    has_liked_comment: false,
+    comment_like_count: likes.count,
+    has_liked_comment: likes.liked,
     child_comment_count: 0,
   };
 }
@@ -347,7 +348,8 @@ function thread(db, conv, viewer, { members, items, hasOlder, oldestCursor }) {
  * Activity ("news inbox") stories. story_type values follow the v1 activity
  * feed: 101 follow, 60 like, 12 comment, 75 follow request, 13 accepted.
  */
-const ACTIVITY_TYPE = { follow: 101, like: 60, comment: 12, follow_request: 75, follow_accepted: 13 };
+// A comment like is a like story about the commented post.
+const ACTIVITY_TYPE = { follow: 101, like: 60, comment_like: 60, comment: 12, follow_request: 75, follow_accepted: 13 };
 
 function activity(db, n) {
   const ts = epochSeconds(n.createdAt);
@@ -362,8 +364,8 @@ function activity(db, n) {
   // A comment notification keeps the comment's text as its body; the story
   // reads "<name> commented: <text>" and shows the commented post.
   let postId = n.subjectType === 'post' ? n.subjectId : null;
-  if (n.kind === 'comment') {
-    args.text = `${n.actorUsername || 'Someone'} commented: ${n.body || ''}`.trim();
+  if (n.kind === 'comment' || n.kind === 'comment_like') {
+    if (n.kind === 'comment') args.text = `${n.actorUsername || 'Someone'} commented: ${n.body || ''}`.trim();
     const c = n.subjectType === 'comment' && n.subjectId ? db.prepare('SELECT post_id FROM comments WHERE id = ?').get(n.subjectId) : null;
     postId = c ? c.post_id : null;
   }

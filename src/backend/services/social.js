@@ -61,6 +61,31 @@ const comments = {
     return this.toPublic(row);
   },
 
+  /**
+   * Like or unlike a comment on a post the user can see. Liking twice or
+   * unliking a comment not liked is not an error. The comment's author is
+   * notified of a new like (not of their own).
+   */
+  setLike(db, commentId, userId, liked) {
+    const c = db.prepare('SELECT id, post_id, author_id, body FROM comments WHERE id = ? AND deleted_at IS NULL').get(commentId);
+    if (!c) throw notFound('Comment not found');
+    visibility.requireVisiblePost(db, c.post_id, userId);
+    if (!liked) {
+      db.prepare('DELETE FROM comment_likes WHERE user_id = ? AND comment_id = ?').run(userId, c.id);
+      return { commentId: c.id, liked: false };
+    }
+    const info = db.prepare('INSERT OR IGNORE INTO comment_likes (user_id, comment_id, created_at) VALUES (?, ?, ?)').run(userId, c.id, nowIso());
+    if (info.changes) visibility.notify(db, { userId: c.author_id, kind: 'comment_like', actorId: userId, subjectType: 'comment', subjectId: c.id, body: `liked your comment: ${c.body}` });
+    return { commentId: c.id, liked: true };
+  },
+
+  /** A comment's like count and whether `viewerId` liked it. */
+  likeState(db, commentId, viewerId) {
+    const count = db.prepare('SELECT COUNT(*) AS n FROM comment_likes WHERE comment_id = ?').get(commentId).n;
+    const liked = viewerId ? Boolean(db.prepare('SELECT 1 FROM comment_likes WHERE comment_id = ? AND user_id = ?').get(commentId, viewerId)) : false;
+    return { count, liked };
+  },
+
   resolveId(db, ref) {
     const row =
       db.prepare('SELECT id FROM comments WHERE pk = ? AND deleted_at IS NULL').get(String(ref)) ||

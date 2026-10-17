@@ -100,6 +100,12 @@ function createGraphql({ db, contracts = null, media = null }) {
     return { id: present.mediaId(post), has_liked: Boolean(post.likedByViewer) };
   }
 
+  function commentIdOf(vars) {
+    const id = comments.resolveId(db, String((vars.input && vars.input.comment_id) || ''));
+    if (!id) throw notFound('Comment not found');
+    return id;
+  }
+
   /** The post named by input.media_id, visible to `viewer` (else not found). */
   function savedPost(vars, viewer) {
     const id = posts.resolveId(db, String((vars.input && vars.input.media_id) || ''));
@@ -233,6 +239,21 @@ function createGraphql({ db, contracts = null, media = null }) {
       };
     },
 
+    // The heart beside a comment (PolarisCommentActions): input {comment_id
+    // (the comment pk), actor_id, client_mutation_id}; the answer selects only
+    // the response's type.
+    PolarisCommentActionsLikeMutation(vars, ctx) {
+      const viewer = needViewer(ctx);
+      comments.setLike(db, commentIdOf(vars), viewer.id, true);
+      return { xig_comment_like: { __typename: 'XIGCommentLikeMutationResponse' } };
+    },
+
+    PolarisCommentActionsUnlikeMutation(vars, ctx) {
+      const viewer = needViewer(ctx);
+      comments.setLike(db, commentIdOf(vars), viewer.id, false);
+      return { xig_comment_unlike: { __typename: 'XIGCommentUnlikeMutationResponse' } };
+    },
+
     // Comment from the post's comment field (usePolarisCommentCreate): data
     // {comment_text, media_id, replied_to_comment_fbid?, tracking_token}.
     usePolarisCommentCreateMutation(vars, ctx) {
@@ -247,7 +268,7 @@ function createGraphql({ db, contracts = null, media = null }) {
       const parentRef = data.replied_to_comment_fbid;
       const parentId = parentRef ? comments.resolveId(db, String(parentRef)) : undefined;
       if (parentRef && !parentId) throw notFound('Comment not found');
-      const c = present.comment(db, comments.create(db, post.id, viewer.id, { body: text, parentId }), present.mediaId(post));
+      const c = present.comment(db, comments.create(db, post.id, viewer.id, { body: text, parentId }), present.mediaId(post), viewer.id);
       const { pk, username, full_name, profile_pic_url, is_verified } = c.user;
       return {
         xig_comment_create: {

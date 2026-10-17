@@ -383,6 +383,21 @@ const migrations = [
       db.exec('ALTER TABLE messages ADD COLUMN shared_post_id TEXT');
     },
   },
+  {
+    /** Likes on comments (the heart beside each comment). */
+    id: '0009_comment_likes',
+    up(db) {
+      db.exec(`
+        CREATE TABLE comment_likes (
+          user_id     TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          comment_id  TEXT NOT NULL REFERENCES comments(id) ON DELETE CASCADE,
+          created_at  TEXT NOT NULL,
+          PRIMARY KEY (user_id, comment_id)
+        );
+        CREATE INDEX idx_comment_likes_comment ON comment_likes(comment_id);
+      `);
+    },
+  },
 ];
 
 module.exports = { migrations };
