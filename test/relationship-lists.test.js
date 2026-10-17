@@ -40,6 +40,16 @@ test('relationship lists', async (t) => {
     assert.strictEqual((await status(ann, b.pk)).is_feed_favorite, true);
   });
 
+  await t.test("the post menu's favorite / unfavorite (usePolarisUpdateFeedFavoritesUpdatable, variables {data})", async () => {
+    await gql(ann, 'usePolarisUpdateFeedFavoritesMutation', { input: { add: [], remove: [String(b.pk)], source: 'profile' } });
+    const fav = await gql(ann, 'usePolarisUpdateFeedFavoritesUpdatableFavoriteMutation', { data: { add: [String(b.pk)], remove: [], source: 'favorites_management' } });
+    assert.deepStrictEqual(fav.body.data, { xig_update_feed_favorites: { __typename: 'XIGUpdateFeedFavoritesMutationResponse' } });
+    assert.strictEqual((await status(ann, b.pk)).is_feed_favorite, true);
+    await gql(ann, 'usePolarisUpdateFeedFavoritesUpdatableUnfavoriteMutation', { data: { add: [], remove: [String(b.pk)], source: 'favorites_management' } });
+    assert.strictEqual((await status(ann, b.pk)).is_feed_favorite, false);
+    assert.strictEqual((await gql(ann, 'usePolarisUpdateFeedFavoritesUpdatableFavoriteMutation', { data: { add: ['999999999999'], remove: [] } })).status, 404);
+  });
+
   await t.test('restrict and unrestrict', async () => {
     const r = await gql(ann, 'usePolarisRestrictMutation', { target_user_ids: [String(b.pk)] });
     assert.deepStrictEqual(r.body.data.xdt_api__v1__restrict_action__restrict_many, [{ id: String(b.pk), pk: String(b.pk), friendship_status: { is_restricted: true } }]);

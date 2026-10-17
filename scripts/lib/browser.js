@@ -31,6 +31,13 @@ function launchChromium(profileDir) {
         '--disable-dev-shm-usage',
         '--no-first-run',
         '--no-default-browser-check',
+        // Chromium's own services (push/GCM, component updates, sync, field
+        // trials) stay off: the only traffic is the page's, to this server.
+        '--disable-background-networking',
+        '--disable-component-update',
+        '--disable-sync',
+        '--disable-field-trial-config',
+        '--no-pings',
         '--remote-debugging-port=0',
         `--user-data-dir=${profileDir}`,
         'about:blank',

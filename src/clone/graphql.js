@@ -258,6 +258,18 @@ function createGraphql({ db, contracts = null }) {
       };
     },
 
+    // The post menu's "Add to favorites" / "Remove from favorites"
+    // (usePolarisUpdateFeedFavoritesUpdatable: `data` {add, remove, source};
+    // the client updates is_feed_favorite itself).
+    usePolarisUpdateFeedFavoritesUpdatableFavoriteMutation(vars, ctx) {
+      updateList(needViewer(ctx), 'favorites', vars.data || {});
+      return { xig_update_feed_favorites: { __typename: 'XIGUpdateFeedFavoritesMutationResponse' } };
+    },
+    usePolarisUpdateFeedFavoritesUpdatableUnfavoriteMutation(vars, ctx) {
+      updateList(needViewer(ctx), 'favorites', vars.data || {});
+      return { xig_update_feed_favorites: { __typename: 'XIGUpdateFeedFavoritesMutationResponse' } };
+    },
+
     usePolarisRestrictMutation(vars, ctx) {
       const viewer = needViewer(ctx);
       const changed = updateList(viewer, 'restricted', { add: vars.target_user_ids });
