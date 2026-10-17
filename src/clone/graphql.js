@@ -17,7 +17,7 @@
 
 const users = require('../backend/services/users');
 const posts = require('../backend/services/posts');
-const { feed, stories, follows, comments } = require('../backend/services/social');
+const { feed, stories, follows, comments, saved } = require('../backend/services/social');
 const { badRequest, notFound, unauthorized } = require('../backend/lib/errors');
 const { isPk, pkFromShortcode } = require('../backend/lib/ids');
 const relationships = require('../backend/services/relationships');
@@ -98,6 +98,13 @@ function createGraphql({ db, contracts = null, media = null }) {
     if (!id) throw notFound('Media not found');
     const post = posts.setLike(db, id, viewer.id, liked);
     return { id: present.mediaId(post), has_liked: Boolean(post.likedByViewer) };
+  }
+
+  /** The post named by input.media_id, visible to `viewer` (else not found). */
+  function savedPost(vars, viewer) {
+    const id = posts.resolveId(db, String((vars.input && vars.input.media_id) || ''));
+    if (!id) throw notFound('Media not found');
+    return posts.get(db, id, { viewerId: viewer.id });
   }
 
   function highlightsTray(vars, ctx) {
@@ -188,6 +195,42 @@ function createGraphql({ db, contracts = null, media = null }) {
 
     PolarisAPIUnlikePostMutation(vars, ctx) {
       return { xig_media_unlike: { media: likeMedia(vars, ctx, false) } };
+    },
+
+    // The post's save button (PolarisAPISavePost / PolarisAPIUnsavePost):
+    // input {media_id}; the answer selects the media's id. Saving twice or
+    // unsaving a post that is not saved is not an error, like the like button.
+    PolarisAPISavePostMutation(vars, ctx) {
+      const viewer = needViewer(ctx);
+      const post = savedPost(vars, viewer);
+      // Saving a post already saved keeps the collection it is in.
+      if (!post.savedByViewer) saved.save(db, viewer.id, post.id, null);
+      return { xig_media_save: { media: { id: present.mediaId(post) } } };
+    },
+
+    PolarisAPIUnsavePostMutation(vars, ctx) {
+      const viewer = needViewer(ctx);
+      const post = savedPost(vars, viewer);
+      db.prepare('DELETE FROM saved_posts WHERE user_id = ? AND post_id = ?').run(viewer.id, post.id);
+      return { xig_media_unsave: { media: { id: present.mediaId(post) } } };
+    },
+
+    // The "Add to collection" picker after a save: the viewer's own saved
+    // collections, oldest first (no cover: a collection here has none chosen).
+    PolarisSavedCollectionPickerQuery(vars, ctx) {
+      const viewer = needViewer(ctx);
+      const rows = db.prepare('SELECT id, name, created_at FROM collections WHERE owner_id = ? ORDER BY created_at, id').all(viewer.id);
+      const start = vars.after ? rows.findIndex((r) => r.id === String(vars.after)) + 1 : 0;
+      const take = limitOf({ first: vars.first }, 50);
+      const page = rows.slice(start, start + take);
+      return {
+        viewer: {
+          media_collections: {
+            edges: page.map((r) => ({ cursor: r.id, node: { __typename: 'MediaCollection', collection_id: r.id, id: r.id, collection_name: r.name, cover_media: null } })),
+            page_info: { end_cursor: page.length ? page[page.length - 1].id : null, has_next_page: start + take < rows.length },
+          },
+        },
+      };
     },
 
     // Comment from the post's comment field (usePolarisCommentCreate): data

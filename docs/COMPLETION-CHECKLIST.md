@@ -30,7 +30,7 @@ Active client: `rev1050722040-20261017T170808Z` (revision 1050722040).
 | --- | --- | --- | --- | --- |
 | Signup, login, logout | yes | auth suites | genuine-signup/login checks | |
 | Home feed, empty feed, post rendering | yes | feed suites | genuine-feed check | |
-| Likes, comments, persistence | yes | `engage-operations` | genuine-engage check | |
+| Likes, comments, persistence | yes | `engage-operations` | genuine-engage check; post modal like (`probe-post-liked`, `probe-post-like-after-reload`) | In the post modal opened from a profile grid, the heart fills at once but the count text updates on the next load. This is the client's own behaviour: `PolarisAPILikePostMutation` selects only `id` and `has_liked`, and the profile grid's Relay-to-Redux sync (`syncPolarisRelayProfileUserTimeline`) copies the grid's earlier `like_count` back |
 | Profile, grid, follow lists | yes | profile suites | genuine-profile check | |
 | Profile photo change/remove | yes | `profile-picture` | yes (`3786953`) | |
 | Profile Message button | yes | `profile-message` | yes (`2932deb`) | |
@@ -42,7 +42,8 @@ Active client: `rev1050722040-20261017T170808Z` (revision 1050722040).
 | Notes: delete from the tray | yes (server) | `test/notes.test.js` | no | The tray popover module `PolarisInboxTrayItemPopover.react` is not in the snapshot; queued for the next acquisition pass |
 | Stories, story viewer, highlights | yes | stories/highlights suites | yes | |
 | Story archive page `/archive/stories/` | no | - | - | **Blocked**: its root module is not named in the client bundles |
-| Saved posts tab `/<user>/saved/` | no | - | - | **Blocked**: its tab entry point is not named in the bundles (only `PolarisProfileSavedTabEntryPointVariables` is). Saving and unsaving posts works |
+| Saved posts tab `/<user>/saved/` | no | - | - | **Blocked**: its tab entry point is not named in the bundles (only `PolarisProfileSavedTabEntryPointVariables` is). Saving and unsaving posts works (row below) |
+| Save / unsave a post, collection picker | yes | `test/saved-posts.test.js` | yes (`probe-post-save-after`, `probe-post-saved-after-reload`) | Collections cannot be created from the web client in this snapshot; the picker lists existing ones |
 | Close-friends stories | n/a | - | - | Not creatable on web: the story upload (`PolarisAPICreationFinalizeStory`) sends no audience. Close Friends on web covers Notes (done) and the list itself (done) |
 | Notes audience picker | no | - | no | `PolarisInboxTrayComposerAudienceMenu.react` not in the snapshot; queued for the next acquisition pass. Default audience (mutual follows) works |
 | Post archive | n/a | - | - | Not a web feature: the genuine post menu (`PolarisPostOptionsPopover.next.react`) has no archive item. Its own-post items are delete, edit, hide from grid, commenting and like count |
