@@ -310,6 +310,13 @@ function createHomeOperations(db) {
     return { get_slide_thread_nullable: edge.node };
   }
 
+  function likeStory(vars, ctx, liked) {
+    const viewer = viewerOf(ctx);
+    const pk = String((vars.input && vars.input.media_id) ?? '').split('_')[0];
+    if (!/^\d{1,30}$/.test(pk)) throw badRequest('Invalid story id');
+    stories.setLike(db, pk, viewer.id, liked);
+  }
+
   const operations = {
     PolarisStoriesV3TrayContainerQuery(vars, ctx) {
       const viewer = viewerOf(ctx);
@@ -331,6 +338,31 @@ function createHomeOperations(db) {
       if (!/^\d{1,30}$/.test(pk)) throw badRequest('Invalid story id');
       stories.markSeen(db, pk, viewer.id);
       return { xdt_mark_story_reel_seen: { __typename: 'XDTMarkSeenResponse' } };
+    },
+
+    // The story viewer's heart (usePolarisStoryLikes): input {media_id}, the
+    // story's "<pk>_<author pk>" id. The reply payloads have no fields the
+    // client reads; the liked state comes back as the item's has_liked.
+    usePolarisStoryLikesLikeMutation(vars, ctx) {
+      likeStory(vars, ctx, true);
+      return { xig_send_story_like: { __typename: 'XIGSendStoryLikeResponsePayload' } };
+    },
+
+    usePolarisStoryLikesUnlikeMutation(vars, ctx) {
+      likeStory(vars, ctx, false);
+      return { xig_unsend_story_like: { __typename: 'XIGUnsendStoryLikeResponsePayload' } };
+    },
+
+    // The More menu's Ads Manager item, shown only with an entry-point URL:
+    // there is no Ads Manager locally.
+    PolarisAdsManagerMenuItemQuery() {
+      return { xig_ig_web_ads_manager_entrypoint_root_query: { ads_manager_entrypoint_url: null } };
+    },
+
+    // Whether the account is eligible for Meta-account ("feta") flows; local
+    // accounts are not Meta accounts.
+    PolarisMoreContextMenuIsFetaQuery() {
+      return { xfb_is_feta_account_eligible_for_flow: false };
     },
 
     PolarisSuggestedUserListQuery(vars, ctx) {
@@ -388,6 +420,17 @@ function createHomeOperations(db) {
     IGDOmniPickerNullStateListQuery(vars, ctx) {
       const viewer = viewerOf(ctx);
       return { get_paginated_share_sheet_ranked_items: { ranked_items: shareSheetItems(db, viewer, 30) } };
+    },
+
+    // A post's share sheet (paper plane), before any search: the same ranked
+    // people and group threads, each person with the sheet's own friendship
+    // status (nobody is blocked locally; reachability is not modelled: null).
+    PolarisShareSheetV3NullStateQuery(vars, ctx) {
+      const viewer = viewerOf(ctx);
+      const ranked = shareSheetItems(db, viewer, 30).map((item) =>
+        item.__typename === 'ShareSheetUser' ? { ...item, friendship_status: { blocking: false, reachability_status: null } } : item
+      );
+      return { get_paginated_share_sheet_ranked_items: { ranked_items: ranked } };
     },
 
     IGDBadgeCountOffMsysQuery: mailbox,

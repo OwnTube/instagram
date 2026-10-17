@@ -295,6 +295,20 @@ const migrations = [
       `);
     },
   },
+  {
+    /* Likes on stories (the story viewer's heart), one per viewer and story. */
+    id: '0004_story_likes',
+    up(db) {
+      db.exec(`
+        CREATE TABLE story_likes (
+          story_id    TEXT NOT NULL REFERENCES stories(id) ON DELETE CASCADE,
+          user_id     TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          created_at  TEXT NOT NULL,
+          PRIMARY KEY (story_id, user_id)
+        );
+      `);
+    },
+  },
 ];
 
 module.exports = { migrations };

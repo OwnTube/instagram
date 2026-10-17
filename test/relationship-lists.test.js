@@ -118,3 +118,29 @@ test('mute: posts leave the home feed, stories move to the end of the tray', asy
   assert.deepStrictEqual(await tray(), [['cara_mute', false], ['bob_mute', false]]);
   assert.deepStrictEqual(server.upstream, []);
 });
+
+test("a post's share sheet: the ranked recipients and the post bar", async (t) => {
+  const server = await startCloneServer({});
+  t.after(() => server.close());
+  const { pngBytes } = require('./clone-helpers');
+  const ann = new Browser(server.base);
+  await ann.signup(server, { username: 'ann_share' });
+  const bob = new Browser(server.base);
+  const b = await bob.signup(server, { username: 'bob_share' });
+  await ann.post(`/api/v1/friendships/create/${b.pk}/`, {});
+  const uploadId = String(Date.now());
+  await bob.request('POST', `/rupload_igphoto/fb_uploader_${uploadId}`, { raw: pngBytes(), headers: { 'content-type': 'image/png', 'x-instagram-rupload-params': JSON.stringify({ upload_id: uploadId }) } });
+  const post = (await bob.post('/api/v1/media/configure/', { upload_id: uploadId, caption: 'share me' })).body.media;
+  assert.strictEqual(post.can_viewer_reshare, true, 'a public post can be shared');
+
+  const nul = (await gql(ann, 'PolarisShareSheetV3NullStateQuery', { input: {} })).body.data.get_paginated_share_sheet_ranked_items.ranked_items;
+  assert.deepStrictEqual(nul.map((i) => [i.__typename, i.username, i.friendship_status]), [['ShareSheetUser', 'bob_share', { blocking: false, reachability_status: null }]]);
+  assert.strictEqual(nul[0].__isShareSheetItem, undefined, 'no contract in the fixture snapshot: nothing added');
+
+  const bar = (await gql(ann, 'PolarisShareSheetV3PostShareBarQuery', { media_id: post.id })).body.data.fetch__XDTMediaDict;
+  assert.strictEqual(bar.code, post.code);
+  assert.strictEqual(bar.share_urls.copy, `${server.base}/p/${post.code}/`);
+  assert.strictEqual(bar.share_urls.whatsapp, null);
+  assert.strictEqual((await gql(ann, 'PolarisShareSheetV3PostShareBarQuery', { media_id: '999999999_1' })).status, 404);
+  assert.deepStrictEqual(server.upstream, []);
+});

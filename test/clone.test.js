@@ -311,6 +311,29 @@ test('the original client flows, answered by our backend', async (t) => {
     assert.strictEqual((await alice.get(`/api/v1/media/${pk}/list_reel_media_viewer/`)).body.users.length, 1);
   });
 
+  await t.test("the story viewer's heart: like and unlike, read back as has_liked", async () => {
+    const id = await upload(alice, { story: true, width: 1080, height: 1920 });
+    const story = await alice.post('/api/v1/media/configure_to_story/', { upload_id: id });
+    const mediaId = `${story.body.media.pk}_${alicePk}`;
+    const gqlAs = (b, name) => b.post('/graphql/query', { doc_id: '1', fb_api_req_friendly_name: name, variables: { input: { media_id: mediaId } } });
+    const liked = async (b) => {
+      const res = await b.get(`/api/v1/feed/reels_media/?reel_ids=${alicePk}`);
+      return res.body.reels[alicePk].items.find((i) => String(i.pk) === String(story.body.media.pk)).has_liked;
+    };
+    const like = await gqlAs(bob, 'usePolarisStoryLikesLikeMutation');
+    assert.strictEqual(like.status, 200);
+    assert.strictEqual(like.body.data.xig_send_story_like.__typename, 'XIGSendStoryLikeResponsePayload');
+    assert.strictEqual(await liked(bob), true);
+    assert.strictEqual(await liked(carol), false, "one viewer's like is not another's");
+    assert.strictEqual((await gqlAs(bob, 'usePolarisStoryLikesLikeMutation')).status, 200, 'liking again is idempotent');
+    const unlike = await gqlAs(bob, 'usePolarisStoryLikesUnlikeMutation');
+    assert.strictEqual(unlike.body.data.xig_unsend_story_like.__typename, 'XIGUnsendStoryLikeResponsePayload');
+    assert.strictEqual(await liked(bob), false);
+    const anon = new Browser(server.base);
+    await anon.visit();
+    assert.strictEqual((await gqlAs(anon, 'usePolarisStoryLikesLikeMutation')).status, 401);
+  });
+
   await t.test('search and activity reflect real records', async () => {
     const found = await carol.get('/api/v1/web/search/topsearch/?query=ali');
     assert.deepStrictEqual(found.body.users.map((u) => u.user.username), ['alice']);

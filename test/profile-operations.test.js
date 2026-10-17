@@ -23,6 +23,14 @@ test('profile operations', async (t) => {
   t.after(() => db.close());
   const edge = () => db.prepare('SELECT f.state FROM follows f JOIN users x ON x.id = f.follower_id JOIN users y ON y.id = f.followee_id WHERE x.pk = ? AND y.pk = ?').get(String(a.pk), String(b.pk));
 
+  await t.test("the own-profile options menu and the More menu: no Accounts Center, Ads Manager or Meta account", async () => {
+    const own = (await gql(ann, 'PolarisProfileOwnOptionsContextMenuQuery', {})).body.data;
+    assert.deepStrictEqual(own.fxcal_settings.should_show_nodes_in_accounts_center, []);
+    assert.deepStrictEqual([own.viewer.user.pk, own.viewer.user.username, own.viewer.user.is_professional_account], [String(a.pk), 'ann_prof', false]);
+    assert.strictEqual((await gql(ann, 'PolarisAdsManagerMenuItemQuery', {})).body.data.xig_ig_web_ads_manager_entrypoint_root_query.ads_manager_entrypoint_url, null);
+    assert.strictEqual((await gql(ann, 'PolarisMoreContextMenuIsFetaQuery', {})).body.data.xfb_is_feta_account_eligible_for_flow, false);
+  });
+
   await t.test('profile content and posts carry the signed-in viewer', async () => {
     const content = (await gql(ann, 'PolarisProfilePageContentQuery', { id: String(b.pk), enable_integrity_filters: true })).body.data;
     assert.strictEqual(content.user.username, 'bob_prof');

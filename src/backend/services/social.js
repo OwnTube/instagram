@@ -440,7 +440,17 @@ const stories = {
       expired: Date.parse(row.expires_at) <= Date.now(),
       seenByViewer:
         viewerId && db ? Boolean(db.prepare('SELECT 1 FROM story_views WHERE story_id = ? AND viewer_id = ?').get(row.id, viewerId)) : false,
+      likedByViewer:
+        viewerId && db ? Boolean(db.prepare('SELECT 1 FROM story_likes WHERE story_id = ? AND user_id = ?').get(row.id, viewerId)) : false,
     };
+  },
+
+  /** Like or unlike a story the viewer can see (idempotent). */
+  setLike(db, storyId, viewerId, liked) {
+    const story = this.get(db, storyId, viewerId);
+    if (liked) db.prepare('INSERT OR IGNORE INTO story_likes (story_id, user_id, created_at) VALUES (?, ?, ?)').run(story.id, viewerId, nowIso());
+    else db.prepare('DELETE FROM story_likes WHERE story_id = ? AND user_id = ?').run(story.id, viewerId);
+    return { ...story, likedByViewer: liked };
   },
 
   create(db, authorId, { mediaUrl, caption, ttlMs = 24 * 60 * 60 * 1000, mediaId }) {

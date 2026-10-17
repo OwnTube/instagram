@@ -128,7 +128,10 @@ function media(db, post, viewerId = null) {
     has_liked: post.likedByViewer,
     has_viewer_saved: post.savedByViewer,
     can_viewer_save: Boolean(viewerId),
-    can_viewer_reshare: false,
+    // The share (paper plane) button: offered for public accounts' posts
+    // (the client also hides it for private authors).
+    can_viewer_reshare: Boolean(viewerId) && !author.is_private,
+    can_reshare: !author.is_private,
     comments_disabled: post.commentsDisabled,
     commenting_disabled_for_viewer: !viewerId || post.commentsDisabled,
     like_and_view_counts_disabled: false,
@@ -206,6 +209,7 @@ function storyItem(db, story, authorUser) {
     user: authorUser,
     can_reply: true,
     can_reshare: false,
+    has_liked: Boolean(story.likedByViewer),
     story_cta: null,
   };
 }

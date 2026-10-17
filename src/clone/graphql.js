@@ -250,6 +250,32 @@ function createGraphql({ db, contracts = null }) {
     usePolarisMuteStoryMutation: (vars, ctx) => muteAnswer(ctx, 'xdt_user_mute_story', 'muted_user', 'muted_stories', vars.target_reel_author_id, true),
     usePolarisUnmuteStoryMutation: (vars, ctx) => muteAnswer(ctx, 'xdt_user_unmute_story', 'unmuted_user', 'muted_stories', vars.target_reel_author_id, false),
 
+    // The options (gear) menu of the viewer's own profile. `fxcal_settings`
+    // gates Accounts Center entry points (should_show_nodes_in_accounts_center
+    // lists the settings Accounts Center holds instead); there is no Accounts
+    // Center locally, so the list is empty and no flag is set. The viewer is a personal account with no
+    // supervision and embeds allowed.
+    PolarisProfileOwnOptionsContextMenuQuery(vars, ctx) {
+      const viewer = needViewer(ctx);
+      const me = present.user(db, users.getById(db, viewer.id), null, { withFriendship: false });
+      return {
+        fxcal_settings: {
+          should_show_nodes_in_accounts_center: [],
+          should_user_see_centralized_settings_new_app_entrypoint: false,
+          should_user_see_centralized_settings_new_app_ia: false,
+          should_user_see_pre_transition_banner: false,
+          should_user_see_old_sensitive_settings: false,
+          should_user_see_meta_verified: false,
+          shouldShowAdsPreferences: false,
+          shouldShowAdTopics: false,
+          ig_project_elevation_one_point_five_enabled: false,
+        },
+        viewer: {
+          user: { id: me.id, pk: me.pk, username: me.username, is_private: me.is_private, is_supervision_enabled: false, is_professional_account: false, is_embeds_disabled: false, is_unpublished: false },
+        },
+      };
+    },
+
     // The profile header's school-partner badge (`xig_user_by_igid_v2
     // .school_partner`): there is no school partner programme locally.
     PolarisSchoolPartnerProfileBadgeQuery(vars) {
@@ -283,6 +309,29 @@ function createGraphql({ db, contracts = null }) {
       if (!id) throw notFound('Media not found');
       const post = posts.get(db, id, { viewerId: ctx.viewer?.id ?? null });
       return { xdt_api__v1__media__shortcode__web_info: { items: [present.media(db, post, ctx.viewer?.id ?? null)] } };
+    },
+
+    // The share sheet's post bar (`fetch__XDTMediaDict(media_id)`): the post
+    // being shared. Only the copy-link URL is ours to give (this server's
+    // /p/<code>/); the other share_urls are Meta's integrations (Facebook,
+    // WhatsApp, ...) and are null.
+    PolarisShareSheetV3PostShareBarQuery(vars, ctx) {
+      const viewer = needViewer(ctx);
+      const id = posts.resolveId(db, String(vars.media_id || '').split('_')[0]);
+      if (!id) throw notFound('Media not found');
+      const m = present.media(db, posts.get(db, id, { viewerId: viewer.id }), viewer.id);
+      const origin = `${ctx.req.protocol}://${ctx.req.get('host')}`;
+      return {
+        fetch__XDTMediaDict: {
+          ...m,
+          ig_media_sharing_disabled: false,
+          audience: null,
+          inventory_source: null,
+          logging_info_token: null,
+          media_overlay_info: null,
+          share_urls: { copy: `${origin}/p/${m.code}/`, email: null, facebook: null, messenger: null, sms: null, threads: null, twitter: null, whatsapp: null },
+        },
+      };
     },
 
     PolarisStoriesV3TrayQuery(vars, ctx) {
