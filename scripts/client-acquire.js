@@ -43,7 +43,8 @@
  *   NODE_USE_ENV_PROXY=1 node scripts/client-acquire.js --assets-for .cache/acquired/<stamp> [--max-assets N]
  *
  * --skip-documents /a/,/b/ leaves those documents out of a pass (e.g. a page
- * that answered 429 in every pass); the snapshot then lacks them (404).
+ * that answered 429 in every pass), the not-found page included; the snapshot
+ * then lacks them (404).
  * --assets-for completes the asset step of a pass that stopped before it:
  * only the public static assets that pass's own documents and answers
  * reference, recorded in its provenance (assetPass). Cooldowns are per host:
@@ -199,7 +200,7 @@ async function main() {
   };
 
   if (process.argv.includes('--dry-run')) {
-    console.log(`would fetch documents ${[...DOCUMENTS.filter((p) => !skipped.has(p)), `${NOT_FOUND_PATH} (404)`].join(', ')}, ${sets.length} answers, up to ${maxAssets} assets, into ${path.relative(ROOT, staging)}`);
+    console.log(`would fetch documents ${[...DOCUMENTS.filter((p) => !skipped.has(p)), ...(skipped.has(NOT_FOUND_PATH) ? [] : [`${NOT_FOUND_PATH} (404)`])].join(', ')}, ${sets.length} answers, up to ${maxAssets} assets, into ${path.relative(ROOT, staging)}`);
     for (const s of sets) console.log(`  answer ${s.modules}|${s.nbModules}`);
     return 0;
   }
@@ -325,7 +326,7 @@ async function main() {
       if (skipped.has(p)) continue;
       if (!(await document(p))) return 1;
     }
-    if (!(await document(NOT_FOUND_PATH, 404))) return 1;
+    if (!skipped.has(NOT_FOUND_PATH) && !(await document(NOT_FOUND_PATH, 404))) return 1;
     if (!(await assets())) return 1;
     provenance.complete = true;
     return 0;

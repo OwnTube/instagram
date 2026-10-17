@@ -10,7 +10,7 @@
  * stored bytes only:
  *
  *   modules    name -> { file (upstream URL), deps }
- *   files      upstream URL -> { hash (from rsrcMap, if any), modules }
+ *   files      upstream URL -> { hash (from rsrcMap, if any), modules, text() }
  *   rsrc       hash -> { type, src } merged from every cached document
  *   comp       component -> entry merged from every cached document
  *
@@ -118,7 +118,7 @@ function buildModuleIndex(source = {}) {
       names.push(name);
       if (!modules.has(name)) modules.set(name, { file: asset.key, deps: parseDeps(m[2]) });
     }
-    files.set(asset.key, { hash: hashBySrc.get(asset.key) || null, modules: names, bytes: asset.bytes() });
+    files.set(asset.key, { hash: hashBySrc.get(asset.key) || null, modules: names, bytes: asset.bytes(), text: asset.text });
   }
 
   return {

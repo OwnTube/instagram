@@ -1,0 +1,152 @@
+{
+ "source": "IGDOmniPickerSearchResultsListQuery.graphql operation.selections, client revision 1050722040",
+ "selections": [
+  {
+   "alias": null,
+   "args": [
+    {
+     "kind": "Literal",
+     "name": "max_ai_bot_results",
+     "value": 0
+    },
+    {
+     "kind": "Literal",
+     "name": "max_ibc_results",
+     "value": 0
+    },
+    {
+     "kind": "Variable",
+     "name": "search_text",
+     "variableName": "search_text"
+    }
+   ],
+   "concreteType": "XFBInteropCombinedSearchResult",
+   "kind": "LinkedField",
+   "name": "xfb_combinedIGSearchQuery",
+   "plural": false,
+   "selections": [
+    {
+     "alias": null,
+     "args": null,
+     "concreteType": "ShareSheetUser",
+     "kind": "LinkedField",
+     "name": "search_messenger_contact_v2",
+     "plural": true,
+     "selections": [
+      {
+       "kind": "InlineFragment",
+       "selections": [
+        {
+         "alias": null,
+         "args": null,
+         "kind": "ScalarField",
+         "name": "share_sheet_item_id",
+         "storageKey": null
+        },
+        {
+         "kind": "InlineFragment",
+         "selections": [
+          {
+           "alias": null,
+           "args": null,
+           "kind": "ScalarField",
+           "name": "full_name",
+           "storageKey": null
+          },
+          {
+           "alias": null,
+           "args": null,
+           "kind": "ScalarField",
+           "name": "pk",
+           "storageKey": null
+          },
+          {
+           "alias": null,
+           "args": null,
+           "kind": "ScalarField",
+           "name": "profile_pic_url",
+           "storageKey": null
+          },
+          {
+           "alias": null,
+           "args": null,
+           "kind": "ScalarField",
+           "name": "is_verified",
+           "storageKey": null
+          },
+          {
+           "alias": null,
+           "args": null,
+           "kind": "ScalarField",
+           "name": "username",
+           "storageKey": null
+          },
+          {
+           "alias": null,
+           "args": null,
+           "kind": "ScalarField",
+           "name": "interop_messaging_user_fbid",
+           "storageKey": null
+          }
+         ],
+         "type": "ShareSheetUser",
+         "abstractKey": null
+        },
+        {
+         "kind": "InlineFragment",
+         "selections": [
+          {
+           "alias": null,
+           "args": null,
+           "kind": "ScalarField",
+           "name": "thread_id",
+           "storageKey": null
+          },
+          {
+           "alias": null,
+           "args": null,
+           "kind": "ScalarField",
+           "name": "thread_title",
+           "storageKey": null
+          },
+          {
+           "alias": null,
+           "args": null,
+           "kind": "ScalarField",
+           "name": "thread_image_url",
+           "storageKey": null
+          },
+          {
+           "alias": null,
+           "args": null,
+           "concreteType": "ShareSheetUser",
+           "kind": "LinkedField",
+           "name": "users",
+           "plural": true,
+           "selections": [
+            {
+             "alias": null,
+             "args": null,
+             "kind": "ScalarField",
+             "name": "profile_pic_url",
+             "storageKey": null
+            }
+           ],
+           "storageKey": null
+          }
+         ],
+         "type": "ShareSheetThread",
+         "abstractKey": null
+        }
+       ],
+       "type": "ShareSheetItem",
+       "abstractKey": "__isShareSheetItem"
+      }
+     ],
+     "storageKey": null
+    }
+   ],
+   "storageKey": null
+  }
+ ]
+}

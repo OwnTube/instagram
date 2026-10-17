@@ -16,8 +16,10 @@
  *   5. A types a reply in the thread's composer and presses Enter: the
  *      message is stored (IGDirectTextSendMutation, a messages row) and shown
  *      after B's;
- *   6. signed out, /direct/inbox/ is not served the anonymous home page;
- *   7. nothing left this origin; the server attempted no upstream request.
+ *   6. on the home page, the chat tabs ("Messages") list the thread; opening
+ *      it there and sending from its composer stores and shows the message;
+ *   7. signed out, /direct/inbox/ is not served the anonymous home page;
+ *   8. nothing left this origin; the server attempted no upstream request.
  *
  * Needs a snapshot holding the PolarisDirectInboxRoot answers
  * (CLIENT_SNAPSHOT_ID selects one; default: the active snapshot).
@@ -149,6 +151,34 @@ async function main() {
     await shot(session, 'direct-03-reply.png');
     check("A's reply typed in the thread's composer is stored and shown after B's message", stored && shown, `composer ${hasComposer}, stored ${Boolean(stored)}, shown in order ${shown}`);
 
+    // 6. The home page's chat tabs.
+    const tabReply = `chat tab reply ${tag}`;
+    await navigate('/');
+    const pill = "[...document.querySelectorAll('*')].some((e) => (e.innerText || '').trim() === 'Messages' && e.getBoundingClientRect().width > 0)";
+    const hasPill = await waitFor(session, pill, 30000);
+    await dismissDialog();
+    if (hasPill) await mouseClickText(session, 'Messages');
+    const tabListed = hasPill && (await waitFor(session, `document.body.innerText.includes(${JSON.stringify(nameB)}) && document.body.innerText.includes(${JSON.stringify(reply)})`, 20000));
+    if (tabListed) await mouseClickText(session, nameB);
+    // The chat tab's composer: the message box in the panel on the right.
+    const tabComposer = "[...document.querySelectorAll('[role=textbox][contenteditable=true]')].filter((e) => e.getBoundingClientRect().width > 0 && e.getBoundingClientRect().x > 640).pop()";
+    const hasTabComposer = tabListed && (await waitFor(session, `Boolean(${tabComposer})`, 15000));
+    if (hasTabComposer) {
+      await evaluate(session, `${tabComposer}.focus()`);
+      await session.cdp.send('Input.insertText', { text: tabReply });
+      await sleep(300);
+      await session.cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
+      await session.cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
+    }
+    let tabStored = null;
+    for (let i = 0; i < 20 && hasTabComposer && !tabStored; i += 1) {
+      tabStored = sql('SELECT m.pk FROM messages m JOIN users u ON u.id = m.sender_id WHERE m.body = ? AND u.username_ci = ?', tabReply, nameA);
+      if (!tabStored) await sleep(500);
+    }
+    const tabShown = hasTabComposer && (await waitFor(session, `document.body.innerText.includes(${JSON.stringify(tabReply)})`, 10000));
+    await shot(session, 'direct-04-chat-tab.png');
+    check("on the home page the chat tab opens B's thread and sends A's message", tabStored && tabShown, `pill ${hasPill}, listed ${tabListed}, composer ${hasTabComposer}, stored ${Boolean(tabStored)}, shown ${tabShown}`);
+
     const errors = session.consoleMessages.filter((m) => m.level === 'error').map((m) => m.text.slice(0, 160));
     if (errors.length) console.log(`INFO  console errors: ${[...new Set(errors)].slice(0, 6).join(' | ')}`);
     const failed = [...session.requests.values()].filter((r) => r.status >= 400).map((r) => `${r.status} ${r.url.replace(base, '').slice(0, 120)}`);
@@ -157,7 +187,7 @@ async function main() {
     const missing = health.body && health.body.graphql ? health.body.graphql.unsupported : [];
     if (missing.length) console.log(`INFO  GraphQL operations without a resolver: ${missing.map((m) => `${m.name || m.docId} x${m.count}`).join('; ')}`);
 
-    // 6. Signed out.
+    // 7. Signed out.
     const anon = await new Browser(base).get('/direct/inbox/', { headers: { accept: 'text/html', 'sec-fetch-site': 'none' } });
     check('signed out, /direct/inbox/ is not served the anonymous home page', anon.status === 404 && !/Log into Instagram/.test(anon.text), `HTTP ${anon.status}`);
 

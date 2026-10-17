@@ -360,7 +360,7 @@ function createGraphql({ db, contracts = null }) {
       // Fill fields the resolver does not produce with explicit nulls, as the
       // client's own compiled operation selects them (src/runtime/graphqlContract).
       const tree = contracts && contracts.tree(name);
-      if (tree && data) completeToContract(tree, data);
+      if (tree && data) completeToContract(tree, data, (key) => contracts.possibleTypes(key));
       return res.status(200).json({ data, extensions: { is_final: true }, status: 'ok' });
     } catch (error) {
       if (error && error.status && error.status < 500) {

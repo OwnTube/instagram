@@ -74,3 +74,45 @@ test('search operations', async (t) => {
 
   await t.test('no upstream attempt', () => assert.deepStrictEqual(server.upstream, []));
 });
+
+// The Direct "New message" picker through the server's own contract
+// completion: the snapshot holds the real compiled operation (normalisation
+// AST of IGDOmniPickerSearchResultsListQuery, client revision 1050722040),
+// whose list items are spread as `... on ShareSheetItem`. Relay matches the
+// item fragments only for records carrying `__isShareSheetItem`.
+test('omnipicker search: the response carries the abstract-fragment discriminator', async (t) => {
+  const { selections } = require('./fixtures/omnipicker-search-operation.json');
+  const artifact = { kind: 'Request', fragment: { kind: 'Fragment', name: 'IGDOmniPickerSearchResultsListQuery', selections: [] }, operation: { kind: 'Operation', name: 'IGDOmniPickerSearchResultsListQuery', selections } };
+  // Minified the way Meta's bundles are (unquoted keys), so the server reads it as it reads the real bundle.
+  const literal = JSON.stringify(artifact).replace(/"([A-Za-z_$][\w$]*)":/g, '$1:');
+  const body = `__d("IGDOmniPickerSearchResultsListQuery.graphql",[],(function(a,b,c,d,e,f){"use strict";var g=${literal};e.exports=g}),null);`;
+  const server = await startCloneServer({}, { snapshot: { assets: { 'https://static.cdninstagram.com/rsrc.php/v4/omnipicker-fixture.js': { body, contentType: 'application/x-javascript; charset=utf-8' } } } });
+  t.after(() => server.close());
+  const ann = new Browser(server.base);
+  await ann.signup(server, { username: 'ann_picker' });
+  const bob = await new Browser(server.base).signup(server, { username: 'picker_bob', fullName: 'Bob Picker' });
+
+  const res = await gql(ann, 'IGDOmniPickerSearchResultsListQuery', { search_text: 'picker' });
+  assert.strictEqual(res.status, 200);
+  const items = res.body.data.xfb_combinedIGSearchQuery.search_messenger_contact_v2;
+  assert.deepStrictEqual(items.map((i) => [i.__typename, i.__isShareSheetItem, i.username, i.pk]), [['ShareSheetUser', 'ShareSheetUser', 'picker_bob', String(bob.pk)]]);
+  // Only the operation's own fields (the item's and the ShareSheetUser
+  // fragment's), its type name and the discriminator: nothing invented.
+  const tree = require('../src/runtime/graphqlContract').selectionTree(selections).xfb_combinedIGSearchQuery.search_messenger_contact_v2;
+  const allowed = new Set(['__typename', ...tree.__discriminators, ...Object.keys(tree).filter((k) => !k.startsWith('__') && !k.startsWith('... on ')), ...Object.keys(tree['... on ShareSheetUser'])]);
+  assert.deepStrictEqual(Object.keys(items[0]).filter((k) => !allowed.has(k)), []);
+  assert.strictEqual(items[0].share_sheet_item_id, String(bob.pk));
+  assert.deepStrictEqual(server.upstream, []);
+});
+
+// Control: with contract completion off, the same answer has no
+// discriminator, so it is the server's completion path that supplies it.
+test('omnipicker search without contracts carries no discriminator', async (t) => {
+  const server = await startCloneServer({ CLONE_CONTRACTS: '0' });
+  t.after(() => server.close());
+  const ann = new Browser(server.base);
+  await ann.signup(server, { username: 'ann_picker2' });
+  await new Browser(server.base).signup(server, { username: 'picker_cara' });
+  const items = (await gql(ann, 'IGDOmniPickerSearchResultsListQuery', { search_text: 'picker' })).body.data.xfb_combinedIGSearchQuery.search_messenger_contact_v2;
+  assert.deepStrictEqual(items.map((i) => [i.username, '__isShareSheetItem' in i]), [['picker_cara', false]]);
+});

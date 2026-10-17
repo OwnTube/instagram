@@ -20,7 +20,11 @@
  *  - PolarisFeedEmptySULSearchUsersQuery / ...RefetchQuery: the search box of
  *    a new account's empty home feed ("Find friends and accounts you like"),
  *    `searchQuery: XDTTopsearchResponse {users[] {user {..., friendship_status}}}`
- *    with variables `{query}` (`searchQuery` is the operation's alias).
+ *    with variables `{query}` (`searchQuery` is the operation's alias);
+ *  - IGDOmniPickerSearchResultsListQuery: the Direct "New message" picker's
+ *    search, `xfb_combinedIGSearchQuery(search_text) {search_messenger_contact_v2[]}`,
+ *    a union of ShareSheetUser and ShareSheetThread; answered with the
+ *    matching accounts other than the viewer (group threads are not searched).
  *
  * Only accounts exist here: hashtags and places are empty lists, there is no
  * keyword "see more" and no inform module. Fields not produced are completed
@@ -98,6 +102,28 @@ function createSearchOperations(db) {
       if (vars.hasQuery !== true) return {};
       const found = search.users(db, String(vars.query ?? '').slice(0, 100), { limit: LIMIT });
       return { xdt_api__v1__fbsearch__non_profiled_serp: { users: found.map((row) => searchUser(db, row, viewer.id)), inform_module: null } };
+    },
+
+    IGDOmniPickerSearchResultsListQuery(vars, ctx) {
+      const viewer = viewerOf(ctx);
+      const found = search.users(db, String(vars.search_text ?? '').slice(0, 100), { limit: LIMIT }).filter((row) => row.id !== viewer.id);
+      return {
+        xfb_combinedIGSearchQuery: {
+          search_messenger_contact_v2: found.map((row) => {
+            const u = searchUser(db, row, viewer.id);
+            return {
+              __typename: 'ShareSheetUser',
+              share_sheet_item_id: u.pk,
+              full_name: u.full_name,
+              pk: u.pk,
+              profile_pic_url: u.profile_pic_url,
+              is_verified: u.is_verified,
+              username: u.username,
+              interop_messaging_user_fbid: u.pk,
+            };
+          }),
+        },
+      };
     },
 
     PolarisSearchNullStateQuery(vars, ctx) {

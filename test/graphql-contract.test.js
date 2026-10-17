@@ -59,3 +59,89 @@ test('a type-specific selection applies only to records of that type', () => {
   assert.equal(photo.item.width, null);
   assert.equal('width' in video.item, false);
 });
+
+// The real normalisation AST of IGDOmniPickerSearchResultsListQuery (Direct
+// "New message" search): the list items are spread as `... on ShareSheetItem`
+// (abstractKey `__isShareSheetItem`), so Relay matches the item fragments only
+// for records carrying that discriminator.
+const OMNIPICKER = require('./fixtures/omnipicker-search-operation.json').selections;
+const { artifactPossibleTypes } = require('../src/runtime/graphqlContract');
+const omnipickerPossible = artifactPossibleTypes({ kind: 'Request', operation: { kind: 'Operation', selections: OMNIPICKER } });
+const possibleOf = (map) => (key) => map.get(key) || null;
+
+test('an abstract inline fragment is recorded as its discriminator', () => {
+  const tree = selectionTree(OMNIPICKER);
+  assert.deepEqual(tree.xfb_combinedIGSearchQuery.search_messenger_contact_v2.__discriminators, ['__isShareSheetItem']);
+});
+
+test("the operation's own spreads show which types are possible", () => {
+  // `... on ShareSheetItem` directly under a field of concrete type
+  // ShareSheetUser, and `... on ShareSheetThread` inside that spread.
+  assert.deepEqual([...omnipickerPossible.get('__isShareSheetItem')].sort(), ['ShareSheetThread', 'ShareSheetUser']);
+});
+
+test('a compatible record gets the discriminator; an incompatible or unknown type does not', () => {
+  const tree = selectionTree(OMNIPICKER);
+  const items = [
+    { __typename: 'ShareSheetUser', share_sheet_item_id: '5', pk: '5' },
+    { __typename: 'ShareSheetThread', share_sheet_item_id: '9', thread_id: '9' },
+    { __typename: 'XDTUserDict', share_sheet_item_id: '7' },
+  ];
+  completeToContract(tree, { xfb_combinedIGSearchQuery: { search_messenger_contact_v2: items } }, possibleOf(omnipickerPossible));
+  assert.equal(items[0].__isShareSheetItem, 'ShareSheetUser');
+  assert.equal(items[1].__isShareSheetItem, 'ShareSheetThread');
+  assert.ok(!('__isShareSheetItem' in items[2]), 'a type not shown to be a ShareSheetItem gets none');
+  const unknown = [{ __typename: 'ShareSheetUser', share_sheet_item_id: '5' }];
+  completeToContract(tree, { xfb_combinedIGSearchQuery: { search_messenger_contact_v2: unknown } });
+  assert.ok(!('__isShareSheetItem' in unknown[0]), 'no evidence (no possible types), no discriminator');
+});
+
+test('an explicit discriminator value is kept', () => {
+  const tree = selectionTree(OMNIPICKER);
+  const item = { __typename: 'ShareSheetUser', __isShareSheetItem: 'ShareSheetUser', share_sheet_item_id: '5' };
+  const odd = { __typename: 'ShareSheetThread', __isShareSheetItem: 'AsAnswered', share_sheet_item_id: '6' };
+  completeToContract(tree, { xfb_combinedIGSearchQuery: { search_messenger_contact_v2: [item, odd] } }, possibleOf(omnipickerPossible));
+  assert.equal(item.__isShareSheetItem, 'ShareSheetUser');
+  assert.equal(odd.__isShareSheetItem, 'AsAnswered');
+});
+
+test('nested abstract fragments: each level gets its own discriminator from its own evidence', () => {
+  // items: `... on Actor` (abstract) holding `owner { ... on Node }` (abstract,
+  // under a field of concrete type XDTUserDict) and `... on Page` (concrete
+  // inside the Actor spread).
+  const selections = [
+    linked('items', [
+      scalar('__typename'),
+      { kind: 'InlineFragment', type: 'Actor', abstractKey: '__isActor', selections: [
+        scalar('name'),
+        linked('owner', [scalar('__typename'), { kind: 'InlineFragment', type: 'Node', abstractKey: '__isNode', selections: [scalar('id')] }], { concreteType: 'XDTUserDict' }),
+        { kind: 'InlineFragment', type: 'Page', abstractKey: null, selections: [scalar('category')] },
+      ] },
+    ], { plural: true }),
+  ];
+  const possible = artifactPossibleTypes({ kind: 'Request', operation: { kind: 'Operation', selections } });
+  assert.deepEqual([...possible.get('__isActor')], ['Page']);
+  assert.deepEqual([...possible.get('__isNode')], ['XDTUserDict']);
+  const tree = selectionTree(selections);
+  const page = { __typename: 'Page', name: 'p', owner: { __typename: 'XDTUserDict', id: '1' } };
+  const user = { __typename: 'User', name: 'u', owner: { __typename: 'Other', id: '2' } };
+  completeToContract(tree, { items: [page, user] }, possibleOf(possible));
+  assert.equal(page.__isActor, 'Page');
+  assert.equal(page.owner.__isNode, 'XDTUserDict');
+  assert.ok(!('__isActor' in user) && !('__isNode' in user.owner), 'types without evidence get neither');
+});
+
+test("a fragment artifact's own spreads count as evidence", () => {
+  // IGDShareSheetDialogItemList_ShareSheetItems (shape of the real fragment).
+  const fragment = {
+    kind: 'Fragment',
+    type: 'ShareSheetItem',
+    abstractKey: '__isShareSheetItem',
+    selections: [
+      scalar('share_sheet_item_id'),
+      { kind: 'InlineFragment', type: 'ShareSheetUser', abstractKey: null, selections: [{ kind: 'FragmentSpread', name: 'IGDRecipientUserListItem_ShareSheetUser' }] },
+      { kind: 'InlineFragment', type: 'ShareSheetThread', abstractKey: null, selections: [{ kind: 'FragmentSpread', name: 'IGDRecipientThreadListItem_ShareSheetThread' }] },
+    ],
+  };
+  assert.deepEqual([...artifactPossibleTypes(fragment).get('__isShareSheetItem')].sort(), ['ShareSheetThread', 'ShareSheetUser']);
+});
