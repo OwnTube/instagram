@@ -13,10 +13,11 @@
  *      (SHELL_SIGNED_IN_HOME=1, src/shell/signedInRoute.js);
  *   4. B's post must render: author, caption, and the photo loaded from /__media.
  *
- * Strict offline: LOADER_OFFLINE=1 (the origin is never contacted, documents
- * carry a self-only CSP) and LOADER_PREFER_CACHE=1 (page and bundles from the
- * disk caches). Every request the browser sends is watched; any request to a
- * host other than the loader fails the check.
+ * Strict offline: page, bundles and answers come from the active pinned
+ * client snapshot (or CLIENT_SNAPSHOT_ID); documents carry a self-only CSP; the
+ * upstream guard fails any server request to a non-local host and the check
+ * asserts none was attempted. Every request the browser sends is watched; any
+ * request to a host other than the loader fails the check.
  *
  * Screenshots go to test-artifacts/screenshots/ (SCREENSHOT_DIR overrides).
  *
@@ -27,7 +28,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { DatabaseSync } = require('node:sqlite');
 
-Object.assign(process.env, { LOADER_OFFLINE: '1', LOADER_PREFER_CACHE: '1', SHELL_SIGNED_IN_HOME: '1', ...process.env });
+const upstreamGuard = require('./lib/offline').strictOffline();
 
 // Server side of strict offline: every outbound attempt this process makes
 // (global fetch, http/https requests) to a host other than loopback is recorded.
@@ -193,6 +194,7 @@ async function main() {
     const photo = view && view.imgs.find((i) => i.src && post && i.src.includes(post.storage_key));
     check('B\'s photo is displayed, served from /__media', photo && photo.done && photo.w === 1080 && photo.box > 200, JSON.stringify(photo || (view && view.imgs)));
     check('strict offline: the browser sent no request to an external host', session.externalRequests.length === 0, session.externalRequests.map((x) => x.url).slice(0, 5).join(' '));
+    check('no upstream request was attempted by the server (upstream guard)', upstreamGuard.attempts.length === 0, upstreamGuard.attempts.map((a) => `${a.method} ${a.url}`).slice(0, 5).join(' '));
     check('strict offline: the loader made no outbound connection', outbound.length === 0, outbound.slice(0, 5).join(' '));
 
     // Report (not checks): what remains unanswered or failing on this page.
@@ -240,7 +242,7 @@ async function main() {
     await sleep(1500);
     const health = JSON.parse(await evaluate(session, 'document.body.innerText'));
     await shot(session, 'feed-04-strict-offline-loader-health.png');
-    check('strict offline: the loader reports offline mode and cache-only serving', health.upstream.offline === true && health.cache.preferCache === true && health.instagramSessions.relayed === false, JSON.stringify({ upstream: health.upstream, preferCache: health.cache.preferCache }));
+    check('the loader reports pinned serving from one snapshot, with no Instagram session', health.ok === true && health.client.mode === 'pinned' && Boolean(health.client.snapshot) && health.client.integrityFailures.length === 0 && health.instagramSessions.relayed === false, JSON.stringify({ snapshot: health.client.snapshot, revision: health.client.revision }));
   } catch (error) {
     console.error(error);
     results.push({ name: 'the scenario ran to completion', ok: false, detail: String(error) });

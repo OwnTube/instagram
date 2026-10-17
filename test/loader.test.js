@@ -12,7 +12,6 @@ const { test } = require('node:test');
 const assert = require('node:assert');
 
 const { mapUrl, rewriteHtml, rewriteCss, isAllowedUpstreamUrl, resolveProxyTarget, ALLOWED_HOSTS } = require('../src/rewrite');
-const { ResponseCache } = require('../src/cache');
 
 test('loader: asset URL rewriting', async (t) => {
   await t.test('an allow-listed CDN asset is mapped onto the proxy path', () => {
@@ -76,45 +75,5 @@ test('loader: asset URL rewriting', async (t) => {
     for (const host of ['static.cdninstagram.com', 'www.instagram.com']) {
       assert.ok(ALLOWED_HOSTS.has(host), `expected ${host} in allow-list`);
     }
-  });
-});
-
-test('loader: response cache semantics', async (t) => {
-  await t.test('a fresh entry is served without contacting the origin', () => {
-    const cache = new ResponseCache({ ttlMs: 1000 });
-    cache.set('k', { body: Buffer.from('x'), contentType: 'text/plain' });
-    assert.ok(cache.isFresh(cache.get('k')));
-  });
-
-  await t.test('an entry past its ttl is no longer fresh but is still servable when stale', () => {
-    const cache = new ResponseCache({ ttlMs: 1 });
-    cache.set('k', { body: Buffer.from('x'), contentType: 'text/plain' });
-    cache.map.get('k').storedAt = Date.now() - 5000;
-    const entry = cache.get('k');
-    assert.strictEqual(cache.isFresh(entry), false);
-    assert.strictEqual(cache.isServableWhenStale(entry, 60000), true);
-    assert.strictEqual(cache.isServableWhenStale(entry, 100), false);
-  });
-
-  await t.test('a body larger than the cap is served but not retained', () => {
-    const cache = new ResponseCache({ maxBodyBytes: 4 });
-    cache.set('big', { body: Buffer.alloc(10), contentType: 'application/octet-stream' });
-    assert.strictEqual(cache.size(), 0);
-  });
-
-  await t.test('eviction keeps the cache within its entry cap', () => {
-    const cache = new ResponseCache({ maxEntries: 3 });
-    for (let i = 0; i < 6; i += 1) {
-      cache.set(`k${i}`, { body: Buffer.from('x'), contentType: 'text/plain' });
-    }
-    assert.strictEqual(cache.size(), 3);
-    assert.ok(cache.stats.evictions >= 3);
-  });
-
-  await t.test('touch updates validators after a 304', () => {
-    const cache = new ResponseCache();
-    cache.set('k', { body: Buffer.from('x'), contentType: 'text/plain' });
-    cache.touch('k', { etag: 'W/"abc"' });
-    assert.strictEqual(cache.get('k').etag, 'W/"abc"');
   });
 });

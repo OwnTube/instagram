@@ -5,7 +5,7 @@
  * Reproduce and verify the "stuck on the loading screen" symptom WITHOUT the
  * live Instagram client (this environment cannot reach Instagram).
  *
- * The stand-in upstream serves a page that boots the way Instagram's does:
+ * A fixture pinned snapshot holds a page that boots the way Instagram's does:
  *   - it shows a spinner (the loading screen);
  *   - it seeds a client-side store from `RelayPrefetchedStreamCache` prefetch
  *     blocks in the document, exactly where Instagram puts the route's initial
@@ -23,9 +23,12 @@
  */
 
 const fs = require('node:fs');
-const http = require('node:http');
 const path = require('node:path');
 const { launchChromium, openSession, navigate } = require('./lib/browser');
+const { writeSnapshot, sjs } = require('../test/snapshot-fixture');
+
+/** The page with the revision payload a pinned snapshot document must carry. */
+const withRevision = (html) => html.replace('<body>', `<body>${sjs({ require: [['Bootloader', 'handlePayload', null, [{ consistency: { rev: 1 }, rsrcMap: {}, compMap: {} }]]] })}`);
 
 const SCRATCH = path.join(__dirname, '..', '.scratch', 'loading-check');
 
@@ -89,13 +92,6 @@ ${block(prefetch)}
 </body></html>`;
 }
 
-function startUpstream() {
-  const server = http.createServer((req, res) => {
-    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-    res.end(upstreamPage());
-  });
-  return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server)));
-}
 
 async function evaluate(session, expression) {
   const result = await session.cdp.send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true });
@@ -104,24 +100,21 @@ async function evaluate(session, expression) {
 }
 
 async function run(env, label) {
-  const upstream = await startUpstream();
   const dir = path.join(SCRATCH, label);
   fs.rmSync(dir, { recursive: true, force: true });
   fs.mkdirSync(dir, { recursive: true });
   delete process.env.SHELL_DROP_PREFETCHES;
   Object.assign(process.env, {
-    UPSTREAM_ORIGIN: `http://127.0.0.1:${upstream.address().port}`,
+    CLIENT_DIR: path.join(dir, 'client'),
     BACKEND_DB: path.join(dir, 'db.sqlite'),
     CLONE_DATA_DIR: dir,
-    // A synthetic upstream: keep its pages and assets out of the shared caches.
-    DOCUMENT_CACHE_DIR: path.join(dir, 'documents'),
-    ASSET_CACHE_DIR: path.join(dir, 'assets'),
-    BOOTLOADER_CACHE_DIR: path.join(dir, 'bootloader'),
     VERBOSE: '0',
     BACKEND_VERBOSE: '0',
     ...env,
   });
   for (const key of Object.keys(require.cache)) if (key.includes('/src/')) delete require.cache[key];
+  // The synthetic page is served as a pinned fixture snapshot (its own CLIENT_DIR).
+  writeSnapshot(path.join(dir, 'client'), { revision: '1', documents: { '/': withRevision(upstreamPage()) } });
   const { app } = require('../src/server');
   const server = await new Promise((resolve) => {
     const s = app.listen(0, '127.0.0.1', () => resolve(s));
@@ -143,7 +136,6 @@ async function run(env, label) {
     child.kill('SIGKILL');
     server.closeAllConnections?.();
     server.close();
-    upstream.close();
   }
 }
 

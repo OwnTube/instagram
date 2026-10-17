@@ -17,8 +17,8 @@
  *
  * Signing in through the genuine form is covered by genuine-login-check and
  * genuine-feed-check; here the browser gets the session cookie of a local
- * login. Strict offline as in genuine-feed-check: LOADER_OFFLINE=1,
- * LOADER_PREFER_CACHE=1, no request to any other host.
+ * login. Strict offline as in genuine-feed-check: the pinned snapshot only, no
+ * request to any other host.
  *
  *   node scripts/genuine-profile-check.js
  */
@@ -27,7 +27,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { DatabaseSync } = require('node:sqlite');
 
-Object.assign(process.env, { LOADER_OFFLINE: '1', LOADER_PREFER_CACHE: '1', SHELL_SIGNED_IN_HOME: '1', ...process.env });
+const upstreamGuard = require('./lib/offline').strictOffline();
 
 const { launchChromium, openSession, captureScreenshot, watchExternal, evaluateIsolated } = require('./lib/browser');
 const { sunsetPng, waitFor, sleep } = require('./lib/scenario');
@@ -146,6 +146,8 @@ async function main() {
     check("A's own profile renders with the owner's controls (Edit profile) and A's counts", own && /Edit profile/i.test(ownText) && /1 following/.test(ownText), ownText.slice(0, 120));
 
     check('strict offline: the browser sent no request to an external host', session.externalRequests.length === 0, session.externalRequests.map((x) => x.url).slice(0, 5).join(' '));
+
+    check('no upstream request was attempted by the server (upstream guard)', upstreamGuard.attempts.length === 0, upstreamGuard.attempts.map((a) => `${a.method} ${a.url}`).slice(0, 5).join(' '));
     const reqs = [...session.requests.values()];
     const friendly = (r) => ((r.postData || '').match(/fb_api_req_friendly_name=([^&]+)/) || [])[1] || null;
     const unanswered = [...new Set(reqs.filter((r) => friendly(r) && r.status && r.status !== 200).map((r) => `${friendly(r)}:${r.status}`))];

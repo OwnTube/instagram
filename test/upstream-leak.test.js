@@ -1,17 +1,22 @@
 'use strict';
 
 /**
- * What reaches the upstream origin while a signed-in clone user browses.
- * The stand-in origin records every request; nothing it records may contain a
- * clone username, shortcode, thread id, session, CSRF token or password.
+ * What reaches Instagram while a signed-in clone user browses: nothing. The
+ * server serves a pinned fixture snapshot; the upstream guard records any
+ * attempt to reach a non-local host, and the whole session must make none
+ * (and, belt and braces, nothing recorded may contain a clone username,
+ * shortcode, thread id, session, CSRF token or password).
  */
 
 const { test } = require('node:test');
 const assert = require('node:assert');
 const { startCloneServer, Browser, pngBytes } = require('./clone-helpers');
+const { documentAt } = require('./snapshot-fixture');
 
 test('no clone identity or secret reaches upstream', async (t) => {
-  const server = await startCloneServer();
+  const server = await startCloneServer({}, {
+    snapshot: { documents: { '/': documentAt(100), '/accounts/emailsignup/': documentAt(100), '/direct/inbox/': documentAt(100) } },
+  });
   t.after(() => server.close());
 
   const alice = new Browser(server.base);
@@ -59,37 +64,36 @@ test('no clone identity or secret reaches upstream', async (t) => {
     assert.strictEqual(server.upstream.length, before, 'nothing was sent upstream');
   });
 
-  await t.test('identity-bearing pages fetch a canonical shell instead of their own URL', async () => {
+  await t.test('identity-bearing pages are served from a canonical snapshot document', async () => {
     const pages = ['/zebra_alice/', `/p/${post.code}/`, `/reel/${post.code}/`, '/stories/zebra_alice/', `/direct/t/${thread}/`, `/zebra_alice/?next=/p/${post.code}/`];
     for (const page of pages) {
-      const before = server.upstream.length;
       const res = await alice.visit(page);
       assert.strictEqual(res.status, 200, page);
-      const fetched = server.upstream.slice(before).map((r) => r.url);
-      for (const url of fetched) assert.ok(url === '/' || url === '/direct/inbox/', `${page} fetched ${url} upstream`);
+      assert.strictEqual(res.headers.get('x-client-snapshot'), 'rev100-test', page);
+      const canonical = res.headers.get('x-clone-canonical');
+      assert.ok(canonical === '/' || canonical === '/direct/inbox/', `${page} -> ${canonical}`);
     }
+    assert.deepStrictEqual(server.upstream, []);
   });
 
-  await t.test('pages without identifiers are still fetched as themselves', async () => {
-    for (const page of ['/explore/', '/accounts/edit/', '/direct/inbox/']) {
-      const before = server.upstream.length;
-      await new Browser(server.base).visit(page);
-      const urls = server.upstream.slice(before).map((r) => r.url);
-      assert.ok(urls.length === 0 || urls.includes(page), `${page} -> ${urls}`);
+  await t.test('a page the snapshot does not hold is an explicit 404, never fetched', async () => {
+    for (const page of ['/explore/', '/reels/']) {
+      const res = await new Browser(server.base).visit(page);
+      assert.strictEqual(res.status, 404, page);
+      assert.match(res.text, /Not in the pinned client snapshot rev100-test \(revision 100\)/);
     }
+    assert.deepStrictEqual(server.upstream, []);
   });
 
-  await t.test("X-CSRFToken and cookies on forwarded requests are dropped", async () => {
-    const before = server.upstream.length;
-    await alice.post('/ajax/bootloader-endpoint/', { modules: 'Foo' });
-    const forwarded = server.upstream.slice(before);
-    assert.strictEqual(forwarded.length, 1);
-    assert.strictEqual(forwarded[0].cookie, null, 'no browser cookie upstream');
-    assert.strictEqual(forwarded[0].headers['x-csrftoken'], undefined, 'the clone CSRF token stays here');
+  await t.test('a request no local handler answers is refused, not relayed', async () => {
+    const res = await alice.post('/ajax/unknown-endpoint/', { modules: 'Foo' });
+    assert.strictEqual(res.status, 404);
+    assert.deepStrictEqual(server.upstream, [], 'nothing was relayed upstream');
   });
 
-  await t.test('after a whole browsing session upstream saw nothing of the clone', () => {
+  await t.test('after a whole browsing session upstream saw nothing at all', () => {
     assertClean();
+    assert.deepStrictEqual(server.upstream, []);
   });
 
   await t.test('every HTML page is private to the browser that asked for it', async () => {

@@ -6,7 +6,7 @@
  *
  * Instagram's own page cannot be fetched in every environment, so this serves
  * a SMALL SYNTHETIC page through the full document path (shell
- * personalisation, runtime injection, cookie issuance) from a stand-in origin,
+ * personalisation, runtime injection, cookie issuance) from a fixture snapshot,
  * and drives headless Chromium over CDP. In the page it:
  *
  *   - checks /__clone/runtime.js ran and rewrites an absolute Instagram API URL
@@ -26,9 +26,12 @@
  */
 
 const fs = require('node:fs');
-const http = require('node:http');
 const path = require('node:path');
 const { launchChromium, openSession, navigate } = require('./lib/browser');
+const { writeSnapshot, sjs } = require('../test/snapshot-fixture');
+
+/** The page with the revision payload a pinned snapshot document must carry. */
+const withRevision = (html) => html.replace('<body>', `<body>${sjs({ require: [['Bootloader', 'handlePayload', null, [{ consistency: { rev: 1 }, rsrcMap: {}, compMap: {} }]]] })}`);
 
 const ROOT = path.join(__dirname, '..');
 const SCRATCH = path.join(ROOT, '.scratch', 'browser-auth-check');
@@ -40,13 +43,6 @@ const PAGE = `<!DOCTYPE html><html><head><title>synthetic</title></head><body>
 })}</script>
 <p>synthetic page served through the loader</p></body></html>`;
 
-function startStandIn() {
-  const server = http.createServer((req, res) => {
-    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-    res.end(PAGE);
-  });
-  return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server)));
-}
 
 /** Browser-side helpers: crypto libraries and the client's request shapes. */
 function pageLibraries() {
@@ -110,19 +106,16 @@ async function evaluate(session, expression) {
 async function main() {
   fs.rmSync(SCRATCH, { recursive: true, force: true });
   fs.mkdirSync(SCRATCH, { recursive: true });
-  const standIn = await startStandIn();
   Object.assign(process.env, {
-    UPSTREAM_ORIGIN: `http://127.0.0.1:${standIn.address().port}`,
+    CLIENT_DIR: path.join(SCRATCH, 'client'),
     BACKEND_DB: path.join(SCRATCH, 'db.sqlite'),
     CLONE_DATA_DIR: SCRATCH,
-    // A synthetic upstream: keep its pages and assets out of the shared caches.
-    DOCUMENT_CACHE_DIR: path.join(SCRATCH, 'documents'),
-    ASSET_CACHE_DIR: path.join(SCRATCH, 'assets'),
-    BOOTLOADER_CACHE_DIR: path.join(SCRATCH, 'bootloader'),
     CLONE_MAIL_TRANSPORT: 'outbox',
     VERBOSE: '0',
     BACKEND_VERBOSE: '0',
   });
+  // The synthetic page is served as a pinned fixture snapshot (its own CLIENT_DIR).
+  writeSnapshot(path.join(SCRATCH, 'client'), { revision: '1', documents: { '/': withRevision(PAGE) } });
   const { app } = require('../src/server');
   const server = await new Promise((resolve) => {
     const s = app.listen(0, '127.0.0.1', () => resolve(s));
@@ -189,7 +182,6 @@ async function main() {
     child.kill('SIGKILL');
     server.closeAllConnections?.();
     server.close();
-    standIn.close();
   }
 
   const failed = results.filter((r) => !r.ok);

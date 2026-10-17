@@ -200,7 +200,7 @@ function catchAsync(router) {
   return router;
 }
 
-function createClone({ db, dataDir = '.data', logger = console, env = process.env } = {}) {
+function createClone({ db, dataDir = '.data', logger = console, env = process.env, contractSource = null } = {}) {
   const config = {
     mailTransport: env.CLONE_MAIL_TRANSPORT || (env.NODE_ENV === 'production' ? 'disabled' : 'outbox'),
     allowPlaintextPasswords: env.ALLOW_PLAINTEXT_ENC_PASSWORD !== '0',
@@ -210,11 +210,16 @@ function createClone({ db, dataDir = '.data', logger = console, env = process.en
     allowPlaintext: config.allowPlaintextPasswords,
   });
   const media = createMediaStore({ db, dir: path.join(dataDir, 'media') });
-  // Operation contracts come from the client's own compiled artifacts in the
-  // local asset store (when present); built lazily, once per process.
+  // Operation contracts come from the client's own compiled artifacts: those
+  // of the pinned snapshot the server serves (`contractSource`), so answers are
+  // completed to the operations of the revision the browser runs. Built
+  // lazily, once per process; none without a snapshot.
   let moduleIndex;
   const contracts = createContractCache(() => {
-    if (moduleIndex === undefined) moduleIndex = env.CLONE_CONTRACTS === '0' ? null : buildModuleIndex({ assetDir: env.ASSET_CACHE_DIR || '.cache/assets', documentDir: env.DOCUMENT_CACHE_DIR || '.cache/documents', bootloaderDir: env.BOOTLOADER_CACHE_DIR || '.cache/bootloader' });
+    if (moduleIndex === undefined) {
+      const source = env.CLONE_CONTRACTS === '0' || !contractSource ? null : contractSource();
+      moduleIndex = source ? buildModuleIndex(source) : null;
+    }
     return moduleIndex;
   });
   const graphql = createGraphql({ db, contracts });

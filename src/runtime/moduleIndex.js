@@ -45,7 +45,30 @@ function readStore(dir) {
   return entries;
 }
 
-function buildModuleIndex({ assetDir = '.cache/assets', documentDir = '.cache/documents', bootloaderDir = '.cache/bootloader' } = {}) {
+/** The disk stores as an index source (operator tools that read the stores directly). */
+function storeSource({ assetDir = '.cache/assets', documentDir = '.cache/documents', bootloaderDir = '.cache/bootloader' } = {}) {
+  const item = (e) => ({ key: e.key, contentType: (e.meta.entry && e.meta.entry.contentType) || '', text: () => fs.readFileSync(e.bodyPath, 'utf8'), bytes: () => fs.statSync(e.bodyPath).size });
+  return { documents: readStore(documentDir).map(item), answers: readStore(bootloaderDir).map(item), assets: readStore(assetDir).map(item) };
+}
+
+/**
+ * A pinned client snapshot as an index source: exactly the documents, answers
+ * and assets the server serves (src/clientSnapshot.js), so operation contracts
+ * are those of the client revision the browser runs.
+ */
+function snapshotSource(store, manifest) {
+  const item = (key, e) => ({ key, contentType: e.contentType, text: () => store.readBlob(e.sha256).toString('utf8'), bytes: () => e.bytes });
+  const html = Object.entries(manifest.documents).filter(([, e]) => /text\/html/.test(e.contentType));
+  return {
+    documents: html.map(([k, e]) => item(k, e)),
+    answers: Object.entries(manifest.answers).map(([k, e]) => item(k, e)),
+    assets: Object.entries(manifest.assets).map(([k, e]) => item(k, e)),
+  };
+}
+
+/** Index `source` ({documents, answers, assets}: items {key, contentType, text(), bytes()}), or the disk stores by default. */
+function buildModuleIndex(source = {}) {
+  const { documents: docItems, answers: answerItems, assets: assetItems } = source.documents ? source : storeSource(source);
   const modules = new Map();
   const files = new Map();
   const rsrc = new Map();
@@ -66,17 +89,17 @@ function buildModuleIndex({ assetDir = '.cache/assets', documentDir = '.cache/do
     }
   };
 
-  for (const doc of readStore(documentDir)) {
-    const html = fs.readFileSync(doc.bodyPath, 'utf8');
+  for (const doc of docItems) {
+    const html = doc.text();
     documents.push(doc.key);
     editJsonBlocks(html, (n) => {
       noteSupport(n, doc.key);
       return undefined;
     });
   }
-  for (const answer of readStore(bootloaderDir)) {
+  for (const answer of answerItems) {
     try {
-      const j = JSON.parse(fs.readFileSync(answer.bodyPath, 'utf8').replace(/^for \(;;\);/, ''));
+      const j = JSON.parse(answer.text().replace(/^for \(;;\);/, ''));
       const hrp = j.hrp || {};
       noteSupport(hrp.hsrp && hrp.hsrp.hblp, answer.key);
       noteSupport(hrp.jsmods, answer.key);
@@ -86,16 +109,16 @@ function buildModuleIndex({ assetDir = '.cache/assets', documentDir = '.cache/do
   }
   const hashBySrc = new Map([...rsrc].map(([hash, e]) => [e.src, hash]));
 
-  for (const asset of readStore(assetDir)) {
-    if (!/javascript/.test(asset.meta.entry && asset.meta.entry.contentType)) continue;
-    const text = fs.readFileSync(asset.bodyPath, 'utf8');
+  for (const asset of assetItems) {
+    if (!/javascript/.test(asset.contentType)) continue;
+    const text = asset.text();
     const names = [];
     for (const m of text.matchAll(DEFINE)) {
       const name = m[1];
       names.push(name);
       if (!modules.has(name)) modules.set(name, { file: asset.key, deps: parseDeps(m[2]) });
     }
-    files.set(asset.key, { hash: hashBySrc.get(asset.key) || null, modules: names, bytes: fs.statSync(asset.bodyPath).size });
+    files.set(asset.key, { hash: hashBySrc.get(asset.key) || null, modules: names, bytes: asset.bytes() });
   }
 
   return {
@@ -126,4 +149,4 @@ function buildModuleIndex({ assetDir = '.cache/assets', documentDir = '.cache/do
   };
 }
 
-module.exports = { buildModuleIndex, parseDeps };
+module.exports = { buildModuleIndex, snapshotSource, storeSource, parseDeps };

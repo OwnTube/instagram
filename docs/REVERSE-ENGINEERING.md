@@ -209,8 +209,10 @@ Revision consistency (`ClientConsistency`): an endpoint answer carries
 `consistency.rev`; when it differs from the page's and its modules overlap the
 loaded ones, the client asks for a soft or hard refresh. Offline, that reload
 gets the same stale page. So the page documents and every bootloader answer
-must share one revision: `scripts/refresh-client.js` re-stores them together
-(anonymous requests, one each, stops at the first non-200, backs up first).
+must share one revision: `scripts/client-acquire.js` (operator-only) acquires
+them together for one revision (anonymous requests, one each, stops at the
+first non-200), and `scripts/client-snapshot.js build` admits only material
+of that one revision into a snapshot.
 Bootloader answers are keyed by `modules|nb_modules|__rev`; the client
 sometimes combines a blocking and a non-blocking module in one request, which
 is a separate key.
@@ -312,22 +314,19 @@ Inside the signed-in app the client reaches Direct, profile, post and
 creation views through its own router (verified by the genuine checks);
 the gaps above are direct loads only.
 
-## 14. Client revisions: live, pinned, hybrid
+## 14. Client revisions: pinned only
 
 Instagram ships client revisions often (the store holds 1050627067; upstream
 answered 1050642531 during this work). A page and every bootloader answer it
 uses must share one revision (`ClientConsistency`, section 10).
 
-- Live: always the newest document; the signed-in route breaks whenever its
-  answers are not stored for that revision, and every new revision costs
-  upstream requests.
-- Pinned: one reviewed revision served until it is deliberately moved
-  (`scripts/refresh-client.js` moves documents and answers together); stable
-  and offline-safe, but stale.
-- Hybrid (implemented, `routeWithAnswers` in `src/server.js`): serve the page's
-  revision when its answers are stored or can be fetched once; otherwise the
-  last document the route was served from consistently (kept per route root in
-  the document store); report the rest in `/__loader/health` -> `revisions`.
+Live serving and the hybrid self-heal (fetching answers for a new revision at
+request time, falling back to a "last good" document) were removed on
+2026-10-17. The server serves one validated snapshot
+(`src/pinnedClient.js`, `src/clientSnapshot.js`) and nothing else; moving to
+another revision is an operator action (acquire, build, verify, activate;
+rollback keeps the previous one). See docs/CLIENT-PINNING.md for the
+lifecycle, the outbound-request audit and the current snapshot's scope.
 
 Comparison with Meowcord (https://github.com/meowcorded/meowcord, read
 2026-10-17; a self-hosted Discord clone serving a patched Discord web client,
@@ -339,8 +338,9 @@ patches are git diffs applied to a pinned Equicord commit
 (`client/vencord.json`, `client/equicord-patches/`), a failed apply aborts the
 build, and `scripts/vencord-check.mjs` loads the build headless and reports
 patches that had no effect. Taken from it: verifying consistency before
-serving rather than after (answers of another revision are refused, the
-last consistent document is served instead). Not taken: source-level patches
+serving rather than after: a snapshot is built from one revision only,
+verified (hashes plus genuine browser checks) before it can be activated, and
+the previous one is kept for rollback. Not taken: source-level patches
 (this loader has no client source; its few bundle patches are module-scoped
 find/replace with a stated reason, `src/shell/bundlePatches.js`, and
 `patcher.report()` in `/__loader/health` lists those that did not apply).

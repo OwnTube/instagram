@@ -4,27 +4,30 @@
  * Viewer isolation regression tests.
  *
  * The loader once injected a single configured `IG_SESSIONID` upstream, and a
- * later revision could relay a visitor's own Instagram cookies. Both are gone:
- * cookies on this origin are clone sessions and must never reach Instagram.
- * These tests pin that down, including when the legacy ALLOW_VIEWER_SESSIONS
- * variable is still set in an old deployment's environment.
+ * later revision could relay a visitor's own Instagram cookies. Both are gone,
+ * and so is any upstream at serving time: documents and assets come from the
+ * pinned client snapshot, so a browser cookie has nowhere to go. These tests
+ * pin that down, including when the legacy ALLOW_VIEWER_SESSIONS variable is
+ * still set in an old deployment's environment.
  *
- * A stand-in origin is used so the tests never contact Instagram and never need
- * a real credential. Sessions here are synthetic.
+ * The snapshot is a test fixture; every upstream attempt is recorded by the
+ * upstream guard and refused. Sessions here are synthetic.
  */
 
 const { test } = require('node:test');
 const assert = require('node:assert');
-const http = require('node:http');
+const fs = require('node:fs');
 const path = require('node:path');
+const { installUpstreamGuard } = require('../scripts/lib/upstream-guard');
+const { writeSnapshot, documentAt } = require('./snapshot-fixture');
 
 const SRC = path.join(__dirname, '..', 'src');
-const MODULES = ['config.js', 'session.js', 'upstream.js', 'cookies.js', 'server.js', 'rewrite.js', 'cache.js'].map(
-  (f) => path.join(SRC, f),
-);
+const TEST_ROOT = path.join(__dirname, '..', '.scratch', 'test');
+const guard = installUpstreamGuard();
 
 const ALICE = 'alice-session-value';
 const BOB = 'bob-session-value';
+const ASSET_URL = 'https://static.cdninstagram.com/rsrc.php/v4/app.js';
 
 /** Load a fresh copy of a module with the given environment applied. */
 function loadWithEnv(modulePath, env) {
@@ -33,7 +36,7 @@ function loadWithEnv(modulePath, env) {
     if (value === undefined) delete process.env[key];
     else process.env[key] = value;
   }
-  for (const p of MODULES) delete require.cache[p];
+  for (const key of Object.keys(require.cache)) if (key.startsWith(SRC)) delete require.cache[key];
   try {
     return require(modulePath);
   } finally {
@@ -44,46 +47,28 @@ function loadWithEnv(modulePath, env) {
   }
 }
 
-/**
- * Stand-in origin. Echoes which session it saw into the document, and records
- * every request, so a test can assert exactly what was forwarded.
- */
-async function startFakeOrigin() {
-  const received = [];
-  const server = http.createServer((req, res) => {
-    received.push({ url: req.url, cookie: req.headers.cookie || null, method: req.method });
-    const m = (req.headers.cookie || '').match(/sessionid=([^;]+)/);
-    const who = m ? m[1] : 'anonymous';
-    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', etag: '"v1"' });
-    res.end(`<!doctype html><html><body><div id="who">${who}</div></body></html>`);
-  });
-  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-  return {
-    origin: `http://127.0.0.1:${server.address().port}`,
-    received,
-    async close() {
-      await new Promise((resolve) => server.close(resolve));
-    },
-  };
-}
-
-/** Start the loader against a stand-in origin. */
+/** Start the loader (no backend) on a fixture snapshot. */
 async function startLoader(env) {
-  const fake = await startFakeOrigin();
-  const { app } = loadWithEnv(path.join(SRC, 'server.js'), {
-    BACKEND_ENABLED: '0',
-    UPSTREAM_ORIGIN: fake.origin,
-    ...env,
+  fs.mkdirSync(TEST_ROOT, { recursive: true });
+  const dir = fs.mkdtempSync(path.join(TEST_ROOT, 'isolation-'));
+  writeSnapshot(dir, {
+    documents: { '/': documentAt('100', { body: '<div id="who">anonymous</div>' }) },
+    assets: { [ASSET_URL]: { body: 'console.log("pinned asset");', contentType: 'application/javascript' } },
   });
+  const before = guard.attempts.length;
+  const { app } = loadWithEnv(path.join(SRC, 'server.js'), { BACKEND_ENABLED: '0', CLIENT_DIR: dir, ...env });
   const server = await new Promise((resolve) => {
     const s = app.listen(0, '127.0.0.1', () => resolve(s));
   });
   return {
     base: `http://127.0.0.1:${server.address().port}`,
-    received: fake.received,
+    get upstream() {
+      return guard.attempts.slice(before);
+    },
     async close() {
+      server.closeAllConnections?.();
       await new Promise((resolve) => server.close(resolve));
-      await fake.close();
+      fs.rmSync(dir, { recursive: true, force: true });
     },
   };
 }
@@ -118,14 +103,13 @@ test('viewer isolation: no Instagram session exists or is relayed', async (t) =>
     }
   });
 
-  await t.test('a browser sessionid is never forwarded upstream, even with the legacy flag', async () => {
+  await t.test('a browser sessionid has nowhere to go: no upstream request is made, even with the legacy flag', async () => {
     const loader = await startLoader(LEGACY);
     try {
-      await get(loader.base, '/', `sessionid=${ALICE}; csrftoken=abc; tracking=1`);
-      for (const r of loader.received) {
-        assert.ok(!(r.cookie || '').includes(ALICE), 'a browser session must never reach the origin');
-        assert.ok(!(r.cookie || '').includes('tracking=1'), 'no browser cookie may reach the origin');
-      }
+      const res = await get(loader.base, '/', `sessionid=${ALICE}; csrftoken=abc; tracking=1`);
+      assert.strictEqual(res.status, 200);
+      assert.strictEqual(res.headers.get('x-client-snapshot'), 'rev100-test');
+      assert.deepStrictEqual(loader.upstream, []);
     } finally {
       await loader.close();
     }
@@ -144,22 +128,15 @@ test('viewer isolation: no Instagram session exists or is relayed', async (t) =>
 });
 
 test('viewer isolation: a session never reaches asset hosts', async (t) => {
-  await t.test('the asset proxy does not forward a browser cookie', async () => {
-    const loader = await startLoader({ ...LEGACY, ALLOWED_ASSET_HOSTS: 'cdn.example' });
-    const seen = [];
-    const realFetch = globalThis.fetch;
-    globalThis.fetch = async (url, options) => {
-      seen.push({ url: String(url), cookie: new Headers(options.headers).get('cookie') });
-      return new Response('body{}', { status: 200, headers: { 'content-type': 'application/javascript' } });
-    };
+  await t.test('an asset is served from the snapshot with a browser cookie present, and nothing is fetched', async () => {
+    const loader = await startLoader(LEGACY);
     try {
-      const res = await realFetch(`${loader.base}/__ig/cdn.example/static/app.js`, {
-        headers: { cookie: `sessionid=${ALICE}` },
-      });
+      const res = await fetch(`${loader.base}/__ig/static.cdninstagram.com/rsrc.php/v4/app.js`, { headers: { cookie: `sessionid=${ALICE}` } });
       assert.strictEqual(res.status, 200);
-      assert.ok(!seen.some((s) => (s.cookie || '').includes(ALICE)));
+      assert.strictEqual(res.headers.get('x-loader-cache'), 'pinned');
+      assert.match(await res.text(), /pinned asset/);
+      assert.deepStrictEqual(loader.upstream, []);
     } finally {
-      globalThis.fetch = realFetch;
       await loader.close();
     }
   });
@@ -178,33 +155,14 @@ test('viewer isolation: nothing is echoed back to the browser', async (t) => {
     }
   });
 
-  await t.test('an upstream Set-Cookie can never overwrite clone cookies', async () => {
-    const fake = await startFakeOrigin();
-    const { app } = loadWithEnv(path.join(SRC, 'server.js'), {
-      BACKEND_ENABLED: '0',
-      UPSTREAM_ORIGIN: fake.origin,
-      ...LEGACY,
-    });
-    const server = await new Promise((resolve) => {
-      const s = app.listen(0, '127.0.0.1', () => resolve(s));
-    });
-    const realFetch = globalThis.fetch;
-    globalThis.fetch = async () =>
-      new Response('<html><body>ok</body></html>', {
-        status: 200,
-        headers: { 'content-type': 'text/html', 'set-cookie': `sessionid=${ALICE}; Path=/` },
-      });
+  await t.test('a served document never sets an Instagram session cookie', async () => {
+    const loader = await startLoader(LEGACY);
     try {
-      const res = await realFetch(`http://127.0.0.1:${server.address().port}/`, {
-        headers: { cookie: `sessionid=${BOB}` },
-      });
-      const setCookies = res.headers.getSetCookie();
-      assert.ok(!setCookies.some((c) => c.includes(ALICE)), 'an upstream cookie must never reach the browser');
-      assert.ok(!(await res.text()).includes(`sessionid=${ALICE}`));
+      const res = await get(loader.base, '/', `sessionid=${BOB}`);
+      assert.ok(!res.headers.getSetCookie().some((c) => /sessionid|ds_user_id/.test(c)));
+      assert.ok(!res.body.includes(BOB));
     } finally {
-      globalThis.fetch = realFetch;
-      await new Promise((resolve) => server.close(resolve));
-      await fake.close();
+      await loader.close();
     }
   });
 });

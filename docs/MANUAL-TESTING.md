@@ -49,23 +49,18 @@ operations or REST paths the client called that are unimplemented: those return
 
 ## What to expect after logging in
 
-Instagram only renders the signed-in app (feed, inbox, settings) for a signed-in
-Instagram session. Without a signed-in **template**, a clone user who logs in is
-served Instagram's logged-out page again, which looks like login failed. The
-session itself works (`/api/v1/accounts/current_user/` answers for that user).
+A signed-in clone user gets the client's own signed-in route, built from the
+pinned snapshot's anonymous document plus Instagram's own bootloader answer
+for that route's root (`src/shell/signedInRoute.js`). The home feed needs
+`PolarisFeedRoot.react`; a profile needs `PolarisProfilePostsTabRoot.entrypoint`
+and `PolarisProfileRoot.react` of the snapshot's revision. A route whose
+answers the active snapshot does not hold is served as the anonymous page and
+listed at `/__loader/health` -> `client.missingRequests` (kind `route`); it is
+never filled from Instagram at request time. `npm run client:status` shows
+which routes the active snapshot supports.
 
-To create the template, once:
-
-1. In your own browser, sign in to instagram.com, open `view-source:https://www.instagram.com/`
-   and save it as a file.
-2. Run `node scripts/snapshot-shell.js --kind home --file <saved.html> --user-id <your numeric id> --username <your username> --full-name "<your name>"`.
-   It replaces your identity with placeholders, removes your prefetched data and
-   tokens, and refuses to write if anything identifying remains. The file lands
-   in `.cache/shell/home.html` (gitignored). Repeat with `--kind profile`,
-   `direct`, `explore`, `accounts_edit` for those pages.
-3. Restart is not needed; templates are picked up on the next request.
-
-Your Instagram session is never given to the server: the tool reads a saved file.
+No Instagram session is used anywhere: the snapshot is built from anonymous
+material, and viewer state is added per request.
 
 ## When something fails
 
@@ -76,7 +71,9 @@ Your Instagram session is never given to the server: the tool reads a saved file
 - A login error "This page is out of date" means the page encrypted to a key
   that is not ours, i.e. the key substitution missed this page. The server log
   also warns when a page mentions a public key that was not replaced.
-- `http://localhost:12000/__loader/health`: upstream fetch failures, templates loaded.
+- `http://localhost:12000/__loader/health`: the active snapshot (`client`: id, revision,
+  routes, requests it could not answer, integrity failures). A 503 "Pinned client
+  unavailable" means no valid active snapshot: run `npm run client:status`.
 
 ## Settings you may need
 
@@ -85,6 +82,6 @@ Your Instagram session is never given to the server: the tool reads a saved file
 | `PORT` / `HOST` | `12000` / `0.0.0.0` | |
 | `BACKEND_SECURE_COOKIES` | off | set `1` when served over HTTPS |
 | `CLONE_MAIL_TRANSPORT` | `outbox` (dev), `disabled` (prod) | `log` prints codes to the console |
-| `SHELL_TEMPLATE_DIR` | `.cache/shell` | |
+| `CLIENT_DIR` | `.cache/client` | the snapshot store |
 | `SHELL_DROP_PREFETCHES` | off | debug only: `1` strips Relay prefetches from every page |
 | `AUTH_RATE_LIMIT_MAX` | 20 per minute per IP | raise if testing hits 429 |

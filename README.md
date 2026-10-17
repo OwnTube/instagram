@@ -1,14 +1,36 @@
 # Instagram Runtime Loader
 
-Fetches the **actual Instagram web client** — the real HTML document, JavaScript
-bundles, stylesheets and image assets served by Instagram — at runtime, and
-serves it through a small Node.js proxy. Nothing from Instagram is downloaded
-ahead of time or committed to this repository.
+Serves a **pinned snapshot of the original Instagram web client** (the real
+anonymous HTML documents, JavaScript bundles, stylesheets, images and
+bootloader answers of ONE client revision) together with a local
+compatibility backend that answers the client's own API calls. Nothing from
+Instagram is committed to this repository; the snapshot lives in `.cache/`.
 
-This is **not** a clone, a redesign, or a reimplementation. The original markup,
-scripts, styles and asset references are preserved. The only transformation
-applied is redirecting asset URLs so they load through this server instead of
-directly from Instagram's CDN.
+**Client serving is pinned-only.** The server never fetches, refreshes or
+substitutes the client at runtime: there is no live mode, no fallback to
+Instagram on a miss, a stale entry, a validation error or a startup failure,
+and no background refresh. A resource the active snapshot does not hold is an
+explicit error naming the snapshot and its revision (404; a request for
+another revision is a 409, a hash mismatch a 500, no valid snapshot a 503),
+counted at `/__loader/health` -> `client.missingRequests`. `src/server.js`
+does not load `src/upstream.js`; the tests run with every non-local request
+refused and assert none was attempted (`test/pinned-client.test.js`).
+
+The served client changes only through operator commands:
+
+| Command | What it does |
+| --- | --- |
+| `npm run client:acquire` | The ONLY command that contacts Instagram: one bounded, anonymous pass for the documents, bootloader answers and public assets of one revision; stops at the first 429 or failure; records provenance in `.cache/acquired/<stamp>/`. Never touches the active snapshot. |
+| `npm run client:build -- [--acquired DIR]` | Builds a candidate snapshot from local material of ONE revision (mismatched documents/answers are rejected and listed); records hashes, routes, known-missing, patch results. |
+| `npm run client:verify -- <id> --browser` | Deep integrity check, then the genuine browser checks against the candidate with the upstream guard on. Core checks (login, signup, feed, engage) must pass to become `verified`; create/profile are recorded as the snapshot's scope. |
+| `npm run client:activate -- <id>` | Serves a verified snapshot (re-checks every hash); the previous one is kept for rollback. |
+| `npm run client:rollback` | Re-activates the previous snapshot that still validates. |
+| `npm run client:status` | Active snapshot, history, routes, scope, integrity. |
+
+Snapshots: `.cache/client/` (`blobs/` content-addressed by sha256,
+`snapshots/<id>/manifest.json`, `state.json`); format in `src/clientSnapshot.js`.
+Sections below this point that describe document proxying, document caches or
+`ALLOW_VIEWER_SESSIONS` record earlier designs and are kept as history.
 
 Upstream origin: `https://www.instagram.com/`
 
@@ -94,20 +116,17 @@ All settings are environment variables with sensible defaults (`src/config.js`):
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `UPSTREAM_ORIGIN` | `https://www.instagram.com` | Origin the client is fetched from |
-| `ALLOWED_ASSET_HOSTS` | `static.cdninstagram.com,www.instagram.com,instagram.com,scontent.cdninstagram.com` | Hosts the loader will fetch on the browser's behalf (open-proxy guard) |
+| `CLIENT_DIR` | `.cache/client` | Snapshot store the server serves from |
+| `CLIENT_SNAPSHOT_ID` | (the active one) | Serve this snapshot instead of the active one (used by `client:verify`) |
+| `ALLOWED_ASSET_HOSTS` | `static.cdninstagram.com,www.instagram.com,instagram.com,scontent.cdninstagram.com` | Hosts whose `/__ig/<host>/...` paths are looked up in the snapshot (anything else is 403) |
 | `HOST` / `PORT` | `0.0.0.0` / `12000` | Listen address |
-| `CACHE_TTL_MS` | `300000` | Freshness window for assets before revalidation |
-| `DOCUMENT_CACHE_TTL_MS` | `60000` | Freshness window for cached HTML documents |
-| `DOCUMENT_STALE_MS` | `1800000` | How long a stale-but-good document may still be served when the origin throttles or errors |
-| `MAX_RETRIES` | `3` | Retries for transient upstream failures (idempotent requests only) |
-| `RETRY_BASE_MS` / `RETRY_MAX_MS` | `1000` / `15000` | Exponential backoff bounds; `Retry-After` is honoured when sent |
-| `CACHE_MAX_ENTRIES` | `500` | Cache entry cap |
-| `CACHE_MAX_BODY_BYTES` | `20971520` | Max cached body / request body size |
-| `REQUEST_TIMEOUT_MS` | `20000` | Upstream timeout |
-| `USER_AGENT` | Chrome desktop | Fallback UA when the client sends none |
+| `CACHE_TTL_MS` | `300000` | Browser max-age for pinned static assets |
 | `VERBOSE` | `true` | Log recorded failures |
-| `ALLOW_VIEWER_SESSIONS` | `false` | Relay each viewer's OWN Instagram session upstream, per viewer — see below |
+| `UPSTREAM_ORIGIN`, `MAX_RETRIES`, `RETRY_BASE_MS` / `RETRY_MAX_MS`, `REQUEST_TIMEOUT_MS`, `USER_AGENT`, `UPSTREAM_COOLDOWN_MS` | | Used only by the operator acquisition commands (`client:acquire`, `cache:warm`), never by the server |
+
+Removed with live serving: `CLIENT_MODE`, `LOADER_PREFER_CACHE`, `DOCUMENT_CACHE_TTL_MS`,
+`DOCUMENT_STALE_MS`, `DOCUMENT_CACHE_DIR`/`BOOTLOADER_CACHE_DIR` (server side),
+`CACHE_MAX_ENTRIES`, `CACHE_MAX_BODY_BYTES`. `ALLOW_VIEWER_SESSIONS` has no effect.
 
 ### Identity and viewer isolation
 

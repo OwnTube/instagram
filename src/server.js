@@ -1,34 +1,36 @@
 'use strict';
 
+/**
+ * The server: Instagram's genuine web client, served from ONE pinned, verified
+ * local snapshot (src/pinnedClient.js, src/clientSnapshot.js), with every API
+ * call the client makes answered by our own backend (src/backend, src/clone).
+ *
+ * Pinned only. This process never contacts Instagram: it does not import the
+ * upstream client (src/upstream.js, used only by the operator's acquisition
+ * command), and a document, asset or bootloader answer the snapshot does not
+ * hold is answered with an explicit error naming it and the snapshot revision,
+ * and counted in /__loader/health -> client. Changing the served client is an
+ * operator action (scripts/client-snapshot.js: acquire, build, verify,
+ * activate, rollback), never a side effect of a request.
+ */
+
 const express = require('express');
 const config = require('./config');
-const { ResponseCache } = require('./cache');
-const { createAssetStore } = require('./assetStore');
-const { fetchUpstream, UpstreamError, throttle } = require('./upstream');
 const backendApp = require('./backend');
 const backendConfig = require('./backend/config');
 const { createClone, classify } = require('./clone');
 const { personalize } = require('./shell/personalize');
 const { parseAnswer, homeRoute, profileRoute } = require('./shell/signedInRoute');
-const { routeKind, createTemplateStore } = require('./shell/templates');
+const { routeKind } = require('./shell/templates');
 const { createPatcher } = require('./shell/bundlePatches');
+const { openPinnedClient } = require('./pinnedClient');
+const { rewriteHtml, rewriteCss, resolveProxyTarget, ALLOWED_HOSTS, mapUrl } = require('./rewrite');
 
-const templates = createTemplateStore({ dir: process.env.SHELL_TEMPLATE_DIR || '.cache/shell' });
 const patcher = createPatcher();
-// Relay prefetches are dropped from a signed-in TEMPLATE, whose prefetched data
-// belongs to the account that captured it, not the clone viewer. An anonymous
-// upstream page is served faithfully: its prefetch is anonymous Instagram data
-// the page renders from, and removing it strands the client on a runtime query
-// we cannot answer (the loading screen then never clears). Opt in to drop on
-// every page only for debugging.
+// Debug only: drop the page's Relay prefetches. The anonymous page is served
+// faithfully by default: removing its prefetch strands the client on a runtime
+// query we cannot answer.
 const forceDropPrefetches = process.env.SHELL_DROP_PREFETCHES === '1';
-const {
-  rewriteHtml,
-  rewriteCss,
-  resolveProxyTarget,
-  ALLOWED_HOSTS,
-  mapUrl,
-} = require('./rewrite');
 
 const app = express();
 
@@ -36,14 +38,8 @@ const app = express();
 /* Application backend                                                 */
 /* ------------------------------------------------------------------ */
 /*
- * Mounted FIRST, and deliberately so. The loader ends with a catch-all
- * `app.all('*')` that forwards everything to Instagram; anything registered
- * after it would be unreachable. Mounting the backend here means
- * /__backend/* is answered by our own API while every other path, including
- * Instagram's own /api/v1/* and /graphql/query, keeps flowing upstream.
- *
- * The backend is optional: if its database cannot be opened the loader still
- * starts, because serving Instagram's frontend must not depend on our database.
+ * Mounted first: /__backend/* is our own API. The backend is optional: if its
+ * database cannot be opened the server still serves the client.
  */
 let backendInstance = null;
 if (process.env.BACKEND_ENABLED !== '0') {
@@ -58,41 +54,41 @@ if (process.env.BACKEND_ENABLED !== '0') {
   }
 }
 
+
+/* ------------------------------------------------------------------ */
+/* The pinned client                                                   */
+/* ------------------------------------------------------------------ */
+
+// The store's active snapshot; CLIENT_SNAPSHOT_ID serves a given (candidate)
+// snapshot instead, which is how `client-snapshot verify --browser` checks a
+// candidate before it may be activated. Either way it is a local snapshot.
+const pinned = openPinnedClient({ dir: process.env.CLIENT_DIR || '.cache/client', snapshotId: process.env.CLIENT_SNAPSHOT_ID || null });
+if (pinned.ready) console.log(`[loader] pinned client: snapshot ${pinned.id}, revision ${pinned.revision}`);
+else console.warn(`[loader] pinned client unavailable: ${pinned.error}`);
+
 /*
  * Compatibility layer: the original client's own API paths, answered from our
- * database. Mounted before the raw-body parser and the upstream catch-all, so
- * clone-owned requests are parsed by it and never reach Instagram.
+ * database. Clone-owned requests never leave this server. Operation contracts
+ * come from the pinned snapshot.
  */
 let cloneInstance = null;
 if (backendInstance) {
   cloneInstance = createClone({
     db: backendInstance.db,
     dataDir: process.env.CLONE_DATA_DIR || require('node:path').dirname(require('node:path').resolve(backendConfig.databaseFile)),
+    contractSource: () => pinned.contractSource(),
   });
   app.use(cloneInstance.router);
 }
 
-// Capture the raw request body so non-GET requests (the client POSTs to
-// same-origin endpoints such as /ajax/bz) can be forwarded byte-for-byte.
-// A raw buffer avoids any parsing/transformation of upstream payloads.
-app.use(express.raw({ type: () => true, limit: config.cacheMaxBodyBytes }));
+const pinnedUnavailable = (res) => res.status(503).type('text/plain').send(`Pinned client unavailable: ${pinned.error}\n`);
+const notPinned = (res, what) =>
+  res.status(404).type('text/plain').send(`Not in the pinned client snapshot ${pinned.id} (revision ${pinned.revision}): ${what}\n`);
 
-const cache = new ResponseCache();
-// Public static assets only. ASSET_CACHE_DIR='' turns the disk copy off; it is
-// also off under `node --test` unless a directory is given, so tests stay isolated.
-const assetStore = createAssetStore(
-  process.env.ASSET_CACHE_DIR !== undefined ? process.env.ASSET_CACHE_DIR : process.env.NODE_TEST_CONTEXT ? '' : '.cache/assets',
-);
-// The same disk copy for the ANONYMOUS upstream documents the memory cache
-// already shares between visitors (nothing per-viewer is in them; the shell
-// adds viewer state on the way out). DOCUMENT_CACHE_DIR='' turns it off.
-const documentStore = createAssetStore(
-  process.env.DOCUMENT_CACHE_DIR !== undefined ? process.env.DOCUMENT_CACHE_DIR : process.env.NODE_TEST_CONTEXT ? '' : '.cache/documents',
-);
-// LOADER_PREFER_CACHE=1: serve any cached copy (memory or disk, any age)
-// without contacting the origin. For development while the origin throttles.
-const preferCache = process.env.LOADER_PREFER_CACHE === '1';
-const OFFLINE_CSP = [
+// Every page carries a self-only policy: the browser itself refuses requests to
+// any other host, which catches what the runtime cannot see (e.g. url()s in CSS
+// rules the client inserts). Nothing reaches Instagram or any other host.
+const SELF_ONLY_CSP = [
   "default-src 'self' data: blob:",
   "script-src 'self' data: blob: 'unsafe-inline' 'unsafe-eval'",
   "style-src 'self' data: 'unsafe-inline'",
@@ -104,183 +100,41 @@ const OFFLINE_CSP = [
   "frame-src 'self'",
 ].join('; ');
 
-// Diagnostics surface: which upstream resources failed and why. This is what
-// section 5 of the brief asks us to record, exposed for the operator.
-const failures = [];
-function recordFailure(entry) {
-  failures.unshift({ at: new Date().toISOString(), ...entry });
-  if (failures.length > 200) failures.pop();
-  if (config.verbose) {
-    console.warn(`[loader] ${entry.kind} ${entry.status} ${entry.url} :: ${entry.reason}`);
-  }
-}
-
-// Collapse concurrent identical upstream requests into a single fetch.
-const inflight = new Map();
-function dedupe(key, producer) {
-  const existing = inflight.get(key);
-  if (existing) return existing;
-  const promise = producer().finally(() => inflight.delete(key));
-  inflight.set(key, promise);
-  return promise;
-}
-
-// Headers from upstream that must not leak into our own responses.
-const STRIPPED_RESPONSE_HEADERS = new Set([
-  'connection',
-  'keep-alive',
-  'proxy-authenticate',
-  'proxy-authorization',
-  'te',
-  'trailer',
-  'transfer-encoding',
-  'upgrade',
-  'content-encoding',
-  'content-length',
-  'set-cookie',
-  // Origin-scoped security policy: keeping it would apply Instagram's CSP /
-  // frame rules to our origin and break the very resources we are serving.
-  'content-security-policy',
-  'content-security-policy-report-only',
-  'x-frame-options',
-  'strict-transport-security',
-  'alt-svc',
-  'report-to',
-  'nel',
-]);
-
-function copyResponseHeaders(upstreamHeaders, res, { maxAgeSeconds }) {
-  for (const [name, value] of upstreamHeaders.entries()) {
-    if (STRIPPED_RESPONSE_HEADERS.has(name.toLowerCase())) continue;
-    try {
-      res.setHeader(name, value);
-    } catch {
-      /* ignore invalid header values from upstream */
-    }
-  }
-  res.setHeader('cache-control', `public, max-age=${maxAgeSeconds}`);
-}
-
-function contentTypeOf(headers) {
-  return (headers.get('content-type') || '').toLowerCase();
-}
-
-/**
- * Collect the Fetch Metadata request headers the browser actually sent.
- *
- * We relay them verbatim rather than synthesising new values; the only default
- * is the set a genuine top-level navigation would send, used when a client
- * (curl, a test) does not provide them.
- */
-const FETCH_METADATA_HEADERS = [
-  'sec-fetch-site',
-  'sec-fetch-mode',
-  'sec-fetch-dest',
-  'sec-fetch-user',
-  'upgrade-insecure-requests',
-];
-
-function fetchMetadataFor(req) {
-  const headers = {};
-  for (const name of FETCH_METADATA_HEADERS) {
-    const value = req.get(name);
-    if (value) headers[name] = value;
-  }
-  if (!headers['sec-fetch-site']) headers['sec-fetch-site'] = 'none';
-  if (!headers['sec-fetch-mode']) headers['sec-fetch-mode'] = 'navigate';
-  if (!headers['sec-fetch-dest']) headers['sec-fetch-dest'] = 'document';
-  return headers;
-}
-
 /* ------------------------------------------------------------------ */
-/* Asset proxy: /__ig/<host>/<path>                                    */
+/* Static client assets: /__ig/<host>/<path>                           */
 /* ------------------------------------------------------------------ */
 
-app.get('/__ig/:host/*', async (req, res) => {
+app.get('/__ig/:host/*', (req, res) => {
   const pathAndQuery = req.originalUrl.slice(`${config.assetPrefix}/${req.params.host}`.length);
   const target = resolveProxyTarget(req.params.host, pathAndQuery);
-
-  if (!target) {
-    recordFailure({ kind: 'asset', status: 403, url: req.originalUrl, reason: 'host not in allow-list' });
-    return res.status(403).type('text/plain').send('Blocked: host is not in ALLOWED_ASSET_HOSTS\n');
-  }
-
-  let cached = cache.get(target);
-  if (!cached && assetStore) {
-    cached = await assetStore.read(target);
-    if (cached) cache.map.set(target, cached);
-  }
-  if (cache.isFresh(cached) || (preferCache && cached)) {
-    cache.stats.hits += 1;
-    res.setHeader('x-loader-cache', 'hit');
-    res.setHeader('x-loader-upstream', target);
-    return sendAsset(res, cached, target);
-  }
-
-  cache.stats.misses += 1;
-
-  const conditional = {};
-  if (cached?.etag) conditional['if-none-match'] = cached.etag;
-  if (cached?.lastModified) conditional['if-modified-since'] = cached.lastModified;
-
-  try {
-    const upstream = await dedupe(target, () => fetchUpstream(target, { headers: conditional }));
-
-    if (upstream.status === 304 && cached) {
-      cache.stats.revalidated += 1;
-      cache.touch(target, { etag: upstream.headers.get('etag'), 'last-modified': upstream.headers.get('last-modified') });
-      res.setHeader('x-loader-cache', 'revalidated');
-      res.setHeader('x-loader-upstream', target);
-      return sendAsset(res, cached, target);
-    }
-
-    if (!upstream.ok) {
-      recordFailure({
-        kind: 'asset',
-        status: upstream.status,
-        url: target,
-        reason: `upstream returned ${upstream.status}`,
-      });
-      if (cached) {
-        // Serve stale rather than break the page, but say so.
-        res.setHeader('x-loader-cache', 'stale');
-        res.setHeader('x-loader-upstream', target);
-        return sendAsset(res, cached, target);
-      }
-      res.setHeader('x-loader-upstream', target);
-      return res.status(upstream.status).type('text/plain').send(`Upstream error ${upstream.status} for ${target}\n`);
-    }
-
-    const body = upstream.body;
-
-    const entry = {
-      body,
-      contentType: upstream.headers.get('content-type') || 'application/octet-stream',
-      etag: upstream.headers.get('etag') || undefined,
-      lastModified: upstream.headers.get('last-modified') || undefined,
-    };
-    cache.set(target, entry);
-    if (assetStore) assetStore.write(target, entry);
-    res.setHeader('x-loader-cache', 'miss');
-    res.setHeader('x-loader-upstream', target);
-    if (upstream.redirected) res.setHeader('x-loader-final-url', upstream.finalUrl);
-    sendAsset(res, entry, target);
-  } catch (error) {
-    const status = error instanceof UpstreamError ? error.status : 502;
-    recordFailure({ kind: 'asset', status, url: target, reason: error.message });
-    if (cached) {
-      res.setHeader('x-loader-cache', 'stale');
-      res.setHeader('x-loader-upstream', target);
-      return sendAsset(res, cached, target);
-    }
-    res.status(status).type('text/plain').send(`Upstream fetch failed: ${error.message}\n`);
-  }
+  if (!target) return res.status(403).type('text/plain').send('Blocked: host is not in ALLOWED_ASSET_HOSTS\n');
+  return sendPinnedAsset(res, target);
 });
 
-// CSS rewriting and bundle patches are applied when an asset is SENT, not when
-// it is stored, so the memory and disk caches hold the upstream bytes and a copy
-// cached before a rewrite rule or patch existed is still handled. Memoised per
-// cached entry.
+// One object per snapshot blob, so the patched-body memo below is per blob.
+const pinnedEntries = new Map();
+function sendPinnedAsset(res, target) {
+  if (!pinned.ready) return pinnedUnavailable(res);
+  const entry = pinned.asset(target);
+  if (!entry) {
+    pinned.noteMissing('asset', target, 'not in the snapshot');
+    return notPinned(res, target);
+  }
+  let obj = pinnedEntries.get(entry.sha256);
+  if (!obj) {
+    const body = pinned.body(entry);
+    if (!body) return res.status(500).type('text/plain').send(`Pinned client integrity failure for ${target}\n`);
+    obj = { body, contentType: entry.contentType, etag: entry.etag, lastModified: entry.lastModified };
+    pinnedEntries.set(entry.sha256, obj);
+    if (pinnedEntries.size > 300) pinnedEntries.delete(pinnedEntries.keys().next().value);
+  }
+  res.setHeader('x-loader-cache', 'pinned');
+  res.setHeader('x-client-snapshot', pinned.id);
+  return sendAsset(res, obj, target);
+}
+
+// CSS rewriting and bundle patches are applied when an asset is SENT, so the
+// snapshot holds the upstream bytes unchanged. Memoised per entry.
 const patchedBodies = new WeakMap();
 function assetBody(res, entry, target) {
   const isCss = /text\/css/.test(entry.contentType || '');
@@ -311,171 +165,83 @@ function sendAsset(res, entry, target) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Diagnostics                                                         */
-/* ------------------------------------------------------------------ */
-
-/* ------------------------------------------------------------------ */
-/* Bootloader endpoint and web manifest                                */
+/* Bootloader answers                                                  */
 /* ------------------------------------------------------------------ */
 
 const revisionOf = (html) => (/"consistency":\{"rev":(\d+)\}/.exec(html) || [])[1] || '';
-const answerKey = (name, rev) => `boot:${new URL(config.upstream).origin}:${name}||${rev}`;
 
 /**
- * The stored bootloader answers for a signed-in route (by requested module
- * name), for the client revision of `html` (ClientConsistency rev), or null
- * when any of them is not stored.
+ * The snapshot's answers for a signed-in route (by requested module name), or
+ * null when any is missing or the page is not of the snapshot's revision.
+ * Answers are revision-bound: the snapshot holds only answers whose body
+ * declares its revision (checked when it was built and on validation).
  */
-async function routeAnswers(html, modules) {
-  const rev = revisionOf(html);
+function routeAnswers(html, modules) {
+  if (!pinned.ready || revisionOf(html) !== pinned.revision) return null;
   const answers = [];
   for (const name of modules) {
-    const key = answerKey(name, rev);
-    const entry = cache.get(key) || (bootloaderStore ? await bootloaderStore.read(key) : undefined);
-    const answer = entry ? parseAnswer(entry.body.toString('utf8')) : null;
+    const entry = pinned.answer(`${name}|`);
+    const body = entry && pinned.body(entry);
+    const answer = body ? parseAnswer(body.toString('utf8')) : null;
     if (!answer) return null;
     answers.push(answer);
   }
   return answers;
 }
 
-/**
- * Revision self-healing for the signed-in routes. The route's code comes from
- * stored bootloader answers of the page's own revision; Instagram ships new
- * revisions often, so a freshly fetched document can be of a revision whose
- * answers are not stored. Answers of another revision are never mixed in (the
- * client's ClientConsistency would ask for a refresh: the reload loop). Instead:
- *
- *  1. fetch the missing answers for the page's revision, once, anonymously,
- *     through the same request the client itself makes (skipped offline and
- *     during an upstream cooldown, which fetchUpstream enforces);
- *  2. else serve the last document this route was served from consistently
- *     (stored per route root, with its revision), whose answers are stored;
- *  3. else report it (the caller serves the anonymous page) in /__loader/health.
- */
-const revisionState = { served: {}, healedByFetch: 0, servedPinned: 0, unhealed: 0, recent: [] };
-const pinnedKey = (route) => `good:${new URL(config.upstream).origin}:${route.root}`;
-const pinnedWritten = new Map();
+// Which revision each signed-in route root was last served at, and how often a
+// route could not be served signed in (its answers are not in the snapshot).
+const routeState = { served: {}, unsupported: 0 };
 
-function noteRevision(event) {
-  revisionState.recent.unshift({ at: new Date().toISOString(), ...event });
-  if (revisionState.recent.length > 20) revisionState.recent.pop();
-}
-
-async function fetchRouteAnswers(modules, rev) {
-  for (const name of modules) {
-    const key = answerKey(name, rev);
-    if (cache.get(key) || (bootloaderStore && (await bootloaderStore.read(key)))) continue;
-    const url = `${config.upstream}/ajax/bootloader-endpoint/?modules=${encodeURIComponent(name)}&__d=www&__a=1&__rev=${rev}`;
-    const upstream = await fetchUpstream(url, { headers: { accept: '*/*' } });
-    const answer = upstream.status === 200 ? parseAnswer(upstream.body.toString('utf8')) : null;
-    // Only an answer of the requested revision is kept (hblp.consistency.rev).
-    if (!answer || String(answer.hsrp.hblp?.consistency?.rev) !== rev) throw new Error(`no answer for ${name} at rev ${rev} (status ${upstream.status})`);
-    const entry = { body: upstream.body, contentType: upstream.headers.get('content-type') || 'application/x-javascript' };
-    cache.set(key, entry);
-    if (bootloaderStore) await bootloaderStore.write(key, entry);
-  }
-}
-
-async function routeWithAnswers(route, html) {
-  const rev = revisionOf(html);
-  let answers = await routeAnswers(html, route.answers);
+function routeWithAnswers(route, html) {
+  const answers = routeAnswers(html, route.answers);
   if (answers) {
-    revisionState.served[route.root] = rev;
-    if (documentStore && pinnedWritten.get(route.root) !== rev) {
-      pinnedWritten.set(route.root, rev);
-      documentStore.write(pinnedKey(route), { body: Buffer.from(html, 'utf8'), contentType: 'text/html; charset=utf-8', rev });
-    }
+    routeState.served[route.root] = revisionOf(html);
     return { html, answers };
   }
-  if (rev) {
-    try {
-      await fetchRouteAnswers(route.answers, rev);
-      answers = await routeAnswers(html, route.answers);
-      if (answers) {
-        revisionState.healedByFetch += 1;
-        noteRevision({ root: route.root, rev, how: 'fetched the answers for the page revision' });
-        return routeWithAnswers(route, html);
-      }
-    } catch (error) {
-      noteRevision({ root: route.root, rev, how: 'fetch skipped or failed', reason: error.message });
-    }
-  }
-  const pinned = documentStore ? await documentStore.read(pinnedKey(route)) : undefined;
-  if (pinned) {
-    const pinnedHtml = pinned.body.toString('utf8');
-    const pinnedAnswers = await routeAnswers(pinnedHtml, route.answers);
-    if (pinnedAnswers) {
-      revisionState.servedPinned += 1;
-      revisionState.served[route.root] = revisionOf(pinnedHtml);
-      noteRevision({ root: route.root, rev, how: `served the last consistent document (rev ${revisionOf(pinnedHtml)})` });
-      return { html: pinnedHtml, answers: pinnedAnswers };
-    }
-  }
-  revisionState.unhealed += 1;
-  noteRevision({ root: route.root, rev, how: 'no answers for this revision and no consistent document: anonymous page served' });
-  recordFailure({ kind: 'revision', status: 0, url: route.root, reason: `no bootloader answers for rev ${rev || '(none)'}` });
+  routeState.unsupported += 1;
+  pinned.noteMissing('route', route.root, `answers ${route.answers.join(', ')} not in snapshot revision ${pinned.revision}`);
   return null;
 }
 
-/* ------------------------------------------------------------------ */
-/* ------------------------------------------------------------------ */
-
 // The client's Bootloader asks /ajax/bootloader-endpoint/?modules=... for the
-// resource map of modules flagged `be` in its component map. The answer names
-// public code (static CDN URLs and hashes), the same for every visitor, so it is
-// fetched anonymously like every upstream request and kept on disk, keyed by the
-// module list and client revision (the other query fields are per-request noise).
-const bootloaderStore = createAssetStore(
-  process.env.BOOTLOADER_CACHE_DIR !== undefined ? process.env.BOOTLOADER_CACHE_DIR : process.env.NODE_TEST_CONTEXT ? '' : '.cache/bootloader',
-);
-function bootloaderKey(req) {
+// resource map of lazily loaded modules. Answered from the snapshot only, and
+// only for the snapshot's revision.
+app.get(['/ajax/bootloader-endpoint/', '/ajax/bootloader-endpoint'], (req, res) => {
+  if (!pinned.ready) return pinnedUnavailable(res);
   const q = req.query || {};
-  return `boot:${new URL(config.upstream).origin}:${String(q.modules || '')}|${String(q.nb_modules || '')}|${String(q.__rev || '')}`;
-}
-app.get(['/ajax/bootloader-endpoint/', '/ajax/bootloader-endpoint'], async (req, res) => {
-  const key = bootloaderKey(req);
-  let cached = cache.get(key);
-  if (!cached && bootloaderStore) {
-    cached = await bootloaderStore.read(key);
-    if (cached) cache.map.set(key, cached);
+  const key = `${String(q.modules || '')}|${String(q.nb_modules || '')}`;
+  const rev = String(q.__rev || '');
+  res.setHeader('cache-control', 'no-store');
+  if (rev && rev !== pinned.revision) {
+    pinned.noteMissing('answer', `${key}@${rev}`, `asked for revision ${rev}`);
+    return res.status(409).type('text/plain').send(`Revision ${rev} asked; the pinned client is revision ${pinned.revision}\n`);
   }
-  const send = (entry, how) => {
-    res.setHeader('x-loader-cache', how);
-    res.setHeader('cache-control', 'no-store');
-    res.type(entry.contentType || 'application/x-javascript').end(entry.body);
-  };
-  if (cached && (cache.isFresh(cached) || preferCache)) return send(cached, 'hit');
-  try {
-    const upstream = await fetchUpstream(new URL(req.originalUrl, config.upstream).href, { headers: { accept: '*/*' } });
-    if (upstream.status === 200) {
-      const entry = { body: upstream.body, contentType: upstream.headers.get('content-type') || 'application/x-javascript' };
-      cache.set(key, entry);
-      if (bootloaderStore) bootloaderStore.write(key, entry);
-      return send(entry, 'miss');
-    }
-    recordFailure({ kind: 'bootloader', status: upstream.status, url: req.originalUrl.slice(0, 200), reason: `upstream returned ${upstream.status}` });
-    if (cached) return send(cached, 'stale');
-    return res.status(upstream.status).type('text/plain').send(`Upstream error ${upstream.status}\n`);
-  } catch (error) {
-    const status = error instanceof UpstreamError ? error.status : 502;
-    recordFailure({ kind: 'bootloader', status, url: req.originalUrl.slice(0, 200), reason: error.message });
-    if (cached) return send(cached, 'stale');
-    return res.status(status).type('text/plain').send(`Bootloader resources unavailable: ${error.message}\n`);
+  const entry = pinned.answer(key);
+  if (!entry) {
+    pinned.noteMissing('answer', key, 'not in the snapshot');
+    return notPinned(res, `bootloader answer ${key}`);
   }
+  const body = pinned.body(entry);
+  if (!body) return res.status(500).type('text/plain').send(`Pinned client integrity failure for ${key}\n`);
+  res.setHeader('x-loader-cache', 'pinned');
+  res.setHeader('x-client-snapshot', pinned.id);
+  return res.type(entry.contentType).end(body);
 });
 
-// The page links a web app manifest. This one is ours (served locally, no
-// upstream request); it names this site, not Instagram's servers.
+/* ------------------------------------------------------------------ */
+/* Local endpoints                                                     */
+/* ------------------------------------------------------------------ */
+
+// The page links a web app manifest. This one is ours; it names this site.
 app.get('/data/manifest.json', (req, res) => {
   res.setHeader('cache-control', 'public, max-age=3600');
   res.json({ name: 'Instagram', short_name: 'Instagram', start_url: '/', scope: '/', display: 'standalone', background_color: '#ffffff', theme_color: '#ffffff', icons: [] });
 });
 
 // Instagram's service worker (registered for web push) is not served: at this
-// origin it would intercept every request and subscribe to Meta's push service,
-// neither of which this loader provides. The client treats a failed
-// registration as "push unavailable" and carries on.
+// origin it would intercept every request and subscribe to Meta's push service.
+// The client treats a failed registration as "push unavailable" and carries on.
 app.get('/www-service-worker.js', (req, res) => {
   res.setHeader('cache-control', 'no-store');
   res.status(404).type('text/plain').send('No service worker on this origin\n');
@@ -483,247 +249,64 @@ app.get('/www-service-worker.js', (req, res) => {
 
 app.get('/__loader/health', (req, res) => {
   res.json({
-    ok: true,
-    upstream: config.upstream,
+    ok: pinned.ready,
+    // Pinned only: this process has no upstream client.
+    client: pinned.diagnostics(),
     allowedAssetHosts: [...ALLOWED_HOSTS],
-    cache: { size: cache.size(), ttlMs: config.cacheTtlMs, ...cache.stats, diskAssets: Boolean(assetStore), diskDocuments: Boolean(documentStore), preferCache },
-    upstream: { offline: process.env.LOADER_OFFLINE === '1', throttled: throttle.status() },
     // No Instagram session exists anywhere in this system, configured or
     // relayed. Clone users authenticate against our own backend only.
     instagramSessions: { relayed: false, configured: false },
-    inflight: inflight.size,
     backend: backendInstance
       ? { mounted: true, prefix: backendApp.prefix, health: `${backendApp.prefix}/api/v1/health` }
       : { mounted: false },
     clone: cloneInstance ? { mounted: true, health: '/__clone/health' } : { mounted: false },
-    shell: { templates: templates.available(), forceDropPrefetches, bundlePatches: patcher.report() },
-    revisions: revisionState,
-    recentFailures: failures.slice(0, 25),
+    shell: { forceDropPrefetches, bundlePatches: patcher.report() },
+    routes: routeState,
   });
 });
 
 /* ------------------------------------------------------------------ */
-/* Page proxy: everything else is a document request to the origin     */
+/* Documents: everything else                                          */
 /* ------------------------------------------------------------------ */
 
 /**
- * Forward any method the browser used. The client issues same-origin POSTs to
- * endpoints such as /ajax/bz, so handling only GET would turn those into 404s
- * from this server instead of reaching Instagram. Request bodies are relayed
- * verbatim; nothing is parsed, re-encoded or invented.
- *
- * GET document requests are cached. A cached successful document is served
- * when the origin is throttling, which keeps the mirror usable and, more
- * importantly, avoids re-requesting the same page from the origin.
+ * GET/HEAD: the snapshot's document for the canonical path (the anonymous
+ * upstream bytes; viewer state is added per request by sendHtml), or an
+ * explicit 404. Any other method on a path our backend does not own is
+ * answered 404: nothing is relayed anywhere.
  */
-app.all('*', async (req, res) => {
-  // Clone-owned paths never fall through to Instagram, even when the backend
-  // could not start: their requests carry clone users' data.
+app.all('*', (req, res) => {
+  // Clone-owned paths are answered by the clone router; reaching here means the
+  // backend could not start.
   if (classify(req.path) !== 'other') {
     res.setHeader('cache-control', 'no-store');
     return res.status(503).json({ message: 'The application backend is unavailable', status: 'fail' });
   }
-  const isDocumentGet = req.method === 'GET' || req.method === 'HEAD';
-
-  // A signed-in clone viewer on an app route gets the signed-in shell from a
-  // captured template, personalised for them. Upstream is not contacted.
-  if (isDocumentGet && cloneInstance) {
-    const kind = routeKind(req.path);
-    const viewer = kind ? cloneInstance.viewerFor(req) : null;
-    const template = viewer ? templates.load(kind) : null;
-    if (template) {
-      res.setHeader('x-clone-shell', `template:${kind}`);
-      return sendHtml(req, res, 200, template, { fromTemplate: true });
-    }
+  if (!pinned.ready) return pinnedUnavailable(res);
+  if (req.method !== 'GET' && req.method !== 'HEAD') {
+    pinned.noteMissing('request', `${req.method} ${req.path}`, 'no local handler');
+    return res.status(404).type('text/plain').send(`${req.method} ${req.path} is not answered by this server\n`);
   }
-
-  // The upstream document is a route-independent app shell; the real route is
-  // resolved client-side from our API. So for an identity-bearing route we
-  // fetch a CANONICAL shell path instead of the literal one, and the clone
-  // username, shortcode or thread id in the URL never reaches Instagram. The
-  // query string is dropped with it, since it too can carry an identifier.
-  const upstreamPath = canonicalDocPath(req);
-  if (upstreamPath !== req.originalUrl) res.setHeader('x-clone-canonical', upstreamPath);
-  const target = `${config.upstream}${upstreamPath}`;
-
-  // Upstream documents are always fetched anonymously: no browser cookie is
-  // ever relayed to Instagram (src/upstream.js strips them), so the upstream
-  // document is identical for every viewer and safe to share in the cache.
-  // Per-viewer state is added afterwards, on our side, by the shell layer.
-  const docCache = cache;
-
-  // Serve a fresh cached document without touching the origin. Only anonymous
-  // documents are ever in this cache.
-  let cached = null;
-  const conditional = {};
-  if (isDocumentGet && docCache) {
-    const key = documentKey(req, upstreamPath);
-    cached = docCache.get(key);
-    if (!cached && documentStore) {
-      const stored = await documentStore.read(key);
-      // Freshness follows this process's configuration, not the writer's.
-      if (stored) docCache.map.set(key, (cached = { ...stored, ttlMs: config.documentCacheTtlMs }));
-    }
-    if (docCache.isFresh(cached) || (preferCache && cached)) {
-      docCache.stats.hits += 1;
-      res.setHeader('x-loader-cache', 'hit');
-      res.setHeader('x-loader-upstream', target);
-      return sendDocument(res, cached);
-    }
-    // Stale but present: revalidate instead of re-downloading the whole
-    // document. This is the difference between one cheap 304 and a full fetch.
-    if (cached?.etag) conditional['if-none-match'] = cached.etag;
-    if (cached?.lastModified) conditional['if-modified-since'] = cached.lastModified;
+  const p = new URL(canonicalDocPath(req), 'http://local').pathname;
+  if (p !== req.path) res.setHeader('x-clone-canonical', p);
+  const entry = pinned.document(p);
+  if (!entry) {
+    pinned.noteMissing('document', p, 'not in the snapshot');
+    return notPinned(res, `document ${p}`);
   }
-
-  // The upstream origin serves a DIFFERENT, reduced document to a request whose
-  // Accept is `*/*` or absent (no login form, no feed modules), and the full app
-  // shell only to one that asks for HTML. A real browser navigation always asks
-  // for HTML, but curl and our own tests often send `*/*` and would get the
-  // stripped page. So for a document navigation we send a browser-like Accept
-  // unless the client already asked for HTML. Requests for a file (a path with
-  // an extension, e.g. /data/manifest.json) keep their own Accept.
-  const BROWSER_DOCUMENT_ACCEPT =
-    'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7';
-  const clientAccept = req.get('accept') || '';
-  const wantsDocument =
-    req.get('sec-fetch-dest') === 'document' || (isDocumentGet && !/\.[a-z0-9]{1,8}(?:$|\?)/i.test(req.path));
-  const accept = clientAccept.includes('text/html') ? clientAccept : wantsDocument ? BROWSER_DOCUMENT_ACCEPT : clientAccept || '*/*';
-
-  const forwarded = {
-    accept,
-    'accept-language': req.get('accept-language') || 'en-US,en;q=0.9',
-    'user-agent': req.get('user-agent') || config.userAgent,
-    referer: config.upstream + '/',
-    // Instagram selects the client variant from the Fetch Metadata hints: a
-    // navigation with sec-fetch-site: none|same-origin gets the full app shell,
-    // while an absent or cross-site hint yields a reduced document. We relay the
-    // browser's own hints and fall back to what a real top-level navigation
-    // sends. This is a faithful relay, not a spoof of a privileged client.
-    ...fetchMetadataFor(req),
-  };
-  // The client sends an app-id header on its own API calls; pass it through
-  // when present so those calls are shaped the way the origin expects.
-  // X-CSRFToken is deliberately absent: on this origin it is a clone
-  // session's CSRF secret and must never reach Instagram.
-  for (const name of ['x-ig-app-id', 'x-requested-with', 'x-asbd-id']) {
-    const value = req.get(name);
-    if (value) forwarded[name] = value;
-  }
-  const contentType = req.get('content-type');
-  if (contentType) forwarded['content-type'] = contentType;
-  const requestBody = Buffer.isBuffer(req.body) && req.body.length ? req.body : undefined;
-
-  try {
-    const upstream = await fetchUpstream(target, {
-      method: req.method,
-      headers: { ...forwarded, ...conditional },
-      body: requestBody,
-    });
-
-    // 304: the cached copy is still current. Serve it; do not re-download.
-    if (upstream.status === 304 && cached && docCache) {
-      docCache.stats.revalidated += 1;
-      docCache.touch(documentKey(req, upstreamPath), {
-        etag: upstream.headers.get('etag'),
-        'last-modified': upstream.headers.get('last-modified'),
-      });
-      res.setHeader('x-loader-cache', 'revalidated');
-      res.setHeader('x-loader-upstream', target);
-      return sendDocument(res, cached);
-    }
-
-    if (!upstream.ok) {
-      recordFailure({
-        kind: 'document',
-        status: upstream.status,
-        url: target,
-        reason: `upstream returned ${upstream.status}`,
-      });
-
-      // Throttling and origin errors carry no usable page. If we have a
-      // previously successful anonymous copy, serve it rather than a dead page.
-      if (isDocumentGet && docCache) {
-        const stale = docCache.get(documentKey(req, upstreamPath));
-        if (docCache.isServableWhenStale(stale, config.documentStaleMs)) {
-          res.setHeader('x-loader-cache', 'stale');
-          res.setHeader('x-loader-upstream', target);
-          res.setHeader('x-loader-status', String(upstream.status));
-          return sendDocument(res, stale);
-        }
-      }
-
-      // Pass the origin's response through as-is. For an anti-bot response this
-      // is the challenge page itself, which carries a script that POSTs a
-      // verification request back to the origin. Replacing it with synthetic
-      // text would strip that mechanism and guarantee the page never loads, so
-      // the original body is preserved and rewritten like any other document.
-      copyResponseHeaders(upstream.headers, res, { maxAgeSeconds: 0 });
-      res.setHeader('x-loader-upstream', target);
-      res.setHeader('x-loader-status', String(upstream.status));
-      const isHtmlBody = contentTypeOf(upstream.headers).includes('text/html');
-      if (isHtmlBody) return sendHtml(req, res, upstream.status, rewriteHtml(upstream.body.toString('utf8')));
-      return res.status(upstream.status).end(upstream.body);
-    }
-
-    const type = contentTypeOf(upstream.headers);
-    const isHtml = type.includes('text/html') || type.includes('application/xhtml+xml');
-
-    copyResponseHeaders(upstream.headers, res, { maxAgeSeconds: 0 });
-    res.setHeader('x-loader-upstream', target);
-    res.setHeader('x-loader-rewritten', isHtml ? 'html' : 'none');
-    if (upstream.redirected) res.setHeader('x-loader-final-url', upstream.finalUrl);
-
-    // Only successful HTML documents and the origin's public images (e.g. the
-    // launcher icon the document head links, under /images/) are cached; both
-    // are anonymous and identical for every visitor. The origin's own redirects
-    // and errors are relayed as-is, so a transient state is not frozen into the
-    // mirror.
-    const upstreamType = upstream.headers.get('content-type') || '';
-    const publicImage = /^image\//.test(upstreamType) && /^\/images\//.test(req.path);
-    const cacheable = isDocumentGet && (isHtml || publicImage) && upstream.status === 200 && docCache;
-    // Documents are stored as the upstream bytes and rewritten when sent, so a
-    // fix to the rewrite rules also applies to copies already on disk.
-    const body = upstream.body;
-
-    if (cacheable) {
-      const entry = {
-        body,
-        contentType: isHtml ? 'text/html; charset=utf-8' : upstreamType,
-        status: upstream.status,
-        ttlMs: config.documentCacheTtlMs,
-        etag: upstream.headers.get('etag') || undefined,
-        lastModified: upstream.headers.get('last-modified') || undefined,
-      };
-      docCache.set(documentKey(req, upstreamPath), entry);
-      if (documentStore) documentStore.write(documentKey(req, upstreamPath), entry);
-      res.setHeader('x-loader-cache', 'miss');
-    }
-
-    if (isHtml) return sendHtml(req, res, upstream.status, rewriteHtml(body.toString('utf8')));
-    return res.status(upstream.status).end(body);
-  } catch (error) {
-    const status = error instanceof UpstreamError ? error.status : 502;
-    recordFailure({ kind: 'document', status, url: target, reason: error.message });
-
-    if (isDocumentGet && docCache) {
-      const stale = docCache.get(documentKey(req, upstreamPath));
-      if (docCache.isServableWhenStale(stale, config.documentStaleMs)) {
-        res.setHeader('x-loader-cache', 'stale');
-        res.setHeader('x-loader-upstream', target);
-        res.setHeader('x-loader-error', error.message);
-        return sendDocument(res, stale);
-      }
-    }
-
-    res.status(status).type('text/plain').send(`Upstream fetch failed: ${error.message}\n`);
-  }
+  const body = pinned.body(entry);
+  if (!body) return res.status(500).type('text/plain').send(`Pinned client integrity failure for ${p}\n`);
+  res.setHeader('x-loader-cache', 'pinned');
+  res.setHeader('x-client-snapshot', pinned.id);
+  if (/text\/html/.test(entry.contentType)) return sendHtml(req, res, 200, rewriteHtml(body.toString('utf8')));
+  res.setHeader('cache-control', `public, max-age=${Math.floor(config.cacheTtlMs / 1000)}`);
+  return res.type(entry.contentType).end(body);
 });
 
 /**
  * Mark a response as private and uncacheable by shared caches.
  *
- * Applied to every authenticated response. The loader may be reachable from a
+ * Applied to every authenticated response. The server may be reachable from a
  * public URL, so a cached signed-in page could otherwise be handed to a
  * different visitor.
  */
@@ -732,20 +315,10 @@ function markPrivate(res) {
   res.setHeader('vary', 'Cookie, Authorization');
 }
 
-/** Cache key for a document: method + path + the client variant it was fetched for. */
-function documentKey(req, upstreamPath) {
-  // The origin varies documents by Fetch Metadata; its public images do not.
-  const variant = /^\/images\//.test(req.path) ? 'file' : req.get('sec-fetch-site') ? 'nav' : 'plain';
-  // The origin is part of the key: copies from different upstreams (a test
-  // stand-in, Instagram) must never answer for each other, in memory or on disk.
-  return `doc:${new URL(config.upstream).origin}:${variant}:${upstreamPath}`;
-}
-
 /**
- * The path to fetch upstream for a document. Profiles, posts, stories and DM
- * threads carry clone identifiers in their URL; they all render from the same
- * route-independent app shell, so the root (or the inbox) is fetched instead
- * and the identifier stays on our side.
+ * The snapshot document for a request. Profiles, posts, stories and DM threads
+ * carry clone identifiers in their URL; they all render from the same
+ * route-independent app shell, so the root (or the inbox) document is used.
  */
 function canonicalDocPath(req) {
   const kind = routeKind(req.path);
@@ -775,52 +348,32 @@ function signedInRouteFor(req) {
  * this browser's CSRF token, the clone viewer). The result is specific to one
  * browser, so it is never cacheable by anyone else.
  */
-async function sendHtml(req, res, status, html, { fromTemplate = false } = {}) {
+function sendHtml(req, res, status, html) {
   const ctx = cloneInstance ? cloneInstance.documentContext(req, res) : { viewer: null, csrfToken: null, encryption: null };
   const stats = {};
   // Signed-in viewers get the signed-in route (opt out: SHELL_SIGNED_IN_HOME=0).
-  const route = !fromTemplate && process.env.SHELL_SIGNED_IN_HOME !== '0' && ctx.viewer ? signedInRouteFor(req) : null;
-  const healed = route ? await routeWithAnswers(route, html) : null;
-  if (healed) html = healed.html;
-  const signedInHome = Boolean(healed);
-  const feedRoot = healed ? healed.answers : null;
-  const out = personalize(html, { ...ctx, identity: fromTemplate, signedInHome, feedRoot, route, routeUrl: req.path, toLocal: mapUrl, dropPrefetches: fromTemplate || forceDropPrefetches, stats });
+  const route = process.env.SHELL_SIGNED_IN_HOME !== '0' && ctx.viewer ? signedInRouteFor(req) : null;
+  const withAnswers = route ? routeWithAnswers(route, html) : null;
+  const signedInHome = Boolean(withAnswers);
+  const feedRoot = withAnswers ? withAnswers.answers : null;
+  const out = personalize(html, { ...ctx, identity: false, signedInHome, feedRoot, route, routeUrl: req.path, toLocal: mapUrl, dropPrefetches: forceDropPrefetches, stats });
   if (cloneInstance) {
     const mentionsKey = /public_?key/i.test(html);
-    cloneInstance.recordDocument({ path: req.path, status, fromTemplate, signedIn: Boolean(ctx.viewer), mentionsKey, ...stats });
+    cloneInstance.recordDocument({ path: req.path, status, fromTemplate: false, signedIn: Boolean(ctx.viewer), mentionsKey, ...stats });
     if (mentionsKey && !stats.encryption) {
       console.warn(`[clone] ${req.path}: the page mentions a public key but no encryption config was replaced; login and signup on this page will fail to decrypt`);
     }
   }
   markPrivate(res);
-  res.removeHeader('etag');
-  res.removeHeader('last-modified');
-  // Strict offline: the browser itself refuses every request that is not to
-  // this origin. The runtime already routes the client's code, styles and
-  // images here; this catches what it cannot see (e.g. url()s in CSS rules the
-  // client inserts), so nothing reaches Instagram or any other host.
-  if (process.env.LOADER_OFFLINE === '1') res.setHeader('content-security-policy', OFFLINE_CSP);
+  res.setHeader('content-security-policy', SELF_ONLY_CSP);
   return res.status(status).type('text/html; charset=utf-8').end(Buffer.from(out, 'utf8'));
-}
-
-function sendDocument(res, entry) {
-  // Rewriting is idempotent, so cached documents pick up newer rewrite rules.
-  if (/text\/html/.test(entry.contentType)) return sendHtml(res.req, res, 200, rewriteHtml(entry.body.toString('utf8')));
-  res.setHeader('content-type', entry.contentType);
-  if (entry.etag) res.setHeader('etag', entry.etag);
-  if (!res.getHeader('cache-control')) {
-    res.setHeader('cache-control', `public, max-age=${Math.floor(config.documentCacheTtlMs / 1000)}`);
-  }
-  res.end(entry.body);
 }
 
 /* ------------------------------------------------------------------ */
 
 function start() {
   const server = app.listen(config.port, config.host, () => {
-    console.log(`[loader] runtime loader listening on http://${config.host}:${config.port}`);
-    console.log(`[loader] upstream origin: ${config.upstream}`);
-    console.log(`[loader] allowed asset hosts: ${[...ALLOWED_HOSTS].join(', ')}`);
+    console.log(`[loader] listening on http://${config.host}:${config.port}`);
     console.log(`[loader] health: http://localhost:${config.port}/__loader/health`);
   });
   return server;
@@ -830,4 +383,4 @@ if (require.main === module) {
   start();
 }
 
-module.exports = { app, start, cache };
+module.exports = { app, start };

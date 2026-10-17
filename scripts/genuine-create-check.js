@@ -14,8 +14,8 @@
  *   4. the post, its caption and its stored media are checked in the database,
  *      and the post appears in the owner's profile grid, served from /__media.
  *
- * Strict offline as in genuine-feed-check: LOADER_OFFLINE=1,
- * LOADER_PREFER_CACHE=1, no request to any other host.
+ * Strict offline as in genuine-feed-check: the pinned snapshot only, no
+ * request to any other host.
  *
  *   node scripts/genuine-create-check.js
  */
@@ -24,7 +24,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { DatabaseSync } = require('node:sqlite');
 
-Object.assign(process.env, { LOADER_OFFLINE: '1', LOADER_PREFER_CACHE: '1', SHELL_SIGNED_IN_HOME: '1', ...process.env });
+const upstreamGuard = require('./lib/offline').strictOffline();
 
 const { launchChromium, openSession, captureScreenshot, watchExternal, evaluateIsolated } = require('./lib/browser');
 const { sunsetPng, waitFor, sleep, mouseClickText } = require('./lib/scenario');
@@ -132,6 +132,8 @@ async function main() {
     check("the new post is in the owner's profile grid, its photo served from /__media", grid && (await evaluateIsolated(session, `Boolean(document.querySelector('a[href*="/p/${post.code}/"]'))`)));
 
     check('strict offline: the browser sent no request to an external host', session.externalRequests.length === 0, session.externalRequests.map((x) => x.url).slice(0, 5).join(' '));
+
+    check('no upstream request was attempted by the server (upstream guard)', upstreamGuard.attempts.length === 0, upstreamGuard.attempts.map((a) => `${a.method} ${a.url}`).slice(0, 5).join(' '));
     const reqs = [...session.requests.values()];
     const friendly = (r) => ((r.postData || '').match(/fb_api_req_friendly_name=([^&]+)/) || [])[1] || null;
     const unanswered = [...new Set(reqs.filter((r) => friendly(r) && r.status && r.status !== 200).map((r) => `${friendly(r)}:${r.status}`))];

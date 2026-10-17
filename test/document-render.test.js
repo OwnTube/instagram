@@ -6,20 +6,19 @@
  * which is the data the page renders from, leaving the client waiting on a
  * runtime query we cannot answer (the loading screen then never clears).
  *
- * A stand-in origin serves a page shaped like Instagram's: a define tuple, an
- * encryption config, a csrf field, and a RelayPrefetchedStreamCache prefetch.
- * These tests assert what the shell does to it, over real HTTP.
+ * The pinned fixture snapshot holds a page shaped like Instagram's: a define
+ * tuple, an encryption config, a csrf field, and a RelayPrefetchedStreamCache
+ * prefetch. These tests assert what the shell does to it, over real HTTP, with
+ * every upstream attempt refused and asserted absent.
  */
 
 const { test } = require('node:test');
 const assert = require('node:assert');
-const fs = require('node:fs');
-const http = require('node:http');
-const path = require('node:path');
+const { startCloneServer } = require('./clone-helpers');
+const { documentAt } = require('./snapshot-fixture');
 
-const SRC = path.join(__dirname, '..', 'src');
-const ROOT = path.join(__dirname, '..');
-fs.mkdirSync(path.join(ROOT, '.scratch'), { recursive: true });
+// The fixture snapshot is at revision 100; its documents carry that revision.
+const REVISION_PAYLOAD = { require: [['Bootloader', 'handlePayload', null, [{ consistency: { rev: 100 }, rsrcMap: {}, compMap: {} }]]] };
 
 const PREFETCH_KEY = 'adp_LoggedOutHomeQueryRelayPreloader_abc';
 const PREFETCH_MARK = 'ANON-PREFETCH-PAYLOAD';
@@ -51,42 +50,15 @@ function upstreamPage() {
 }
 
 async function withServer(env, fn) {
-  const seenAccept = [];
-  const upstream = await new Promise((resolve) => {
-    const s = http.createServer((req, res) => {
-      seenAccept.push(req.headers.accept || '');
-      // Mimic Instagram: a request that does not ask for HTML gets a reduced
-      // page with no login form.
-      const full = (req.headers.accept || '').includes('text/html');
-      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-      res.end(full ? upstreamPage() : '<!DOCTYPE html><html><head></head><body>reduced</body></html>');
-    });
-    s.listen(0, '127.0.0.1', () => resolve(s));
-  });
-  upstream.seenAccept = seenAccept;
-  const dir = fs.mkdtempSync(path.join(ROOT, '.scratch', 'doc-'));
-  const saved = { ...process.env };
-  Object.assign(process.env, {
-    UPSTREAM_ORIGIN: `http://127.0.0.1:${upstream.address().port}`,
-    BACKEND_DB: path.join(dir, 'db.sqlite'),
-    CLONE_DATA_DIR: dir,
-    VERBOSE: '0',
-    BACKEND_VERBOSE: '0',
-    ...env,
-  });
-  for (const key of Object.keys(require.cache)) if (key.startsWith(SRC)) delete require.cache[key];
-  const { app } = require('../src/server');
-  const server = await new Promise((resolve) => {
-    const s = app.listen(0, '127.0.0.1', () => resolve(s));
+  const page = upstreamPage();
+  const server = await startCloneServer(env, {
+    snapshot: { documents: { '/': page.replace('<body>', `<body>${block(REVISION_PAYLOAD)}`), '/accounts/emailsignup/': documentAt('100') } },
   });
   try {
-    await fn(`http://127.0.0.1:${server.address().port}`, upstream);
+    await fn(server.base, server);
+    assert.deepStrictEqual(server.upstream, [], 'serving the pinned document made an upstream attempt');
   } finally {
-    for (const k of Object.keys(env)) if (saved[k] === undefined) delete process.env[k];
-    server.closeAllConnections?.();
-    await new Promise((r) => server.close(r));
-    await new Promise((r) => upstream.close(r));
-    fs.rmSync(dir, { recursive: true, force: true });
+    await server.close();
   }
 }
 
@@ -138,20 +110,20 @@ test('the served document lets the client boot', async (t) => {
     });
   });
 
-  await t.test('a document navigation gets the full HTML variant even when the client sends */*', async () => {
-    await withServer({}, async (base, upstream) => {
-      const route = await fetch(`${base}/`, { headers: { accept: '*/*' } });
-      const html = await route.text();
-      assert.ok(html.includes(PREFETCH_MARK), 'the full page was fetched, not the reduced one');
-      assert.ok(upstream.seenAccept.some((a) => a.includes('text/html')), 'upstream was asked for HTML');
+  await t.test('a document navigation gets the pinned page whatever the client sends as Accept', async () => {
+    await withServer({}, async (base) => {
+      for (const accept of ['*/*', 'text/html', 'application/json']) {
+        const html = await (await fetch(`${base}/`, { headers: { accept } })).text();
+        assert.ok(html.includes(PREFETCH_MARK), `Accept ${accept}: the pinned page was served`);
+      }
     });
   });
 
-  await t.test('a request for a file keeps its own Accept and is not forced to HTML', async () => {
-    await withServer({}, async (base, upstream) => {
-      upstream.seenAccept.length = 0;
-      await fetch(`${base}/data/manifest.json`, { headers: { accept: 'application/json' } });
-      assert.ok(upstream.seenAccept.every((a) => !a.includes('text/html')), 'a .json path must not be upgraded to HTML');
+  await t.test('a file path the snapshot does not hold is an explicit 404, not a fetch', async () => {
+    await withServer({}, async (base) => {
+      const res = await fetch(`${base}/static/bundles/unknown.json`, { headers: { accept: 'application/json' } });
+      assert.strictEqual(res.status, 404);
+      assert.match(await res.text(), /Not in the pinned client snapshot/);
     });
   });
 

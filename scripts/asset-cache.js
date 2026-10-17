@@ -48,15 +48,29 @@ function storedKeys() {
   return keys;
 }
 
+/** Every stored document's and answer's text, as collectReferences reads them. */
+function storedTexts() {
+  const read = (dir) => (fs.existsSync(dir) ? fs.readdirSync(dir).filter((x) => x.endsWith('.body')).map((f) => fs.readFileSync(path.join(dir, f), 'utf8')) : []);
+  return { documents: read(DOC_DIR), answers: read(BOOT_DIR) };
+}
+
 function collectReferences(stored) {
+  return referencesFrom({ ...storedTexts(), stored });
+}
+
+/**
+ * The public static assets that `documents` (HTML) and `answers`
+ * (bootloader-endpoint answer texts) reference, plus the url()s inside the
+ * stylesheets among them found in `stored`. Map url -> { type, from }.
+ */
+function referencesFrom({ documents, answers, stored }) {
   const refs = new Map();
   const add = (url, type, from) => {
     if (typeof url !== 'string' || !STATIC.test(url) || !isAllowedUpstreamUrl(url)) return;
     if (!refs.has(url)) refs.set(url, { type, from });
   };
-  if (fs.existsSync(DOC_DIR)) {
-    for (const f of fs.readdirSync(DOC_DIR).filter((x) => x.endsWith('.body'))) {
-      const html = fs.readFileSync(path.join(DOC_DIR, f), 'utf8');
+  {
+    for (const html of documents) {
       // Stored documents are already rewritten: tags point at /__ig/<host>/...
       for (const m of html.matchAll(/<(?:script|link)\b[^>]*?\b(?:src|href)="((?:https:\/\/|\/__ig\/)[^"]+)"/g)) {
         const u = m[1].replace(/&amp;/g, '&');
@@ -76,10 +90,10 @@ function collectReferences(stored) {
     }
   }
   // Stored bootloader-endpoint answers: the resource map of lazily loaded modules.
-  if (fs.existsSync(BOOT_DIR)) {
-    for (const f of fs.readdirSync(BOOT_DIR).filter((x) => x.endsWith('.body'))) {
+  {
+    for (const text of answers) {
       try {
-        const answer = JSON.parse(fs.readFileSync(path.join(BOOT_DIR, f), 'utf8').replace(/^for \(;;\);/, ''));
+        const answer = JSON.parse(text.replace(/^for \(;;\);/, ''));
         const map = answer && answer.hrp && answer.hrp.hsrp && answer.hrp.hsrp.hblp && answer.hrp.hsrp.hblp.rsrcMap;
         for (const e of Object.values(map || {})) if (e && e.src) add(e.src, e.type || 'js', 'bootloader');
         const ix = answer && answer.hrp && answer.hrp.hsrp && answer.hrp.hsrp.hsdp && answer.hrp.hsrp.hsdp.ixData;
@@ -95,11 +109,12 @@ function collectReferences(stored) {
 
   // url() references in stored stylesheets, resolved against the sheet's URL.
   for (const [url, { file, meta }] of stored) {
-    if (!/text\/css/.test(meta.entry.contentType || '') || !fs.existsSync(file)) continue;
+    if (!refs.has(url) || !/text\/css/.test(meta.entry.contentType || '') || !fs.existsSync(file)) continue;
     const css = fs.readFileSync(file, 'utf8');
     for (const m of css.matchAll(/url\(\s*(['"]?)([^'")]+)\1\s*\)/gi)) {
       const raw = m[2].trim();
-      if (/^(data:|#)/i.test(raw)) continue;
+      // A fragment (also percent-encoded, as in url(%23clip0_...)) names an SVG element, not a file.
+      if (/^(data:|#|%23)/i.test(raw)) continue;
       let abs;
       if (raw.startsWith('/__ig/')) abs = `https://${raw.slice('/__ig/'.length)}`;
       else {
@@ -195,4 +210,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { collectReferences };
+module.exports = { collectReferences, referencesFrom, storedKeys };

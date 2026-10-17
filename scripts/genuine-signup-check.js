@@ -13,16 +13,16 @@
  *      is added and no session is issued;
  *   4. a too-short password is refused by the form and nothing is written.
  *
- * It needs the page and its bundles, from the disk caches (.cache/documents,
- * .cache/assets; LOADER_OFFLINE=1 and LOADER_PREFER_CACHE=1 by default), with no
- * request to www.instagram.com. CHROMIUM_BIN must point at Chromium.
+ * It needs the page and its bundles, from the active pinned client snapshot
+ * (or CLIENT_SNAPSHOT_ID), with no request to www.instagram.com (upstream
+ * guard). CHROMIUM_BIN must point at Chromium.
  *
  *   node scripts/genuine-signup-check.js
  */
 
 // Offline by default, as the other genuine checks: pages and bundles from the
 // disk caches, no request to Instagram (override either variable to go online).
-Object.assign(process.env, { LOADER_OFFLINE: '1', LOADER_PREFER_CACHE: '1', ...process.env });
+const upstreamGuard = require('./lib/offline').strictOffline();
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -146,6 +146,7 @@ async function main() {
     const weak = await submitForm(session, base, { username: `${username}_w`, password: 'abc' });
     check('a too-short password is refused and nothing is written', count() === 1 && /emailsignup/.test(weak.url) && (await me(session)).status === 401);
     check('no request was sent to an external host', session.externalRequests.length === 0, session.externalRequests.map((x) => x.url).slice(0, 5).join(' '));
+    check('no upstream request was attempted by the server (upstream guard)', upstreamGuard.attempts.length === 0, upstreamGuard.attempts.map((a) => `${a.method} ${a.url}`).slice(0, 5).join(' '));
     if (session.cspRefused.length) console.log(`INFO  ${session.cspRefused.length} external load(s) refused by the offline CSP (never sent): ${[...new Set(session.cspRefused)].slice(0, 3).join(' ')}`);
     if (stalls.length) console.log(`WARN  the client stalled on ${stalls.length} load(s) and was reloaded: ${stalls.join(', ')}`);
     check('no uncaught page errors', session.exceptions.length === 0, session.exceptions.map((e) => e.text).join('; ').slice(0, 300));

@@ -2,7 +2,7 @@
   "name": "instagram-runtime-loader",
   "version": "1.0.0",
   "private": true,
-  "description": "Runtime fetch and proxy of the original Instagram web client (upstream: https://www.instagram.com/).",
+  "description": "Serves a pinned, validated snapshot of the original Instagram web client with a local compatibility backend; never fetches the client at runtime.",
   "type": "commonjs",
   "main": "src/server.js",
   "scripts": {
@@ -14,7 +14,7 @@
     "verify:browser": "node scripts/browser-check.js",
     "test": "node --test --test-timeout=90000 test/*.test.js",
     "test:backend": "node --test --test-timeout=90000 test/migrations.test.js test/auth.test.js test/api.test.js test/crypto.test.js test/visibility.test.js",
-    "test:loader": "node --test --test-timeout=90000 test/loader.test.js test/viewer-isolation.test.js test/upstream-leak.test.js test/shell.test.js",
+    "test:loader": "node --test --test-timeout=90000 test/loader.test.js test/viewer-isolation.test.js test/upstream-leak.test.js test/shell.test.js test/pinned-client.test.js test/document-render.test.js test/signed-in-route.test.js",
     "test:clone": "node --test --test-timeout=90000 test/clone.test.js test/auth-lifecycle.test.js test/password-encryption.test.js",
     "verify:browser-auth": "node scripts/browser-auth-check.js",
     "verify:browser-loading": "node scripts/browser-loading-check.js",
@@ -26,7 +26,14 @@
     "verify:genuine-engage": "node scripts/genuine-engage-check.js",
     "audit:routes": "node scripts/route-audit.js",
     "cache:status": "node scripts/asset-cache.js status",
-    "cache:warm": "node scripts/asset-cache.js warm"
+    "cache:warm": "node scripts/asset-cache.js warm",
+    "client:acquire": "node scripts/client-acquire.js",
+    "client:build": "node scripts/client-snapshot.js build",
+    "client:verify": "node scripts/client-snapshot.js verify",
+    "client:activate": "node scripts/client-snapshot.js activate",
+    "client:rollback": "node scripts/client-snapshot.js rollback",
+    "client:status": "node scripts/client-snapshot.js status",
+    "verify:pinned-restart": "node scripts/pinned-restart-check.js"
   },
   "engines": {
     "node": ">=18"

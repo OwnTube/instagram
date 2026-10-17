@@ -2,7 +2,8 @@
 'use strict';
 
 /**
- * Route audit, strictly offline (LOADER_OFFLINE=1, LOADER_PREFER_CACHE=1): every
+ * Route audit against the active pinned client snapshot, with the upstream
+ * guard on (any attempt to reach Instagram is recorded and fails): every
  * document route the client can be opened at, requested as a top-level
  * navigation by an anonymous visitor and by a signed-in local account. For each
  * it reports the status, which document was served (the signed-in route, the
@@ -13,7 +14,7 @@
  *   node scripts/route-audit.js [--json]
  */
 
-Object.assign(process.env, { LOADER_OFFLINE: '1', LOADER_PREFER_CACHE: '1', ...process.env });
+const upstreamGuard = require('./lib/offline').strictOffline();
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -65,7 +66,8 @@ async function main() {
   }
   if (process.argv.includes('--json')) console.log(JSON.stringify(rows, null, 2));
   else for (const r of rows) console.log(`${r.route.padEnd(28)} ${r.who.padEnd(10)} ${r.status} ${(r.location || '').padEnd(18)} ${r.served}${r.loginMarkup ? '  [login markup]' : ''}`);
-  process.exit(0);
+  console.log(`upstream attempts: ${upstreamGuard.attempts.length}${upstreamGuard.attempts.map((a) => `\n  ${a.method} ${a.url}`).join('')}`);
+  process.exit(upstreamGuard.attempts.length ? 1 : 0);
 }
 
 main().catch((error) => {

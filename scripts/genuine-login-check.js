@@ -12,15 +12,15 @@
  *   3. the right password signs the browser in as that user (current_user,
  *      ds_user_id) and the form follows the same-site redirect.
  *
- * Page and bundles come from the disk caches (LOADER_OFFLINE=1,
- * LOADER_PREFER_CACHE=1 by default) without any request to www.instagram.com.
+ * Page and bundles come from the active pinned client snapshot (or
+ * CLIENT_SNAPSHOT_ID) without any request to www.instagram.com (upstream guard).
  *
  *   node scripts/genuine-login-check.js
  */
 
 // Offline by default, as the other genuine checks: pages and bundles from the
 // disk caches, no request to Instagram (override either variable to go online).
-Object.assign(process.env, { LOADER_OFFLINE: '1', LOADER_PREFER_CACHE: '1', ...process.env });
+const upstreamGuard = require('./lib/offline').strictOffline();
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -140,6 +140,7 @@ async function main() {
     check('ds_user_id names that user', ds === created.created_user_id, `${ds} vs ${created.created_user_id}`);
     check('the form showed no login error', !/incorrect|could not be read|try again/i.test(right.text));
     check('no request was sent to an external host', session.externalRequests.length === 0, session.externalRequests.map((x) => x.url).slice(0, 5).join(' '));
+    check('no upstream request was attempted by the server (upstream guard)', upstreamGuard.attempts.length === 0, upstreamGuard.attempts.map((a) => `${a.method} ${a.url}`).slice(0, 5).join(' '));
     if (session.cspRefused.length) console.log(`INFO  ${session.cspRefused.length} external load(s) refused by the offline CSP (never sent): ${[...new Set(session.cspRefused)].slice(0, 3).join(' ')}`);
     if (stalls.length) console.log(`WARN  the client stalled on ${stalls.length} load(s) and was reloaded: ${stalls.join(', ')}`);
     check('no uncaught page errors', session.exceptions.length === 0, session.exceptions.map((e) => e.text).join('; ').slice(0, 300));

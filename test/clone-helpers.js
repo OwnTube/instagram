@@ -1,17 +1,19 @@
 'use strict';
 
 /**
- * Harness for the compatibility layer: the full server (loader + backend +
- * clone) against a stand-in upstream origin that records everything it
- * receives, plus a browser-like client that keeps cookies and sends requests
+ * Harness for the compatibility layer: the full server (pinned client +
+ * backend + clone) on a fixture snapshot, with every upstream attempt recorded
+ * and refused, plus a browser-like client that keeps cookies and sends requests
  * the way the original Instagram client does (form-encoded, X-CSRFToken from
  * the csrftoken cookie, enc_password encrypted to the advertised key).
  */
 
 const fs = require('node:fs');
-const http = require('node:http');
 const path = require('node:path');
 const { encryptLikeClient } = require('../src/clone/passwordEncryption');
+const { installUpstreamGuard } = require('../scripts/lib/upstream-guard');
+const { openSnapshotStore } = require('../src/clientSnapshot');
+const { writeSnapshot } = require('./snapshot-fixture');
 
 const SRC = path.join(__dirname, '..', 'src');
 const TEST_ROOT = path.join(__dirname, '..', '.scratch', 'test');
@@ -20,42 +22,28 @@ function clearSrcCache() {
   for (const key of Object.keys(require.cache)) if (key.startsWith(SRC)) delete require.cache[key];
 }
 
-/** `handler(req)` may answer a request itself ({ status, type, body }); else the default document. */
-async function startFakeOrigin(handler = null) {
-  const received = [];
-  const server = http.createServer((req, res) => {
-    let body = '';
-    req.on('data', (c) => (body += c));
-    req.on('end', () => {
-      received.push({ method: req.method, url: req.url, cookie: req.headers.cookie || null, headers: req.headers, body });
-      const own = handler && handler(req);
-      if (own) {
-        res.writeHead(own.status || 200, { 'content-type': own.type || 'text/html; charset=utf-8' });
-        res.end(own.body);
-        return;
-      }
-      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'set-cookie': 'sessionid=UPSTREAM; Path=/' });
-      res.end('<!doctype html><html><head></head><body>upstream document</body></html>');
-    });
-  });
-  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-  return { origin: `http://127.0.0.1:${server.address().port}`, received, close: () => new Promise((r) => server.close(r)) };
-}
+// Every test server runs with the upstream guard: any attempt to reach a
+// non-local host is recorded (`server.upstream`) and fails. The pinned server
+// must never make one.
+const guard = installUpstreamGuard();
 
 /**
- * Start the whole server. Pass `dir` to reuse a data directory (a restart);
- * `keepDir` leaves it on close so a second server can open it; `origin` is a
- * handler for the stand-in upstream (see startFakeOrigin).
+ * Start the whole server on a fixture pinned-client snapshot (in its own
+ * CLIENT_DIR). Pass `dir` to reuse a data directory (a restart); `keepDir`
+ * leaves it on close so a second server can open it; `snapshot` is the
+ * fixture (test/snapshot-fixture.js writeSnapshot options), written unless the
+ * directory already has an active snapshot.
  */
-async function startCloneServer(extraEnv = {}, { dir: reuseDir, keepDir = false, origin = null } = {}) {
+async function startCloneServer(extraEnv = {}, { dir: reuseDir, keepDir = false, snapshot = {} } = {}) {
   fs.mkdirSync(TEST_ROOT, { recursive: true });
   const dir = reuseDir || fs.mkdtempSync(path.join(TEST_ROOT, 'clone-'));
-  const fake = await startFakeOrigin(origin);
+  const clientDir = path.join(dir, 'client');
+  if (snapshot && !openSnapshotStore(clientDir).readState().active) writeSnapshot(clientDir, snapshot);
+  const upstreamBefore = guard.attempts.length;
   const env = {
-    UPSTREAM_ORIGIN: fake.origin,
+    CLIENT_DIR: clientDir,
     BACKEND_DB: path.join(dir, 'db.sqlite'),
     CLONE_DATA_DIR: dir,
-    MAX_RETRIES: '0',
     VERBOSE: '0',
     BACKEND_VERBOSE: '0',
     RATE_LIMIT_MAX: '100000',
@@ -89,10 +77,14 @@ async function startCloneServer(extraEnv = {}, { dir: reuseDir, keepDir = false,
   });
   return {
     base: `http://127.0.0.1:${server.address().port}`,
-    upstream: fake.received,
+    /** Upstream attempts since this server started (always expected empty). */
+    get upstream() {
+      return guard.attempts.slice(upstreamBefore);
+    },
     mail,
     logs,
     dir,
+    clientDir,
     dbFile: env.BACKEND_DB,
     /** A second connection to the server's database, for checking stored state. */
     openDb() {
@@ -105,7 +97,6 @@ async function startCloneServer(extraEnv = {}, { dir: reuseDir, keepDir = false,
       console.log = realLog;
       server.closeAllConnections?.();
       await new Promise((r) => server.close(r));
-      await fake.close();
       if (!keepDir) fs.rmSync(dir, { recursive: true, force: true });
     },
   };

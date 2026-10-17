@@ -6,7 +6,9 @@ Manual testing instructions: docs/MANUAL-TESTING.md.
 ## Architecture
 
 ```
-original client (page + code fetched from Instagram anonymously by the loader)
+original client (ONE pinned, validated snapshot of Instagram's anonymous page,
+                 code and bootloader answers; never fetched at runtime;
+                 docs/CLIENT-PINNING.md)
   -> src/shell      per-request edits to the page's bootstrap JSON: our password
                     encryption key, this browser's CSRF token, the clone viewer;
                     /__clone/runtime.js transport guard; signed-in templates;
@@ -17,15 +19,16 @@ original client (page + code fetched from Instagram anonymously by the loader)
                     /__clone/health; nothing clone-owned is forwarded upstream
   -> src/backend    services + SQLite (node:sqlite, WAL), migrations 0001, 0002
   -> .data/         database, media files, password-encryption keypair (0600)
-  -> .cache/        disk copies of PUBLIC assets and ANONYMOUS documents
-                    (LOADER_PREFER_CACHE=1 serves them without contacting Instagram)
+  -> .cache/client  the snapshot store (blobs by sha256, manifests, state);
+                    .cache/{documents,bootloader,assets,acquired} are operator
+                    acquisition material the snapshot is built from
 ```
 
 Sessions: `sessionid` (HttpOnly), `csrftoken` (= session CSRF secret, echoed as
 X-CSRFToken), `ds_user_id`, Path=/ on our origin. Browser cookies and X-CSRFToken
 are never forwarded upstream. Identity-bearing pages (profile, post, reel, stories,
-DM thread) fetch a canonical shell upstream so their identifiers stay here. There
-is no Instagram session anywhere.
+DM thread) are served from a canonical snapshot document. There is no
+Instagram session anywhere, and the server makes no upstream request at all.
 
 ## Verified
 
@@ -114,8 +117,10 @@ Real browser, SYNTHETIC page: `npm run verify:browser-auth` 15/15 and
 
 ## Running independently of Instagram
 
-Strict offline mode: `LOADER_OFFLINE=1 LOADER_PREFER_CACHE=1 npm start`. The loader
-then never contacts any origin, and every document carries a Content-Security-Policy
+Since 2026-10-17 this is the only mode: `npm start` serves the active pinned
+snapshot (docs/CLIENT-PINNING.md). The historical notes below describe the
+earlier `LOADER_OFFLINE=1 LOADER_PREFER_CACHE=1` mode, which is removed. The
+loader never contacts any origin, and every document carries a Content-Security-Policy
 allowing only this origin (plus data:/blob:), so the browser itself refuses any
 request that would leave it.
 
