@@ -239,6 +239,15 @@ test('pages name no Facebook cross-site probe (this origin has no Facebook sessi
   assert.match(out, /"machine_id":"m"/, 'the rest of the site data is unchanged');
 });
 
+test('the Bootloader asks for one module per endpoint request (answers the snapshot holds)', () => {
+  const config = { retryEnabled: false, debugNoBatching: false, maxBatchSize: -1, endpointURI: 'https://www.instagram.com/ajax/bootloader-endpoint/', adsManagerReadRegions: false };
+  const html = page([{ define: [['BootloaderEndpointConfig', [], config, 5094]] }]);
+  for (const options of [{ encryption: OURS }, { viewer: viewer(), encryption: OURS }]) {
+    const out = personalize(html, options);
+    assert.match(out, /"BootloaderEndpointConfig",\[\],\{"retryEnabled":false,"debugNoBatching":false,"maxBatchSize":1,/);
+  }
+});
+
 test("the signed-in route drops the anonymous server render's markup, keeping the mount element", () => {
   const { emptySSRMount } = require('../src/shell/signedInRoute');
   const html = '<body><div id="mount_0_0_a" style="content-visibility:hidden"><div><div>Log into Instagram</div></div><div>x</div></div><script>after</script></body>';

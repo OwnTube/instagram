@@ -278,7 +278,7 @@ app.get('/__loader/health', (req, res) => {
 app.all('*', (req, res) => {
   // Clone-owned paths are answered by the clone router; reaching here means the
   // backend could not start.
-  if (classify(req.path) !== 'other') {
+  if (classify(req.path, req.method) !== 'other') {
     res.setHeader('cache-control', 'no-store');
     return res.status(503).json({ message: 'The application backend is unavailable', status: 'fail' });
   }

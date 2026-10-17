@@ -224,7 +224,9 @@ function runBrowserChecks(id, checks, dir) {
 function verify(id, { browser, dir = CLIENT_DIR, runChecks = runBrowserChecks } = {}) {
   const store = openSnapshotStore(dir);
   const m = store.load(id);
-  if (m.status !== 'candidate' && m.status !== 'verified') throw new Error(`snapshot ${id} is ${m.status}; only a candidate is verified`);
+  // An active snapshot can be re-checked (e.g. after a serving change): the
+  // results and scope are recorded, its status is not changed either way.
+  if (!['candidate', 'verified', 'active'].includes(m.status)) throw new Error(`snapshot ${id} is ${m.status}; only a candidate, verified or active snapshot is verified`);
   const check = store.validate(m, { deep: true, requiredRoutes: ['home'] });
   m.validation.push({ at: new Date().toISOString(), check: 'integrity', ok: check.ok, errors: check.errors, stats: check.stats });
   console.log(`integrity: ${check.ok ? 'ok' : 'FAILED'} ${JSON.stringify(check.stats)}${check.errors.length ? `\n  ${check.errors.slice(0, 20).join('\n  ')}` : ''}`);
@@ -247,7 +249,7 @@ function verify(id, { browser, dir = CLIENT_DIR, runChecks = runBrowserChecks } 
     m.validation.push({ at: new Date().toISOString(), check: 'browser', ok: browserOk, results, scope: m.scope });
   }
   const passed = check.ok && patchesOk && browserOk === true;
-  if (m.status === 'candidate' || !passed) m.status = passed ? 'verified' : 'candidate';
+  if (m.status !== 'active' && (m.status === 'candidate' || !passed)) m.status = passed ? 'verified' : 'candidate';
   store.save(m);
   const scope = m.scope ? ` scope: working ${m.scope.working.join(',') || '-'}; failing ${m.scope.failing.join(',') || '-'}; unsupported ${m.scope.unsupported.join(',') || '-'}; ${m.scope.complete ? 'complete' : 'PARTIAL'}` : '';
   console.log(`snapshot ${id}: ${passed ? 'VERIFIED' : browserOk === null && check.ok && patchesOk ? 'integrity ok; run with --browser to verify' : 'NOT verified'} (status ${m.status})${scope}`);

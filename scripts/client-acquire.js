@@ -9,7 +9,7 @@
  * One bounded, anonymous pass (no cookies of any account, no login):
  *   1. the navigation documents (/, /accounts/emailsignup/, /accounts/login/,
  *      /accounts/password/reset/) - all must be 200 HTML of the SAME revision,
- *      else the pass stops;
+ *      else the pass stops - and the not-found page (NOT_FOUND_PATH, 404);
  *   2. the bootloader-endpoint answers for the modules the client needs (the
  *      signed-in routes' roots and the lazily loaded modules already known),
  *      each asked for that revision; an answer declaring another revision is
@@ -21,6 +21,14 @@
  * a 429). Nothing already stored is overwritten, and the active snapshot is
  * never touched.
  *
+ * Order: `/` first (it fixes the revision), then the answers, then the other
+ * documents, so a throttle late in the pass does not cost the answers.
+ *
+ * Cooldown across passes: every 429 is recorded in its pass's provenance with
+ * the Retry-After the origin sent. A new pass does not start (no request at
+ * all) until every recorded 429 is older than its Retry-After, or than
+ * MAX_COOLDOWN_MS when none was sent; `--check-cooldown` only reports it.
+ *
  * Documents and answers go to a staging directory, .cache/acquired/<stamp>/,
  * with provenance.json (every request: URL, status, sha256, bytes, time, and
  * why the pass stopped). Public static assets are added to the URL-keyed asset
@@ -31,6 +39,7 @@
  *   node scripts/client-snapshot.js activate <id>
  *
  *   NODE_USE_ENV_PROXY=1 node scripts/client-acquire.js [--modules A,B] [--set 'A,B|C'] [--max-assets N] [--dry-run]
+ *   node scripts/client-acquire.js --check-cooldown
  */
 
 const crypto = require('node:crypto');
@@ -51,6 +60,14 @@ const ASSET_DIR = process.env.ASSET_CACHE_DIR || '.cache/assets';
 // Public anonymous pages. A pass fetches all of them at one revision; a page
 // cannot be added to an existing snapshot later (it would be another revision).
 const DOCUMENTS = ['/', '/accounts/emailsignup/', '/accounts/login/', '/accounts/password/reset/'];
+// Instagram's own "page not available" document, for profile URLs naming no
+// account. Usernames cannot contain "..", so this path never names an account.
+// It is expected to answer 404 (anything else is recorded and not staged).
+const NOT_FOUND_PATH = '/no..such..account/';
+const ACQUIRED_DIR = path.join(ROOT, '.cache', 'acquired');
+// The longest cooldown src/upstream.js ever applies; used when a 429 carried
+// no Retry-After (or its pass recorded none).
+const MAX_COOLDOWN_MS = 60 * 60 * 1000;
 const PAUSE_MS = Number(process.env.ACQUIRE_PAUSE_MS || 3000);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const sha256 = (b) => crypto.createHash('sha256').update(b).digest('hex');
@@ -97,7 +114,43 @@ function moduleSets() {
   return [...sets.values()];
 }
 
+/** Recorded 429s whose cooldown has not passed: [{url, at, until, retryAfter, pass}]. */
+function activeCooldowns(now = Date.now()) {
+  const out = [];
+  if (!fs.existsSync(ACQUIRED_DIR)) return out;
+  for (const d of fs.readdirSync(ACQUIRED_DIR)) {
+    let p;
+    try {
+      p = JSON.parse(fs.readFileSync(path.join(ACQUIRED_DIR, d, 'provenance.json'), 'utf8'));
+    } catch {
+      continue;
+    }
+    for (const r of p.requests || []) {
+      if (r.status !== 429) continue;
+      const seconds = Number(r.retryAfter);
+      const dated = Date.parse(r.retryAfter);
+      let ms = MAX_COOLDOWN_MS;
+      if (r.retryAfter != null && Number.isFinite(seconds)) ms = seconds * 1000;
+      else if (r.retryAfter != null && Number.isFinite(dated)) ms = dated - Date.parse(r.at);
+      const until = Date.parse(r.at) + Math.min(Math.max(ms, 0), MAX_COOLDOWN_MS);
+      if (until > now) out.push({ url: r.url, at: r.at, until: new Date(until).toISOString(), retryAfter: r.retryAfter ?? null, pass: d });
+    }
+  }
+  return out;
+}
+
 async function main() {
+  const cooling = activeCooldowns();
+  if (process.argv.includes('--check-cooldown')) {
+    if (!cooling.length) console.log('no recorded 429 is still cooling down');
+    for (const c of cooling) console.log(`cooling down until ${c.until}: 429 on ${c.url} at ${c.at} (pass ${c.pass}, Retry-After ${c.retryAfter ?? 'not recorded'})`);
+    return cooling.length ? 2 : 0;
+  }
+  if (cooling.length) {
+    console.log(`not starting: ${cooling.length} recorded 429 still cooling down (until ${cooling.map((c) => c.until).sort().pop()}); no request sent`);
+    return 2;
+  }
+
   const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z');
   const staging = path.join(ROOT, '.cache', 'acquired', stamp);
   const docStore = createAssetStore(path.join(staging, 'documents'));
@@ -118,12 +171,13 @@ async function main() {
   }
 
   /** One request; returns the response or null after recording why the pass stops. */
-  async function get(kind, url, headers) {
+  async function get(kind, url, headers, expected = 200) {
     const at = new Date().toISOString();
     try {
       const res = await fetchUpstream(url, { headers });
-      provenance.requests.push({ kind, url, finalUrl: res.finalUrl, status: res.status, sha256: sha256(res.body), bytes: res.body.length, contentType: res.headers.get('content-type'), at });
-      if (res.status !== 200) {
+      const retryAfter = res.status === 429 ? { retryAfter: res.headers.get('retry-after') } : {};
+      provenance.requests.push({ kind, url, finalUrl: res.finalUrl, status: res.status, sha256: sha256(res.body), bytes: res.body.length, contentType: res.headers.get('content-type'), ...retryAfter, at });
+      if (res.status !== expected) {
         provenance.stoppedReason = `${kind} ${url}: HTTP ${res.status}`;
         return null;
       }
@@ -138,35 +192,40 @@ async function main() {
 
   const documentTexts = [];
   const answerTexts = [];
-  try {
-    for (const p of DOCUMENTS) {
-      const res = await get('document', `${ORIGIN}${p}`, NAVIGATION);
-      if (!res) return 1;
-      const landed = new URL(res.finalUrl).pathname;
-      if (landed !== p) {
-        // Redirected (e.g. a page that needs a session): the bytes are not
-        // this page, so they are not stored under its path.
-        provenance.requests[provenance.requests.length - 1].refused = `redirected to ${landed}`;
-        console.log(`  refused document ${p}: redirected to ${landed}`);
-        await sleep(PAUSE_MS);
-        continue;
-      }
-      const text = res.body.toString('utf8');
-      const rev = revisionOfText(text);
-      if (!/text\/html/.test(res.headers.get('content-type') || '') || !rev) {
-        provenance.stoppedReason = `document ${p}: not an HTML document with a client revision`;
-        return 1;
-      }
-      if (provenance.revision && rev !== provenance.revision) {
-        provenance.stoppedReason = `document ${p} is revision ${rev}, ${DOCUMENTS[0]} was ${provenance.revision}: Instagram changed revision mid-pass; nothing is combined`;
-        provenance.revision = null;
-        return 1;
-      }
-      provenance.revision = rev;
-      await docStore.write(`doc:${ORIGIN}:nav:${p}`, { body: res.body, contentType: res.headers.get('content-type') });
-      documentTexts.push(text);
+  /** Fetch and stage one navigation document; false stops the pass. */
+  async function document(p, expected = 200) {
+    const res = await get('document', `${ORIGIN}${p}`, NAVIGATION, expected);
+    if (!res) return false;
+    const landed = new URL(res.finalUrl).pathname;
+    if (landed !== p) {
+      // Redirected (e.g. a page that needs a session): the bytes are not
+      // this page, so they are not stored under its path.
+      provenance.requests[provenance.requests.length - 1].refused = `redirected to ${landed}`;
+      console.log(`  refused document ${p}: redirected to ${landed}`);
       await sleep(PAUSE_MS);
+      return true;
     }
+    const text = res.body.toString('utf8');
+    const rev = revisionOfText(text);
+    if (!/text\/html/.test(res.headers.get('content-type') || '') || !rev) {
+      provenance.stoppedReason = `document ${p}: not an HTML document with a client revision`;
+      return false;
+    }
+    if (provenance.revision && rev !== provenance.revision) {
+      // Not staged: the snapshot would mix revisions.
+      provenance.requests[provenance.requests.length - 1].refused = `revision ${rev}, the pass is ${provenance.revision}`;
+      provenance.stoppedReason = `document ${p} is revision ${rev}, ${DOCUMENTS[0]} was ${provenance.revision}: Instagram changed revision mid-pass; nothing is combined`;
+      return false;
+    }
+    provenance.revision = rev;
+    await docStore.write(`doc:${ORIGIN}:nav:${p}`, { body: res.body, contentType: res.headers.get('content-type') });
+    documentTexts.push(text);
+    await sleep(PAUSE_MS);
+    return true;
+  }
+
+  try {
+    if (!(await document(DOCUMENTS[0]))) return 1;
     const rev = provenance.revision;
     for (const s of sets) {
       const q = `${s.modules ? `modules=${encodeURIComponent(s.modules)}` : ''}${s.nbModules ? `${s.modules ? '&' : ''}nb_modules=${encodeURIComponent(s.nbModules)}` : ''}`;
@@ -183,6 +242,8 @@ async function main() {
       }
       await sleep(PAUSE_MS);
     }
+    for (const p of DOCUMENTS.slice(1)) if (!(await document(p))) return 1;
+    if (!(await document(NOT_FOUND_PATH, 404))) return 1;
     // Public static assets of this revision the asset store lacks (new URLs only).
     for (let round = 0; round < 2; round += 1) {
       const stored = storedKeys();

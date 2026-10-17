@@ -87,6 +87,7 @@ async function main() {
       }
       for (const m of session.consoleMessages.filter((x) => x.level === 'error').slice(0, 8)) console.log(`INFO  console: ${m.text.slice(0, 200)}`);
     }
+    const allRequests = new Map(session.requests);
     session.requests.clear();
     await type(session, INPUT, 'robert quay');
     const listed = await waitFor(session, `[...document.querySelectorAll('a[href="/${nameB}/"]')].some((a) => a.closest('main') && a.innerText.includes(${JSON.stringify(nameB)}))`, 20000);
@@ -107,10 +108,16 @@ async function main() {
     await shot(session, 'search-02-profile-opened.png');
     check("clicking B opens B's profile in the genuine client", profile);
 
+    const boot = [...allRequests.values(), ...session.requests.values()].filter((r) => r.url.includes('/ajax/bootloader-endpoint/'));
+    const sets = boot.map((r) => `${new URL(r.url).searchParams.get('modules') || ''}|${new URL(r.url).searchParams.get('nb_modules') || ''}`);
+    const combined = sets.filter((k) => k.includes(','));
+    if (combined.length) console.log(`INFO  combined bootloader sets: ${combined.join(' ')}`);
+    const unanswered = boot.filter((r) => r.status !== 200);
+    check('every bootloader request was answered from the snapshot (200)', boot.length > 0 && unanswered.length === 0, `${boot.length} requests${unanswered.length ? `; ${unanswered.map((r) => `${r.status} ${sets[boot.indexOf(r)]}`).join(', ')}` : ''}`);
     check('strict offline: the browser sent no request to an external host', session.externalRequests.length === 0, session.externalRequests.map((x) => x.url).slice(0, 3).join(' '));
     check('no upstream request was attempted by the server (upstream guard)', upstreamGuard.attempts.length === 0);
-    const unanswered = [...new Set([...session.requests.values()].filter((r) => friendly(r) && r.status && r.status !== 200).map((r) => `${friendly(r)}:${r.status}`))];
-    if (unanswered.length) console.log(`INFO  operations not answered 200 after typing: ${unanswered.join(', ')}`);
+    const failedOps = [...new Set([...session.requests.values()].filter((r) => friendly(r) && r.status && r.status !== 200).map((r) => `${friendly(r)}:${r.status}`))];
+    if (failedOps.length) console.log(`INFO  operations not answered 200 after typing: ${failedOps.join(', ')}`);
   } catch (error) {
     console.error(error);
     if (session) await shot(session, 'search-FAILED-exception.png');

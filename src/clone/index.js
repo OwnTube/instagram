@@ -48,6 +48,7 @@ const CLONE_PATHS = [
   /^\/rupload_ig(photo|video)\//,
   /^\/accounts\/(login|logout|web_create_ajax|edit)\/ajax\/?/,
   /^\/accounts\/web_create_ajax\//,
+  // POST only (the profile form); a GET is the page, a document request.
   /^\/accounts\/edit\/?$/,
   /^\/web\/consent\//,
   /^\/data\/shared_data\/?$/,
@@ -72,8 +73,11 @@ const TELEMETRY_PATHS = [
   /^\/api\/v1\/web\/fxcal\//,
 ];
 
-function classify(pathname) {
+const DOCUMENT_ON_GET = /^\/accounts\/edit\/?$/;
+
+function classify(pathname, method = 'GET') {
   if (TELEMETRY_PATHS.some((re) => re.test(pathname))) return 'telemetry';
+  if ((method === 'GET' || method === 'HEAD') && DOCUMENT_ON_GET.test(pathname)) return 'other';
   if (CLONE_PATHS.some((re) => re.test(pathname))) return 'clone';
   return 'other';
 }
@@ -246,7 +250,7 @@ function createClone({ db, dataDir = '.data', logger = console, env = process.en
   const router = catchAsync(express.Router());
 
   router.use((req, res, next) => {
-    req.cloneKind = classify(req.path);
+    req.cloneKind = classify(req.path, req.method);
     if (req.cloneKind === 'other') return next('router');
     next();
   });

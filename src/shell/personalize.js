@@ -122,6 +122,16 @@ function personalize(html, { viewer = null, csrfToken, encryption, dropPrefetche
       node[2].cross_site_request_url = null;
       counts.crossSiteProbe = (counts.crossSiteProbe || 0) + 1;
     }
+    // The Bootloader batches the endpoint modules asked for in one tick into one
+    // request (`modules=A,B`), so which sets it asks for depends on timing,
+    // and a pinned snapshot cannot hold every combination (nor may one be
+    // made up from the parts). With the client's own maxBatchSize of 1 it asks
+    // for each module on its own, which the snapshot holds as genuine
+    // single-module answers; a module it lacks is still an explicit miss.
+    if (isDefineTuple(node) && node[0] === 'BootloaderEndpointConfig' && node[2] && node[2].maxBatchSize !== 1) {
+      node[2].maxBatchSize = 1;
+      counts.unbatchedBootloader = 1;
+    }
     if (homeSwitch && isDefineTuple(node)) docDefines.add(node[0]);
     if (identity && isDefineTuple(node)) {
       const [name, , exports] = node;

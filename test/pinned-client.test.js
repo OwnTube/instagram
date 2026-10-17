@@ -308,6 +308,25 @@ test('lifecycle: validate, verify, activate, rollback', async (t) => {
     }
   });
 
+  await t.test('re-checking the active snapshot records results without changing what is active', () => {
+    const dir = tempDir('recheck-');
+    try {
+      const store = openSnapshotStore(dir);
+      writeSnapshot(dir, { id: 'live-one' });
+      const checks = (ok) => (id, names) => names.map((c) => ({ check: c, ok: ok(c), result: 'fixture' }));
+      assert.strictEqual(quiet(() => snapshotCli.verify('live-one', { browser: true, dir, runChecks: checks((c) => c !== 'feed') })), false);
+      assert.strictEqual(store.load('live-one').status, 'active', 'a failing re-check does not silently deactivate');
+      assert.strictEqual(store.load('live-one').validation.at(-1).ok, false, 'the failure is recorded');
+      assert.strictEqual(quiet(() => snapshotCli.verify('live-one', { browser: true, dir, runChecks: checks(() => true) })), true);
+      assert.strictEqual(store.load('live-one').status, 'active');
+      assert.strictEqual(store.readState().active, 'live-one');
+      writeSnapshot(dir, { id: 'next', revision: '101' });
+      assert.throws(() => snapshotCli.verify('live-one', { browser: false, dir }), /retired/);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   await t.test('rollback refuses a previous snapshot that no longer validates', () => {
     const dir = tempDir('rollback-');
     try {

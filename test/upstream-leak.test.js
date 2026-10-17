@@ -77,11 +77,20 @@ test('no clone identity or secret reaches upstream', async (t) => {
   });
 
   await t.test('a page the snapshot does not hold is an explicit 404, never fetched', async () => {
-    for (const page of ['/explore/', '/reels/']) {
+    for (const page of ['/explore/', '/reels/', '/accounts/edit/']) {
       const res = await new Browser(server.base).visit(page);
       assert.strictEqual(res.status, 404, page);
       assert.match(res.text, /Not in the pinned client snapshot rev100-test \(revision 100\)/);
     }
+    assert.deepStrictEqual(server.upstream, []);
+  });
+
+  await t.test('the edit-profile page is a document request; the form post stays local', async () => {
+    const page = await alice.visit('/accounts/edit/');
+    assert.strictEqual(page.status, 404, 'the page is not in the snapshot');
+    assert.match(page.text, /document \/accounts\/edit\//);
+    const form = await alice.post('/accounts/edit/', { biography: 'from the form' });
+    assert.notStrictEqual(form.status, 404, 'the profile form is answered by the backend');
     assert.deepStrictEqual(server.upstream, []);
   });
 
