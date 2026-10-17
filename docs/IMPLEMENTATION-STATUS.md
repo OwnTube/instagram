@@ -340,11 +340,42 @@ Each item: status, root cause, change, tests, screenshot (in
   `comment_dict`; `fbid_v2` null, local accounts have no Facebook id). Tests:
   test/engage-operations.test.js.
   Known gap: loading /p/<code>/ directly (not through the app) serves the
-  logged-out page. There is no signed-in post route yet, because the post
-  route's entry point and props need a real post document, which is not
-  cached (Instagram throttled document fetches).
-- Search, notifications page, stories viewer, Direct thread view: NOT yet
-  verified in the browser (APIs exist and are tested at API level).
+  logged-out page. PolarisPostRoot renders a post only through `cr:2882`, a
+  component the server binds per viewer; the anonymously acquired answer
+  leaves it null, so the root would render its 404 page for an existing post.
+  A signed-in post route needs a signed-in answer, which this project does not
+  acquire (no personal sessions). Inside the app the post modal works.
+- Search: DONE. `scripts/genuine-search-check.js` 9/9 in 5 of 5 runs, after
+  the bootloader fix below (each module is asked for alone).
+- Notifications (activity feed): DONE. `scripts/genuine-activity-check.js`
+  8/8, strict offline: `/notifications/` (and `/accounts/activity/`, which the
+  client itself redirects there) is the signed-in PolarisActivityFeedRoot
+  route; it lists B's follow, like ("liked your post", with the post
+  thumbnail) and comment ("commented: nice one") from /api/v1/news/inbox/, and
+  "Suggested for you" (PolarisUserActionLoadSULV2Query) lists a local account
+  the viewer does not follow. Signed out the path is a 404 (no anonymous
+  document), not the home page. Screenshot: activity-01-direct-load.png.
+- Stories viewer: `scripts/genuine-stories-check.js` 8/9. A direct load of
+  `/stories/<user>/` is the genuine stories page; "View story" shows the
+  story image from /__media and records the view (story_views row,
+  PolarisAPIReelSeenMutation); a reload works; `/stories/<no account>/` is the
+  client's own not-found page with HTTP 404. FAILS: the tray ring opens the
+  story with a full page load instead of the client's router, because a route
+  definition (/ajax/bulk-route-definitions/) is needed and no genuine sample
+  of that response exists here; none is fabricated.
+- Direct: the inbox (`/direct/inbox/`) and a thread (`/direct/t/<key>/`) are
+  the signed-in PolarisDirectInboxRoot route. Checked in the browser with
+  `.scratch/probe-route.js`: the inbox lists the thread with its last message
+  and unread state; the thread page shows the header, the messages and "Seen".
+  NOT working yet: sending from the thread page (its composer needs
+  `ZenonGraphQLMWThriftMessageSender`, the notes tray needs
+  `IGDInboxTray.react`, the chat tab needs `IGDChatTabRootOffMsys.react`; none
+  is in the snapshot, see docs/CLIENT-PINNING.md). Sending through the chat
+  tabs on the home page works (genuine feed check).
+- Reels: `/reels/` is the signed-in PolarisClipsTabRoot route and
+  PolarisClipsHomeRootQuery answers an empty connection (local accounts
+  publish photos only). NOT working yet: the viewer container
+  `PolarisClipsViewerDefaultContainer.react` is not in the snapshot.
 
 ### P0 Login flash, sign-up back to login, homepage flash, revisions: DONE (verified offline)
 
@@ -391,9 +422,13 @@ docs/REVERSE-ENGINEERING.md section 13.
 
 ## Next tasks
 
-1. P6 in order: search, notifications, stories viewer, Direct threads; each with a
-   DB check and a screenshot.
-2. Signed-in post, stories and Direct inbox routes on a direct load: each needs
-   its route's entry point, props and bootloader answer from a real document
-   or answer, not stored yet (document fetches were throttled; offline those
-   routes answer 504 rather than a stand-in).
+1. Activate the snapshot built from acquisition 20261017T074937Z once it is
+   verified, then re-check Direct sending, the notes tray, the chat tab and
+   Reels in the browser (`.scratch/probe-route.js`, then a genuine check each).
+2. Explore: the client bundles never name its root module (only a route
+   definition does), so `/explore/` stays a 404 until a genuine route
+   definition or document for it is available.
+3. Post pages on a direct load: blocked by `cr:2882` (above).
+4. In-app router navigation to routes whose definition is not in the page
+   (stories from the tray, explore, reels from the nav) falls back to a page
+   load; no genuine /ajax/bulk-route-definitions/ sample exists.

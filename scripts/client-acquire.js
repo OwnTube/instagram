@@ -59,7 +59,7 @@ const ROOT = path.join(__dirname, '..');
 process.chdir(ROOT);
 const { createAssetStore } = require('../src/assetStore');
 const { fetchUpstream, UpstreamError } = require('../src/upstream');
-const { answerRevision, revisionOfText } = require('../src/clientSnapshot');
+const { answerRevision, revisionOfText, openSnapshotStore } = require('../src/clientSnapshot');
 const { referencesFrom, storedKeys } = require('./asset-cache');
 const { ROUTES } = require('./client-snapshot');
 
@@ -94,10 +94,26 @@ function option(name, fallback) {
   return i >= 0 ? process.argv[i + 1] : fallback;
 }
 
-/** The module sets to ask for: the routes' answers plus every set already known. */
+/**
+ * The module sets to ask for: the routes' answers plus every set already
+ * known, including every answer of the active snapshot (a new snapshot must
+ * not lose an answer the served one has).
+ */
 function moduleSets() {
   const sets = new Map();
   for (const spec of Object.values(ROUTES)) for (const a of spec.answers) sets.set(`${a}|`, { modules: a, nbModules: '' });
+  try {
+    const store = openSnapshotStore(path.join(ROOT, '.cache', 'client'));
+    const active = store.readState().active;
+    if (active) {
+      for (const key of Object.keys(store.load(active).answers)) {
+        const [modules, nbModules = ''] = key.split('|');
+        sets.set(`${modules}|${nbModules}`, { modules, nbModules });
+      }
+    }
+  } catch {
+    /* no snapshot store yet */
+  }
   if (fs.existsSync(BOOT_DIR)) {
     for (const f of fs.readdirSync(BOOT_DIR).filter((x) => x.endsWith('.json'))) {
       try {

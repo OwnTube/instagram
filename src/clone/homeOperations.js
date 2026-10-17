@@ -49,6 +49,8 @@
  *    (no stored preference: not disabled), useFeatureLimitsOffMsysQuery (no
  *    messaging limits), PolarisDirectInboxQPInterstitialQuery (no
  *    promotions) and IGDInboxTrayQuery (notes: none can be created here);
+ *  - PolarisClipsHomeRootQuery (Reels tab): `xdt_api__v1__clips__home__
+ *    connection_v2`; empty, as local accounts publish photos only;
  *  - one thread (`get_slide_thread_nullable`, by `thread_fbid`): the thread
  *    page's IGDInboxHeaderOffMsysQuery and IGDThreadDetailQuery, and the chat
  *    tab's IGDChatTabRootOffMsysQuery; text messages are SlideMessageText
@@ -459,6 +461,13 @@ function createHomeOperations(db) {
       const id = String((vars.data && vars.data.message_id) ?? '');
       const found = c && /^\d{1,30}$/.test(id) ? db.prepare('SELECT 1 FROM messages WHERE conversation_id = ? AND pk = ? AND deleted_at IS NULL').get(c.id, id) : null;
       return { xig_direct_mark_read_id_validation: Boolean(found) };
+    },
+
+    // The Reels tab's clips. Reels are videos and local accounts can only
+    // publish photos, so no clip exists here: the connection is empty.
+    PolarisClipsHomeRootQuery(vars, ctx) {
+      viewerOf(ctx);
+      return { xdt_api__v1__clips__home__connection_v2: { edges: [], gating: null, page_info: { end_cursor: null, has_next_page: false, has_previous_page: false, start_cursor: null } } };
     },
 
     // Activity status is on for every local account (the accounts API reports

@@ -114,6 +114,13 @@ test('signed-in home operations', async (t) => {
     assert.strictEqual(me.username, 'ann_home');
   });
 
+  await t.test('the Reels tab has no clips (local accounts publish photos only)', async () => {
+    const res = await gql(ann, 'PolarisClipsHomeRootQuery', { data: {}, first: 10 });
+    assert.strictEqual(res.status, 200);
+    assert.deepStrictEqual(res.body.data.xdt_api__v1__clips__home__connection_v2.edges, []);
+    assert.strictEqual(res.body.data.xdt_api__v1__clips__home__connection_v2.page_info.has_next_page, false);
+  });
+
   await t.test('presence and viewer settings report the local defaults', async () => {
     assert.strictEqual((await gql(ann, 'IGPresenceUnifiedSetupQuery')).body.data.xdt_api__v1__get__presence__disabled.disabled, false);
     const settings = (await gql(ann, 'PolarisViewerSettingsQuery')).body.data.viewer.user;
