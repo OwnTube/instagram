@@ -87,3 +87,49 @@ test('signed-in route: default, no login markup, pinned answers only', async (t)
     assert.deepStrictEqual(s.upstream, []);
   });
 });
+
+test('signed-in stories and not-found routes, from pinned answers only', async (t) => {
+  const answers = {};
+  for (const m of ['PolarisFeedRoot.react', 'PolarisStoriesMediaRoot.entrypoint', 'PolarisStoriesMediaRoot.react', 'PolarisErrorRoot.entrypoint', 'PolarisErrorRoot.react']) answers[`${m}|`] = answerAt(100);
+  const s = await startCloneServer({}, { snapshot: { revision: '100', documents: { '/': documentAt(100), '/accounts/emailsignup/': documentAt(100) }, answers } });
+  t.after(() => s.close());
+  const viewer = new Browser(s.base);
+  const me = await viewer.signup(s, { username: 'stories_viewer' });
+  const owner = await new Browser(s.base).signup(s, { username: 'story_owner', fullName: 'Story Owner' });
+  const get = (b, p) => b.get(p, { headers: { accept: 'text/html', 'sec-fetch-site': 'none' } });
+  const initialize = (html) => {
+    const block = [...html.matchAll(/<script type="application\/json"[^>]*data-sjs>(.*?)<\/script>/g)].map((m) => JSON.parse(m[1])).flatMap((b) => b.require || []).find((r) => r[0] === 'CometPlatformRootClient' && r[1] === 'initialize');
+    return block[3][0].initialRouteInfo.route;
+  };
+
+  await t.test("an existing account's stories: the stories route with its owner", async () => {
+    const res = await get(viewer, '/stories/story_owner/');
+    assert.strictEqual(res.status, 200);
+    const route = initialize(res.text);
+    assert.strictEqual(route.actorID, String(me.pk));
+    assert.strictEqual(route.tracePolicy, 'polaris.StoriesPage');
+    assert.deepStrictEqual(route.params, { username: 'story_owner', initial_media_id: null });
+    assert.strictEqual(route.rootView.props.user_id, String(owner.pk));
+    assert.strictEqual(route.rootView.props.user.username, 'story_owner');
+    assert.ok(!/Log into Instagram/.test(res.text), 'no login markup');
+  });
+
+  await t.test('a profile or stories URL naming no account: the client not-found route, HTTP 404', async () => {
+    for (const p of ['/no_such_account_x/', '/stories/no_such_account_x/']) {
+      const res = await get(viewer, p);
+      assert.strictEqual(res.status, 404, p);
+      const route = initialize(res.text);
+      assert.deepStrictEqual(route.rootView.entryPoint, { __dr: 'PolarisErrorRoot.entrypoint' }, p);
+      assert.deepStrictEqual(route.rootView.props, {}, 'no server props are invented');
+      assert.ok(!/Log into Instagram/.test(res.text), p);
+    }
+  });
+
+  await t.test('anonymous visitors keep the anonymous page', async () => {
+    const res = await get(new Browser(s.base), '/no_such_account_x/');
+    assert.strictEqual(res.status, 200);
+    assert.ok(res.text.includes('Log into Instagram'));
+  });
+
+  await t.test('no upstream attempt', () => assert.deepStrictEqual(s.upstream, []));
+});

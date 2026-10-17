@@ -19,8 +19,8 @@ const config = require('./config');
 const backendApp = require('./backend');
 const backendConfig = require('./backend/config');
 const { createClone, classify } = require('./clone');
-const { personalize } = require('./shell/personalize');
-const { parseAnswer, homeRoute, profileRoute } = require('./shell/signedInRoute');
+const { personalize, viewerObject } = require('./shell/personalize');
+const { parseAnswer, homeRoute, profileRoute, storiesRoute, errorRoute } = require('./shell/signedInRoute');
 const { routeKind } = require('./shell/templates');
 const { createPatcher } = require('./shell/bundlePatches');
 const { openPinnedClient } = require('./pinnedClient');
@@ -330,15 +330,22 @@ function canonicalDocPath(req) {
 
 /**
  * The signed-in route for a document request (src/shell/signedInRoute.js):
- * the home feed, or the posts tab of an existing local account's profile.
- * Anything else keeps the page's own route.
+ * the home feed; an existing local account's profile (posts tab) or stories;
+ * the client's own not-found route (HTTP 404) for a profile or stories URL
+ * naming no local account. Anything else keeps the page's own route.
+ * (Posts: PolarisPostRoot renders its content only through `cr:2882`, which
+ * the anonymously acquired answer leaves unbound, so a post page would show
+ * the 404 page for an existing post; it is not switched. See
+ * docs/CLIENT-PINNING.md.)
  */
 function signedInRouteFor(req) {
   const kind = routeKind(req.path);
   if (kind === 'home') return homeRoute();
-  if (kind === 'profile' && cloneInstance) {
-    const user = cloneInstance.userByUsername(req.path.split('/')[1]);
-    return user ? profileRoute(user) : null;
+  if ((kind === 'profile' || kind === 'stories') && cloneInstance) {
+    const segments = req.path.split('/').filter(Boolean);
+    const user = cloneInstance.userByUsername(kind === 'stories' ? segments[1] : segments[0]);
+    if (!user) return errorRoute(req.path);
+    return kind === 'stories' ? storiesRoute(user, viewerObject(user)) : profileRoute(user);
   }
   return null;
 }
@@ -357,6 +364,7 @@ function sendHtml(req, res, status, html) {
   const signedInHome = Boolean(withAnswers);
   const feedRoot = withAnswers ? withAnswers.answers : null;
   const out = personalize(html, { ...ctx, identity: false, signedInHome, feedRoot, route, routeUrl: req.path, toLocal: mapUrl, dropPrefetches: forceDropPrefetches, stats });
+  if (withAnswers && route.status) status = route.status;
   if (cloneInstance) {
     const mentionsKey = /public_?key/i.test(html);
     cloneInstance.recordDocument({ path: req.path, status, fromTemplate: false, signedIn: Boolean(ctx.viewer), mentionsKey, ...stats });

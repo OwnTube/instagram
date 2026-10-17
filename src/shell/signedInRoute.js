@@ -138,6 +138,56 @@ function profileRoute(user) {
 }
 
 /**
+ * A local account's stories (`/stories/{username}/{?initial_media_id}/`,
+ * XPolarisStoriesMediaControllerRouteBuilder). PolarisStoriesMediaRoot.entrypoint
+ * preloads nothing (`queries: {}`); PolarisStoriesMediaRoot.react reads
+ * routeParams `username`, `initial_media_id` and routeProps `user` (the
+ * owner: initStoryPage stores it and loads the reel by its `id`),
+ * `is_media_inactive`, `show_qr_modal`; the stories data sync reads
+ * `rootView.props.user_id` under trace policy `polaris.StoriesPage`. The page
+ * id is the stories page's own name (`StoriesPage`, as its external-link
+ * logging names it). `owner` is the user object in the shape the page
+ * carries for the viewer (src/shell/personalize.js viewerObject).
+ */
+function storiesRoute(user, owner) {
+  const pk = String(user.pk);
+  return {
+    entryPoint: 'PolarisStoriesMediaRoot',
+    root: 'PolarisStoriesMediaRoot',
+    answers: ['PolarisStoriesMediaRoot.entrypoint', 'PolarisStoriesMediaRoot.react'],
+    props: { user_id: pk, user: owner, is_media_inactive: false, show_qr_modal: false },
+    params: { username: user.username, initial_media_id: null },
+    routePath: '/stories/{username}/{?initial_media_id}/',
+    tracePolicy: 'polaris.StoriesPage',
+    pageID: 'StoriesPage',
+  };
+}
+
+/**
+ * The client's own "page not available" route (PolarisErrorRoot: entry point
+ * with no preloads, root rendering PolarisHttp404Page), for a URL that names
+ * nothing here, e.g. a profile of no local account. Its route props
+ * (`failure_reason`, `page_type`, `restricted_age`,
+ * `show_lox_redesigned_404_page`) are server-chosen and all optional in the
+ * client; Instagram's own not-found document has not been acquired, so none is
+ * set. Page id: the error page's own identifier (`httpErrorPage`); no trace
+ * policy for it exists in the client, so none is named. Served with HTTP 404.
+ */
+function errorRoute(url) {
+  return {
+    entryPoint: 'PolarisErrorRoot',
+    root: 'PolarisErrorRoot',
+    answers: ['PolarisErrorRoot.entrypoint', 'PolarisErrorRoot.react'],
+    props: {},
+    params: {},
+    routePath: url,
+    tracePolicy: null,
+    pageID: 'httpErrorPage',
+    status: 404,
+  };
+}
+
+/**
  * A route view in the shape the page server sends (the anonymous documents'
  * own routes): its entry point, the entry point's root component, the props.
  */
@@ -318,4 +368,4 @@ function insertFeedRoot(html, answers, docDefines, toLocal, initTuple, root = FE
   return { html: html.slice(0, at) + parts.join('') + html.slice(at), inserted: tags.length, missing };
 }
 
-module.exports = { emptySSRMount, isLoginHomeInitialize, toSignedInHome, toSignedInRoute, homeRoute, profileRoute, isSSRInit, disableAnonymousSSR, insertFeedRoot, parseAnswer, FEED_ROOT, LOGGED_OUT_ONLY, NO_LOCAL_SERVICE };
+module.exports = { emptySSRMount, isLoginHomeInitialize, toSignedInHome, toSignedInRoute, homeRoute, profileRoute, storiesRoute, errorRoute, isSSRInit, disableAnonymousSSR, insertFeedRoot, parseAnswer, FEED_ROOT, LOGGED_OUT_ONLY, NO_LOCAL_SERVICE };
