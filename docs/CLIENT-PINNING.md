@@ -132,6 +132,22 @@ create 9/10, profile 9/10 (scope: PARTIAL).
   re-run passed 10/10, so the failing set was not reproduced (the check now
   prints the full `modules|nb_modules@rev` key).
 
+Composing that set from the two single-module answers was tried and
+abandoned: the real parts disagree in per-response fields (`hsdp.qexData.*.l`
+exposure ids, `hblp.compMap.*.rds.r` tier lists, `hblp.indexUpgrades`
+index lists), so a merged answer would be one the server never produced.
+The set stays an explicit 404 until it is acquired as one answer. The same
+set blocks a new account's empty home feed (it stays on its loading
+skeleton), and with it the genuine search box there
+(`scripts/genuine-search-check.js`: 4/8; the local search operations in
+`src/clone/searchOperations.js` pass their API tests).
+
+Activation and rollback on the real store: activating the older verified
+snapshot `rev1050627067-20261017T030220Z` served it (0 upstream attempts);
+`client:rollback` returned to `rev1050669561-20261017T030543Z` (0 upstream
+attempts); activating the unverified candidate `rev1050669561-20261017T030508Z`
+was refused.
+
 The second acquisition pass (20261017T031253Z, for the combined set and
 the roots below) got HTTP 429 at its third document and stopped; nothing
 was built from it and the active snapshot is unchanged. It is not retried
