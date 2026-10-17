@@ -300,6 +300,8 @@ function thread(db, conv, viewer, { members, items, hasOlder, oldestCursor }) {
   return {
     thread_id: conv.pk,
     thread_v2_id: conv.pk,
+    // The Direct inbox's thread key (IGD threads are keyed by the same pk here).
+    messaging_thread_key: String(conv.pk),
     users: others.map((m) => user(db, m, viewer.id)),
     viewer_id: viewer.pk,
     inviter: user(db, members[0], viewer.id, { withFriendship: false }),

@@ -92,7 +92,8 @@ function register(router, ctx) {
 
   router.post('/api/v1/direct_v2/create_group_thread/', requireViewer, (req, res) => {
     const ids = recipientIds(req.params_.recipient_users, req.viewer);
-    const created = messages.createConversation(db, req.viewer.id, ids);
+    // One recipient (the profile's Message button): the existing conversation.
+    const created = ids.length === 1 ? messages.findOrCreateDirect(db, req.viewer.id, ids[0]) : messages.createConversation(db, req.viewer.id, ids);
     const conv = db.prepare('SELECT * FROM conversations WHERE id = ?').get(created.id);
     return igOk(res, shapedThread(conv, req.viewer));
   });
