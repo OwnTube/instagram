@@ -11,7 +11,9 @@ const { spawn } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const CHROMIUM_BIN = process.env.CHROMIUM_BIN || 'chromium';
+// CHROMIUM_BIN, else the Playwright-installed Chromium when present, else `chromium` on PATH.
+const PLAYWRIGHT_CHROMIUM = path.join(process.env.PLAYWRIGHT_BROWSERS_PATH || '/opt/pw-browsers', 'chromium');
+const CHROMIUM_BIN = process.env.CHROMIUM_BIN || (fs.existsSync(PLAYWRIGHT_CHROMIUM) ? PLAYWRIGHT_CHROMIUM : 'chromium');
 
 function launchChromium(profileDir) {
   fs.rmSync(profileDir, { recursive: true, force: true });

@@ -48,7 +48,8 @@
  *    (`viewer.xdt_user`), PolarisAutomaticPreviewsDisabledContextProviderQuery
  *    (no stored preference: not disabled), useFeatureLimitsOffMsysQuery (no
  *    messaging limits), PolarisDirectInboxQPInterstitialQuery (no
- *    promotions) and IGDInboxTrayQuery (notes: none can be created here);
+ *    promotions) and IGDInboxTrayQuery (the notes the viewer may see, see
+ *    inboxTrayItem);
  *  - PolarisClipsHomeRootQuery (Reels tab): `xdt_api__v1__clips__home__
  *    connection_v2`, the reels the viewer may see, newest first;
  *  - one thread (`get_slide_thread_nullable`, by `thread_fbid`): the thread
@@ -72,6 +73,7 @@ const crypto = require('node:crypto');
 const users = require('../backend/services/users');
 const posts = require('../backend/services/posts');
 const { stories, messages } = require('../backend/services/social');
+const { notes } = require('../backend/services/notes');
 const present = require('./present');
 const { unauthorized, badRequest } = require('../backend/lib/errors');
 
@@ -81,6 +83,31 @@ const EMPTY_PAGE = { end_cursor: null, has_next_page: false };
 function viewerOf(ctx) {
   if (!ctx.viewer) throw unauthorized();
   return ctx.viewer;
+}
+
+const NOTE_STYLE_TEXT = 0; // PolarisNotesTypes NoteStyle.TEXT
+
+/** A note as an inbox tray item (IGDInboxTrayQuery / the create mutation). */
+function inboxTrayItem(db, note) {
+  const author = present.user(db, present.userRow(db, note.authorId), null, { withFriendship: false });
+  return {
+    inbox_tray_item_id: String(note.pk),
+    inbox_tray_item_type: 'note',
+    pog_info: {
+      pog_style: 'user',
+      pog_users: [{ id: author.id, profile_pic_url: author.profile_pic_url, profile_pic_url_hd: author.profile_pic_url, username: author.username, full_name: author.full_name, interop_messaging_user_fbid: null }],
+    },
+    note_dict: {
+      note_style: NOTE_STYLE_TEXT,
+      note_response_info: null,
+      custom_theme: null,
+      text: note.text,
+      is_emoji_only: /^[\p{Extended_Pictographic}\p{Emoji_Component}\s]+$/u.test(note.text) && /\p{Extended_Pictographic}/u.test(note.text),
+      audience: note.audience,
+      author_id: author.id,
+      created_at: Math.floor(Date.parse(note.createdAt) / 1000),
+    },
+  };
 }
 
 function ms(iso) {
@@ -488,9 +515,33 @@ function createHomeOperations(db) {
       return { xfb_viewer: { eligible_promotions: { nodes: [] } } };
     },
 
+    // Notes in the inbox tray. IGDInboxTray.react shows items with
+    // inbox_tray_item_type `note` and pog_info.pog_style `user`, the author
+    // being pog_users[0] (the viewer's own note is found by that id).
     IGDInboxTrayQuery(vars, ctx) {
-      viewerOf(ctx);
-      return { response: { inbox_tray_items: [] } };
+      const viewer = viewerOf(ctx);
+      return { response: { inbox_tray_items: notes.visibleTo(db, viewer.id).map((n) => inboxTrayItem(db, n)) } };
+    },
+
+    // usePolarisCreateInboxTrayItemSubmit: input {inbox_tray_item_type: 'note',
+    // audience (PolarisNotesTypes MUTUAL_FOLLOWS 0 / BESTIES 1),
+    // additional_params.note_create_params {text, note_style}}. Music notes
+    // (note_style MUSIC) are not supported: there is no music catalogue here.
+    usePolarisCreateInboxTrayItemSubmitMutation(vars, ctx) {
+      const viewer = viewerOf(ctx);
+      const input = vars.input || {};
+      if (input.inbox_tray_item_type !== 'note') throw badRequest('Only notes can be shared');
+      const params = (input.additional_params && input.additional_params.note_create_params) || {};
+      if (params.note_style != null && Number(params.note_style) !== NOTE_STYLE_TEXT) throw badRequest('Only text notes are supported');
+      const note = notes.create(db, viewer.id, { text: params.text, audience: input.audience ?? 0 });
+      return { xdt_create_inbox_tray_item: { inbox_tray_item: inboxTrayItem(db, note) } };
+    },
+
+    // usePolarisDeleteInboxTrayItemSubmit: {inbox_tray_item_id} (the note's pk).
+    usePolarisDeleteInboxTrayItemSubmitMutation(vars, ctx) {
+      const viewer = viewerOf(ctx);
+      notes.remove(db, vars.inbox_tray_item_id, viewer.id);
+      return { xdt_delete_inbox_tray_item: { success: true } };
     },
 
     // One thread of the viewer's (header, thread view, chat tab), by
