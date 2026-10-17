@@ -151,7 +151,9 @@ blob, activating it only when no valid snapshot is active (or with
 loopback): setup, integrity, active == packaged, the server serving the
 packaged revision, misses as explicit 404s with 0 upstream attempts, repeated
 setup a no-op, an existing valid snapshot kept, altered bundles refused; the
-login, signup and feed browser checks passed from that clone. The bodies
+genuine browser checks run from that clone, in the same namespace, passed:
+login 10/10, signup 13/13, feed 18/18, engage 9/9, create 10/10, profile
+10/10, each with 0 upstream attempts. The bodies
 (`client/blobs/`) are not committed pending the publishing decision.
 
 ### Previous snapshot rev1050701999-20261017T075357Z
