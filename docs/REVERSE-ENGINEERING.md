@@ -233,6 +233,26 @@ feed tree: #418 ("server rendered HTML didn't match"), then a client-render
 fallback. Fix: the signed-in route's document carries `enabled: false`
 (`disableAnonymousSSR` in `src/shell/signedInRoute.js`).
 
+Narrow windows (found 2026-10-17; the login check failed 8/9 intermittently
+at every recent commit). The anonymous `/` document's server render is the
+login homepage's wide layout. `CAAFetaLoginHomepageLayout.react` chooses its
+layout with `useMatchViewport('max', 'width', 1024)`, whose first client
+render reads `window.matchMedia` directly (on the server it reads
+`CometSSRViewportHints`). In a window at or below 1024px the client therefore
+renders the narrow layout (logo, divider, form; no "See everyday moments"
+panel) against the wide markup: React #418, then a client render of the
+boundary; whether React reports it as an uncaught error depends on Suspense
+timing, hence the intermittency. Recorded by diffing the mount's mutations
+(`.scratch/home-418.js`). Instagram's server renders for the window the
+client reports in the `wd` cookie (`<width>x<height>`, written by the
+client's viewport-dimensions module on load and resize), but the client
+writes every cookie with `Domain=.` + `CookieDomain.domain` (instagram.com),
+which a browser refuses on another origin. The runtime now writes the two
+window-hint cookies (`wd`, `dpr`) for this origin (other cookie writes are
+unchanged), and `src/server.js` serves a reported width at or below 1024px
+without the stored render. A first visit (no report yet) still gets the
+stored render, as Instagram's own server would have to guess.
+
 REA check (REA 6.5.0, `rea analyze-javascript-application` over the three
 modules extracted from the stored bundle at rev 1050627067; evidence id
 `ev_6fc1ad03b16d9c2f62c5c86acee5561e05e2880bf8228a748f9aa18223a2eb98`): the
