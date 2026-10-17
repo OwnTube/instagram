@@ -23,6 +23,15 @@ wrote to) has been removed. No hidden switch for it remains.
 | No active snapshot, or it fails validation (wrong revision anywhere, missing blob, size mismatch, required route unsupported) | 503 `Pinned client unavailable: <reason>` for every client request; the backend still runs |
 | Any other non-GET request no local handler answers | 404; nothing is relayed |
 
+Bootloader requests are one module each: the served page sets the client's
+own `BootloaderEndpointConfig.maxBatchSize` to 1 (src/shell/personalize.js).
+Left at the page's default (`-1`, unlimited), the client batches every
+endpoint module asked for in one tick into one request (`modules=A,B`), so
+which sets it asks for depends on timing; the snapshot holds genuine
+single-module answers, and a set it does not hold may not be made up from
+them (see "Combined sets" below). A module the snapshot lacks is still an
+explicit, counted 404.
+
 Signed-in routes use only the snapshot's own answers for its revision. A
 route whose answers are missing is served as the page's own (anonymous) route
 and counted in `/__loader/health` -> `client.missingRequests` (kind `route`).
@@ -120,9 +129,21 @@ Routes: home and profile supported (the previously missing
 and `PolarisFollowingActionsModal.next.react` are all present at this
 revision). Bundle patches: all 4 apply.
 
-Verification (`client:verify --browser`, real snapshot, upstream guard on):
-login 9/9, signup 13/13, feed 18/18, engage 9/9 (core: pass, so `verified`);
-create 9/10, profile 9/10 (scope: PARTIAL).
+Verification (`client:verify --browser`, real snapshot, upstream guard on),
+first run (batched requests): login 9/9, signup 13/13, feed 18/18, engage 9/9
+(core: pass, so `verified`); create 9/10, profile 9/10 (scope: PARTIAL).
+
+Re-check of the same active snapshot after the one-module-per-request change
+(`client:verify rev1050669561-20261017T030543Z --browser`, which records the
+results without changing what is active): login 9/9, signup 13/13, feed
+18/18, engage 9/9, create 10/10, profile 10/10 (scope: complete). Repeated
+runs: create 3/3 and profile 3/3 more runs at 10/10; the search check 5/5
+runs at 9/9 (it now also requires every bootloader request to be answered
+200; 6 requests per run, none combined). Before the change the search check
+passed 1 of 3 runs (4/8 in the others, each with the 404 below).
+
+### Combined sets
+Before the change:
 - create: the client asked `/ajax/bootloader-endpoint/?modules=
   PolarisImmersiveFeedPostModal.react,PolarisFeedEmptySULWrapper.react`
   (one combined set); the snapshot holds each module's own answer but not
@@ -150,8 +171,11 @@ was refused.
 
 The second acquisition pass (20261017T031253Z, for the combined set and
 the roots below) got HTTP 429 at its third document and stopped; nothing
-was built from it and the active snapshot is unchanged. It is not retried
-during the cooldown.
+was built from it and the active snapshot is unchanged. That 429's
+Retry-After was not recorded, so `client:acquire` treats it as cooling down
+for the 60-minute cap (until 04:13:00Z) and refuses to start before then;
+`node scripts/client-acquire.js --check-cooldown` reports it. Passes now
+record Retry-After with every 429.
 
 Restart (`scripts/pinned-restart-check.js`, server as a child process with
 the guard preloaded): 7/7 - cold and warm signed-in loads, restart keeps
@@ -175,3 +199,13 @@ and the chat tabs through its own router (genuine checks). In-app navigation
 to explore, reels, Direct inbox and notifications asks for a route
 definition, which is answered "unavailable", so the client loads the URL as
 a page: a 404 today.
+
+## References
+
+- Meowcord, the client-pinning comparison: https://github.com/meowcorded/meowcord
+- REA, used for reverse engineering of the client bundles: https://github.com/morluto/rea, docs https://morluto.github.io/rea/
+- Browser automation. The checks drive Chromium over CDP directly (`scripts/lib/browser.js`):
+  - Chrome DevTools Protocol: https://github.com/ChromeDevTools/devtools-protocol, https://chromedevtools.github.io/devtools-protocol/
+  - Playwright, whose Chromium build is the one used: https://github.com/microsoft/playwright, https://playwright.dev/docs/intro, trace viewer https://playwright.dev/docs/trace-viewer
+  - Puppeteer: https://github.com/puppeteer/puppeteer, https://pptr.dev/
+- Relay, the client's GraphQL runtime. Its operations and preloadable queries are what `src/clone/graphql.js` answers: https://github.com/facebook/relay, https://relay.dev/docs/
