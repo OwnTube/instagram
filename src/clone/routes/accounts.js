@@ -11,6 +11,7 @@ const users = require('../../backend/services/users');
 const sessions = require('../../backend/services/sessions');
 const { settings } = require('../../backend/services/social');
 const v = require('../../backend/lib/validate');
+const { RESERVED_FIRST_SEGMENTS } = require('../../shell/templates');
 const { AppError, badRequest } = require('../../backend/lib/errors');
 const { newId, nowIso, addMs, hashToken, randomToken, timingSafeEqual } = require('../../backend/lib/ids');
 const { PasswordFormatError } = require('../passwordEncryption');
@@ -107,7 +108,9 @@ function register(router, ctx) {
     const add = (field, message, code) => {
       if (message) errors[field] = [{ message, code }];
     };
-    if (fieldErrors(() => v.username(String(p.username ?? '')))) {
+    if (RESERVED_FIRST_SEGMENTS.has(String(p.username ?? '').toLowerCase())) {
+      add('username', "This username isn't available. Please try another.", 'username_is_taken');
+    } else if (fieldErrors(() => v.username(String(p.username ?? '')))) {
       add('username', 'Usernames can only use letters, numbers, underscores and periods, and must be 3 to 30 characters.', 'username_invalid');
     }
     if (!errors.username && users.getByUsername(db, p.username)) add('username', `A user with that username already exists.`, 'username_is_taken');

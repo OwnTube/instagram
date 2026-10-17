@@ -68,7 +68,7 @@ async function main() {
 
     const routes = [
       '/', `/${b.username}/`, `/p/${code}/`, `/stories/${b.username}/`, '/no..such..account/', '/no_such_user_here/',
-      '/explore/', '/reels/', '/direct/inbox/', '/accounts/activity/', '/accounts/login/', '/accounts/password/reset/',
+      '/explore/', '/reels/', '/direct/inbox/', '/notifications/', '/accounts/activity/', '/accounts/login/', '/accounts/password/reset/',
       '/accounts/emailsignup/', '/accounts/edit/', '/create/select/',
     ];
     session = await openSession(browserWsUrl);

@@ -290,8 +290,16 @@ function activity(db, n) {
     timestamp: ts,
     tuuid: n.id,
   };
-  if (n.subjectType === 'post' && n.subjectId) {
-    const p = db.prepare('SELECT pk, media_url, code FROM posts WHERE id = ?').get(n.subjectId);
+  // A comment notification keeps the comment's text as its body; the story
+  // reads "<name> commented: <text>" and shows the commented post.
+  let postId = n.subjectType === 'post' ? n.subjectId : null;
+  if (n.kind === 'comment') {
+    args.text = `${n.actorUsername || 'Someone'} commented: ${n.body || ''}`.trim();
+    const c = n.subjectType === 'comment' && n.subjectId ? db.prepare('SELECT post_id FROM comments WHERE id = ?').get(n.subjectId) : null;
+    postId = c ? c.post_id : null;
+  }
+  if (postId) {
+    const p = db.prepare('SELECT pk, media_url, code FROM posts WHERE id = ?').get(postId);
     if (p) args.media = [{ id: p.pk, image: p.media_url, shortcode: p.code }];
   }
   return { story_type: ACTIVITY_TYPE[n.kind] ?? 0, pk: n.id, type: 1, args, read: n.read };

@@ -47,6 +47,10 @@ test('signed-in home operations', async (t) => {
     assert.strictEqual(items[0].user.friendship_status.following, false);
     const refetch = await gql(ann, 'PolarisSuggestedUserListRefetchQuery', { data: {}, showMutualFollowersContext: true });
     assert.deepStrictEqual(refetch.body.data.ayml.groups[0].items.map((i) => i.user.username), ['cat_home'], 'the empty feed refetch answers the same list');
+    const activity = await gql(ann, 'PolarisUserActionLoadSULV2Query', { data: {} });
+    assert.strictEqual(activity.status, 200);
+    assert.strictEqual(activity.body.data.ayml.more_available, false);
+    assert.deepStrictEqual(activity.body.data.ayml.groups[0].items.map((i) => i.user.username), ['cat_home'], 'the activity feed suggests the same list');
   });
 
   await t.test('the notifications badge counts unread notifications by kind', async () => {

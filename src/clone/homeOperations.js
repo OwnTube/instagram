@@ -36,6 +36,9 @@
  *    /ads/igwww_ads_graphql/;
  *  - IGDChatTabsContentOffMsysQuery (the opened chat tab): the same mailbox,
  *    each thread with `slide_messages` (newest first, SlideMessageText);
+ *  - PolarisUserActionLoadSULV2Query (the activity feed's "Suggested for
+ *    you"): `ayml{more_available, groups[].items[]{user{..friendship_status},
+ *    uuid, social_context}}`, the same suggestions;
  *  - PolarisSuggestedUserListRefetchQuery: the suggestions list's refetch
  *    (the empty feed), same response tree as PolarisSuggestedUserListQuery;
  *  - IGPresenceUnifiedSetupQuery `xdt_api__v1__get__presence__disabled
@@ -279,6 +282,12 @@ function createHomeOperations(db) {
       }
       const total = rows.reduce((n, r) => n + r.n, 0);
       return { xdt_notification_badge: { badge_count: { total_count: total, activity_badge_counts: counts } } };
+    },
+
+    // The activity feed's suggestions: the same list, all of it in one page.
+    PolarisUserActionLoadSULV2Query(vars, ctx) {
+      const { ayml } = operations.PolarisSuggestedUserListQuery(vars, ctx);
+      return { ayml: { ...ayml, more_available: false } };
     },
 
     // The empty feed's suggestions refetch the same fragment (identical response tree).

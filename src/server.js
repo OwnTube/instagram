@@ -20,7 +20,7 @@ const backendApp = require('./backend');
 const backendConfig = require('./backend/config');
 const { createClone, classify } = require('./clone');
 const { personalize, viewerObject } = require('./shell/personalize');
-const { parseAnswer, homeRoute, profileRoute, storiesRoute, errorRoute } = require('./shell/signedInRoute');
+const { parseAnswer, homeRoute, profileRoute, storiesRoute, activityRoute, errorRoute } = require('./shell/signedInRoute');
 const { routeKind } = require('./shell/templates');
 const { createPatcher } = require('./shell/bundlePatches');
 const { openPinnedClient } = require('./pinnedClient');
@@ -323,6 +323,9 @@ function markPrivate(res) {
 function canonicalDocPath(req) {
   const kind = routeKind(req.path);
   if (kind === 'profile' || kind === 'post' || kind === 'stories') return '/';
+  // The activity feed is a signed-in route only; with no viewer the path keeps
+  // its own (unacquired) document rather than the anonymous home page.
+  if (kind === 'activity' && cloneInstance && cloneInstance.viewerFor(req)) return '/';
   if (/^\/direct\/(t|thread)\//.test(req.path)) return '/direct/inbox/';
   if (/^\/(reel|reels|tv)\/[A-Za-z0-9_-]+/.test(req.path)) return '/';
   return req.originalUrl;
@@ -341,6 +344,7 @@ function canonicalDocPath(req) {
 function signedInRouteFor(req) {
   const kind = routeKind(req.path);
   if (kind === 'home') return homeRoute();
+  if (kind === 'activity') return activityRoute();
   if ((kind === 'profile' || kind === 'stories') && cloneInstance) {
     const segments = req.path.split('/').filter(Boolean);
     const user = cloneInstance.userByUsername(kind === 'stories' ? segments[1] : segments[0]);

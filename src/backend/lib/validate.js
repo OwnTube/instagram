@@ -11,6 +11,7 @@
 
 const backend = require('../config');
 const { badRequest } = require('./errors');
+const { RESERVED_FIRST_SEGMENTS } = require('../../shell/templates');
 
 const USERNAME_RE = /^[a-zA-Z0-9._]{3,30}$/;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -76,7 +77,10 @@ function oneOf(value, field, allowed, { required = true, fallback } = {}) {
 }
 
 function username(value, field = 'username') {
-  return str(value, field, { min: 3, max: 30, pattern: USERNAME_RE });
+  const v = str(value, field, { min: 3, max: 30, pattern: USERNAME_RE });
+  // /<username>/ is the profile URL, so a name that is a route is not usable.
+  if (RESERVED_FIRST_SEGMENTS.has(v.toLowerCase())) fail(`"${field}" is not available`, { field });
+  return v;
 }
 
 function email(value, field = 'email') {

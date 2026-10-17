@@ -90,7 +90,7 @@ test('signed-in route: default, no login markup, pinned answers only', async (t)
 
 test('signed-in stories and not-found routes, from pinned answers only', async (t) => {
   const answers = {};
-  for (const m of ['PolarisFeedRoot.react', 'PolarisStoriesMediaRoot.entrypoint', 'PolarisStoriesMediaRoot.react', 'PolarisErrorRoot.entrypoint', 'PolarisErrorRoot.react']) answers[`${m}|`] = answerAt(100);
+  for (const m of ['PolarisFeedRoot.react', 'PolarisStoriesMediaRoot.entrypoint', 'PolarisStoriesMediaRoot.react', 'PolarisErrorRoot.entrypoint', 'PolarisErrorRoot.react', 'PolarisActivityFeedRoot.entrypoint', 'PolarisActivityFeedRoot.react']) answers[`${m}|`] = answerAt(100);
   const s = await startCloneServer({}, { snapshot: { revision: '100', documents: { '/': documentAt(100), '/accounts/emailsignup/': documentAt(100) }, answers } });
   t.after(() => s.close());
   const viewer = new Browser(s.base);
@@ -123,6 +123,27 @@ test('signed-in stories and not-found routes, from pinned answers only', async (
       assert.deepStrictEqual(route.rootView.props, {}, 'no server props are invented');
       assert.ok(!/Log into Instagram/.test(res.text), p);
     }
+  });
+
+  await t.test('/notifications/ and /accounts/activity/: the activity feed route, not a profile', async () => {
+    for (const p of ['/notifications/', '/accounts/activity/']) {
+      const res = await get(viewer, p);
+      assert.strictEqual(res.status, 200, p);
+      const route = initialize(res.text);
+      assert.deepStrictEqual(route.rootView.entryPoint, { __dr: 'PolarisActivityFeedRoot.entrypoint' }, p);
+      assert.deepStrictEqual(route.params, { followRequests: false }, p);
+      assert.deepStrictEqual(route.polarisRouteConfig, { pageID: 'ActivityFeedPage' }, p);
+      assert.ok(!/Log into Instagram/.test(res.text), p);
+    }
+    // Signed out, it is not the anonymous home page: the path has no document.
+    const anon = await get(new Browser(s.base), '/notifications/');
+    assert.strictEqual(anon.status, 404);
+    assert.ok(!anon.text.includes('Log into Instagram'));
+  });
+
+  await t.test('a client route name cannot be taken as a username', async () => {
+    const created = await new Browser(s.base).signup(s, { username: 'notifications' }).then(() => true, () => false);
+    assert.strictEqual(created, false, 'signup with a reserved name must fail');
   });
 
   await t.test('anonymous visitors keep the anonymous page', async () => {

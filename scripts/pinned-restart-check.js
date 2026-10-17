@@ -40,7 +40,18 @@ process.on('SIGTERM', () => { report(); process.exit(0); });
 process.on('exit', report);
 `;
 
+// Server processes this check spawned, killed on any exit (an exception
+// before the try block must not leave one holding the port).
+const spawned = new Set();
+process.on('exit', () => {
+  for (const c of spawned) if (c.exitCode === null) c.kill('SIGKILL');
+});
+
 async function startServer(label) {
+  // A health answer from a process this check did not start would be taken
+  // for this server's (e.g. one left behind by an interrupted run).
+  const stale = await fetch(`${base}/__loader/health`).then(() => true, () => false);
+  if (stale) throw new Error(`port ${PORT} is already answering; stop that process (or set CHECK_PORT) and run again`);
   const report = path.join(SCRATCH, `guard-${label}.json`);
   const child = spawn(process.execPath, ['--require', PRELOAD, path.join(ROOT, 'src', 'server.js')], {
     env: {
@@ -55,10 +66,12 @@ async function startServer(label) {
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
+  spawned.add(child);
   let out = '';
   child.stdout.on('data', (d) => (out += d));
   child.stderr.on('data', (d) => (out += d));
   for (let i = 0; i < 100; i += 1) {
+    if (child.exitCode !== null) throw new Error(`server exited (${child.exitCode}) before answering:\n${out}`);
     try {
       const r = await fetch(`${base}/__loader/health`);
       if (r.status) return { child, report, health: await r.json(), log: () => out };
@@ -71,10 +84,12 @@ async function startServer(label) {
 }
 
 async function stopServer(s) {
-  await new Promise((resolve) => {
-    s.child.once('exit', resolve);
-    s.child.kill('SIGTERM');
-  });
+  if (s.child.exitCode === null) {
+    await new Promise((resolve) => {
+      s.child.once('exit', resolve);
+      s.child.kill('SIGTERM');
+    });
+  }
   return JSON.parse(fs.readFileSync(s.report, 'utf8'));
 }
 

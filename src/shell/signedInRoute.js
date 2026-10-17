@@ -164,6 +164,30 @@ function storiesRoute(user, owner) {
 }
 
 /**
+ * The activity feed ("Notifications"): PolarisActivityFeedRoot, whose entry
+ * point preloads nothing; its root renders `cr:34873` (PolarisActivityFeed,
+ * bound in the acquired answer), which loads the feed itself through
+ * /api/v1/news/inbox/ and /api/v1/friendships/pending/. Route builder
+ * XPolarisActivityFeedControllerRouteBuilder: `/notifications/`, default
+ * params {followRequests: false}. Page id: PolarisActivityFeedConstants
+ * PAGE_ID (`ActivityFeedPage`); the client names no trace policy for it.
+ * /accounts/activity/ gets the same route: the client redirects it to
+ * /notifications/ itself (usePolarisAccountActivityRedirect).
+ */
+function activityRoute() {
+  return {
+    entryPoint: 'PolarisActivityFeedRoot',
+    root: 'PolarisActivityFeedRoot',
+    answers: ['PolarisActivityFeedRoot.entrypoint', 'PolarisActivityFeedRoot.react'],
+    props: {},
+    params: { followRequests: false },
+    routePath: '/notifications/',
+    tracePolicy: null,
+    pageID: 'ActivityFeedPage',
+  };
+}
+
+/**
  * The client's own "page not available" route (PolarisErrorRoot: entry point
  * with no preloads, root rendering PolarisHttp404Page), for a URL that names
  * nothing here, e.g. a profile of no local account. Its route props
@@ -368,4 +392,4 @@ function insertFeedRoot(html, answers, docDefines, toLocal, initTuple, root = FE
   return { html: html.slice(0, at) + parts.join('') + html.slice(at), inserted: tags.length, missing };
 }
 
-module.exports = { emptySSRMount, isLoginHomeInitialize, toSignedInHome, toSignedInRoute, homeRoute, profileRoute, storiesRoute, errorRoute, isSSRInit, disableAnonymousSSR, insertFeedRoot, parseAnswer, FEED_ROOT, LOGGED_OUT_ONLY, NO_LOCAL_SERVICE };
+module.exports = { emptySSRMount, isLoginHomeInitialize, toSignedInHome, toSignedInRoute, homeRoute, profileRoute, storiesRoute, activityRoute, errorRoute, isSSRInit, disableAnonymousSSR, insertFeedRoot, parseAnswer, FEED_ROOT, LOGGED_OUT_ONLY, NO_LOCAL_SERVICE };
