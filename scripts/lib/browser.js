@@ -183,6 +183,7 @@ async function openSession(browserWsUrl) {
         session.consoleMessages.push({
           level: msg.params.type,
           text: (msg.params.args || []).map((a) => a.value ?? a.description ?? a.type).join(' ').slice(0, 300),
+          args: msg.params.args || [],
         });
         break;
       case 'Runtime.exceptionThrown':

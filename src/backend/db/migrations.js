@@ -336,6 +336,42 @@ const migrations = [
       `);
     },
   },
+  {
+    /*
+     * Notes (the Direct inbox tray): one short text per author, visible for 24
+     * hours to followers the author follows back (audience 0) or to the
+     * author's close friends (audience 1). A new note replaces the active one.
+     */
+    id: '0006_notes',
+    up(db) {
+      db.exec(`
+        CREATE TABLE notes (
+          id          TEXT PRIMARY KEY,
+          pk          TEXT NOT NULL UNIQUE,
+          author_id   TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          text        TEXT NOT NULL,
+          audience    INTEGER NOT NULL CHECK (audience IN (0, 1)),
+          created_at  TEXT NOT NULL,
+          expires_at  TEXT NOT NULL,
+          deleted_at  TEXT
+        );
+        CREATE INDEX idx_notes_author ON notes(author_id, created_at DESC);
+      `);
+    },
+  },
+  {
+    /**
+     * Videos (reels): a video upload keeps its cover frame (an image upload
+     * the client sends with the same upload_id) and its duration.
+     */
+    id: '0007_video',
+    up(db) {
+      db.exec(`
+        ALTER TABLE media ADD COLUMN cover_media_id TEXT REFERENCES media(id) ON DELETE SET NULL;
+        ALTER TABLE media ADD COLUMN duration_ms INTEGER;
+      `);
+    },
+  },
 ];
 
 module.exports = { migrations };

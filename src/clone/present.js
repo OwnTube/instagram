@@ -101,6 +101,9 @@ function media(db, post, viewerId = null) {
   const width = post.mediaWidth || DEFAULT_MEDIA_SIZE;
   const height = post.mediaHeight || DEFAULT_MEDIA_SIZE;
   const id = mediaId(post);
+  // A reel: the video plays from video_versions; images show its cover frame.
+  const isVideo = post.mediaType === 'video';
+  const still = isVideo ? post.coverUrl : post.mediaUrl;
   return {
     __typename: 'XDTMediaDict',
     id,
@@ -109,7 +112,7 @@ function media(db, post, viewerId = null) {
     code: post.code,
     taken_at: takenAt,
     media_type: MEDIA_TYPE[post.mediaType] || 1,
-    product_type: 'feed',
+    product_type: isVideo ? 'clips' : 'feed',
     filter_type: 0,
     caption: post.caption
       ? {
@@ -138,17 +141,18 @@ function media(db, post, viewerId = null) {
     comments_disabled: post.commentsDisabled,
     commenting_disabled_for_viewer: !viewerId || post.commentsDisabled,
     like_and_view_counts_disabled: false,
-    image_versions2: { candidates: post.mediaUrl ? [{ url: post.mediaUrl, width, height }] : [] },
+    image_versions2: { candidates: still ? [{ url: still, width, height }] : [] },
     original_width: width,
     original_height: height,
-    display_uri: post.mediaUrl || null,
+    display_uri: still || null,
     user: authorUser,
     owner: authorUser,
     location: post.location ? { pk: '0', name: post.location, short_name: post.location } : null,
     usertags: { in: [] },
     carousel_media: null,
     carousel_media_count: null,
-    video_versions: null,
+    video_versions: isVideo && post.mediaUrl ? [{ id: `${post.pk}v`, type: 101, url: post.mediaUrl, width, height }] : null,
+    ...(isVideo ? { video_duration: post.durationMs ? post.durationMs / 1000 : null, has_audio: true, video_dash_manifest: null, number_of_qualities: 1 } : {}),
     is_paid_partnership: false,
     sponsor_tags: null,
     clips_metadata: null,

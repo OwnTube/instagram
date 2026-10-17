@@ -23,7 +23,7 @@ const express = require('express');
 const busboy = require('busboy');
 
 const { createPasswordCodec } = require('./passwordEncryption');
-const { createMediaStore, MAX_BYTES } = require('./media');
+const { createMediaStore, MAX_BYTES, MAX_CHUNK_BYTES } = require('./media');
 const { createGraphql } = require('./graphql');
 const { createContractCache } = require('../runtime/graphqlContract');
 const { buildModuleIndex } = require('../runtime/moduleIndex');
@@ -71,6 +71,8 @@ const TELEMETRY_PATHS = [
   /^\/logging\//,
   /^\/sync\/instagram\/?$/,
   /^\/api\/v1\/web\/fxcal\//,
+  // Video view counting (XVideoUnifiedCVCController), a beacon.
+  /^\/video\/unified_cvc\/?$/,
 ];
 
 const DOCUMENT_ON_GET = /^\/accounts\/edit\/?$/;
@@ -234,6 +236,7 @@ function createClone({ db, dataDir = '.data', logger = console, env = process.en
 
   const requireViewer = (req, res, next) => (req.viewer ? next() : next(unauthorized()));
   const rawImage = express.raw({ type: () => true, limit: MAX_BYTES });
+  const rawVideo = express.raw({ type: () => true, limit: MAX_CHUNK_BYTES });
   const ctx = {
     db,
     codec,
@@ -242,6 +245,7 @@ function createClone({ db, dataDir = '.data', logger = console, env = process.en
     config,
     requireViewer,
     rawImage,
+    rawVideo,
     multipart,
     limits: { auth: limit(authLimiter) },
     decryptFailures,

@@ -145,3 +145,18 @@ test("a fragment artifact's own spreads count as evidence", () => {
   };
   assert.deepEqual([...artifactPossibleTypes(fragment).get('__isShareSheetItem')].sort(), ['ShareSheetThread', 'ShareSheetUser']);
 });
+
+test('an aliased field answered under its own name fills the alias', () => {
+  // PolarisClipsHomeRootQuery selects `owner_id: user { ... }` on the media.
+  const tree = selectionTree([linked('media', [scalar('id'), linked('user', [scalar('pk')]), { ...linked('user', [scalar('pk'), scalar('username')]), alias: 'owner_id' }, { ...scalar('code'), alias: 'shortcode' }], { concreteType: 'XDTMediaDict' })]);
+  const value = { media: { id: '1_2', code: 'abc', user: { pk: '2' } } };
+  completeToContract(tree, value);
+  assert.deepEqual(value.media.owner_id, { pk: '2', username: null });
+  assert.equal(value.media.shortcode, 'abc');
+  // The alias is its own copy: completing it does not touch `user`.
+  assert.equal('username' in value.media.user, false);
+  // A present alias is kept as answered.
+  const kept = { media: { id: '1_2', user: { pk: '2' }, owner_id: { pk: '9', username: 'x' } } };
+  completeToContract(tree, kept);
+  assert.deepEqual(kept.media.owner_id, { pk: '9', username: 'x' });
+});

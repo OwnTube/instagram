@@ -50,7 +50,7 @@
  *    messaging limits), PolarisDirectInboxQPInterstitialQuery (no
  *    promotions) and IGDInboxTrayQuery (notes: none can be created here);
  *  - PolarisClipsHomeRootQuery (Reels tab): `xdt_api__v1__clips__home__
- *    connection_v2`; empty, as local accounts publish photos only;
+ *    connection_v2`, the reels the viewer may see, newest first;
  *  - one thread (`get_slide_thread_nullable`, by `thread_fbid`): the thread
  *    page's IGDInboxHeaderOffMsysQuery and IGDThreadDetailQuery, and the chat
  *    tab's IGDChatTabRootOffMsysQuery; text messages are SlideMessageText
@@ -70,6 +70,7 @@
 
 const crypto = require('node:crypto');
 const users = require('../backend/services/users');
+const posts = require('../backend/services/posts');
 const { stories, messages } = require('../backend/services/social');
 const present = require('./present');
 const { unauthorized, badRequest } = require('../backend/lib/errors');
@@ -565,11 +566,27 @@ function createHomeOperations(db) {
       return { xig_direct_mark_read_id_validation: Boolean(found) };
     },
 
-    // The Reels tab's clips. Reels are videos and local accounts can only
-    // publish photos, so no clip exists here: the connection is empty.
+    // The Reels tab's clips: the reels (video posts) the viewer may see,
+    // newest first (no recommendation ranking here); edges are
+    // XDTClipsItemDict nodes holding the media.
     PolarisClipsHomeRootQuery(vars, ctx) {
+      const viewer = viewerOf(ctx);
+      const first = Math.min(Math.max(Number(vars.first) || 10, 1), 30);
+      const page = posts.listClips(db, viewer.id, { limit: first, cursor: vars.after || null });
+      const edges = page.items.map((p) => ({ cursor: p.id, node: { __typename: 'XDTClipsItemDict', media: present.media(db, p, viewer.id) } }));
+      return {
+        xdt_api__v1__clips__home__connection_v2: {
+          edges,
+          gating: null,
+          page_info: { end_cursor: page.nextCursor, has_next_page: Boolean(page.nextCursor), has_previous_page: false, start_cursor: edges[0]?.cursor ?? null },
+        },
+      };
+    },
+
+    // Ads injected between reels: this server serves no ads.
+    PolarisClipsAdsPoolQuery(vars, ctx) {
       viewerOf(ctx);
-      return { xdt_api__v1__clips__home__connection_v2: { edges: [], gating: null, page_info: { end_cursor: null, has_next_page: false, has_previous_page: false, start_cursor: null } } };
+      return { xdt_injected_reels_units: { ad_media_items: [] } };
     },
 
     // Activity status is on for every local account (the accounts API reports

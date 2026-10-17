@@ -75,9 +75,11 @@ function selectionTree(selections, out = {}) {
     switch (sel.kind) {
       case 'ScalarField':
         out[sel.alias || sel.name] = out[sel.alias || sel.name] || true;
+        if (sel.alias && sel.alias !== sel.name) out.__aliases = { ...out.__aliases, [sel.alias]: sel.name };
         break;
       case 'LinkedField': {
         const key = sel.alias || sel.name;
+        if (sel.alias && sel.alias !== sel.name) out.__aliases = { ...out.__aliases, [sel.alias]: sel.name };
         const sub = out[key] && typeof out[key] === 'object' ? out[key] : {};
         out[key] = selectionTree(sel.selections, sub);
         if (sel.plural) out[key].__plural = true;
@@ -189,8 +191,13 @@ function completeToContract(tree, value, possibleTypes = null) {
     // server data; a null there corrupts the store.
     if (key.startsWith('__') && key !== '__typename') continue;
     if (!(key in value)) {
-      value[key] = key === '__typename' && tree.__concrete ? tree.__concrete : null;
+      // An aliased field (`owner_id: user`) answered under its own name: the
+      // alias is the same field, so it takes that value.
+      const field = tree.__aliases && tree.__aliases[key];
+      value[key] = field && value[field] !== undefined ? structuredClone(value[field]) : key === '__typename' && tree.__concrete ? tree.__concrete : null;
       added += 1;
+      if (!(sub && typeof sub === 'object' && value[key] != null)) continue;
+      for (const item of Array.isArray(value[key]) ? value[key] : [value[key]]) added += completeToContract(sub, item, possibleTypes);
       continue;
     }
     if (sub && typeof sub === 'object' && value[key] != null) {

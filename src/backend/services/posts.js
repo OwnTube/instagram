@@ -16,6 +16,7 @@ const { canView, visibleAuthorSql, requireVisiblePost, notify } = require('./vis
 
 const POST_SELECT = `SELECT p.*, u.username AS author_username, u.pk AS author_pk,
        m.width AS media_width, m.height AS media_height, m.content_type AS media_content_type,
+       m.duration_ms AS media_duration_ms, (SELECT c.storage_key FROM media c WHERE c.id = m.cover_media_id) AS cover_key,
        (SELECT COUNT(*) FROM likes l WHERE l.post_id = p.id) AS like_count,
        (SELECT COUNT(*) FROM comments c WHERE c.post_id = p.id AND c.deleted_at IS NULL) AS comment_count
   FROM posts p JOIN users u ON u.id = p.author_id LEFT JOIN media m ON m.id = p.media_id`;
@@ -34,6 +35,9 @@ function toPublic(row, { viewerId, likeCount, commentCount, likedByViewer, saved
     mediaType: row.media_type,
     mediaWidth: row.media_width ?? null,
     mediaHeight: row.media_height ?? null,
+    // Videos: the cover frame (served like the video) and the length.
+    coverUrl: row.cover_key ? `/__media/${row.cover_key}` : null,
+    durationMs: row.media_duration_ms ?? null,
     location: row.location ?? null,
     commentsDisabled: Boolean(row.comments_disabled),
     createdAt: row.created_at,
@@ -142,6 +146,22 @@ function listByAuthor(db, authorId, { limit, cursor }, { viewerId } = {}) {
   return { items: items.map((row) => toPublic(row, { viewerId, ...viewerFlags(db, viewerId, row.id) })), nextCursor };
 }
 
+/** Reels (video posts) the viewer may see, newest first: the Reels tab. */
+function listClips(db, viewerId, { limit, cursor }) {
+  const where = `p.deleted_at IS NULL AND p.media_type = 'video' AND ${visibleAuthorSql('p.author_id', 'u')}`;
+  const { items, nextCursor } = paginate(
+    { limit, cursor },
+    (take, cur) =>
+      cur
+        ? db
+            .prepare(`${POST_SELECT} WHERE ${where} AND (p.created_at < ? OR (p.created_at = ? AND p.id < ?)) ORDER BY p.created_at DESC, p.id DESC LIMIT ?`)
+            .all(viewerId, viewerId, cur.createdAt, cur.createdAt, cur.id, take)
+        : db.prepare(`${POST_SELECT} WHERE ${where} ORDER BY p.created_at DESC, p.id DESC LIMIT ?`).all(viewerId, viewerId, take),
+    (row) => ({ createdAt: row.created_at, id: row.id })
+  );
+  return { items: items.map((row) => toPublic(row, { viewerId, ...viewerFlags(db, viewerId, row.id) })), nextCursor };
+}
+
 function countByAuthor(db, authorId) {
   return db.prepare('SELECT COUNT(*) AS n FROM posts WHERE author_id = ? AND deleted_at IS NULL').get(authorId).n;
 }
@@ -187,6 +207,7 @@ module.exports = {
   update,
   remove,
   listByAuthor,
+  listClips,
   countByAuthor,
   setLike,
   listLikers,

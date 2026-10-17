@@ -303,6 +303,7 @@ const saved = {
               .prepare(
                 `SELECT s.created_at AS saved_at, s.collection_id, p.*, u.username AS author_username, u.pk AS author_pk,
                         m.width AS media_width, m.height AS media_height,
+                        m.duration_ms AS media_duration_ms, (SELECT c.storage_key FROM media c WHERE c.id = m.cover_media_id) AS cover_key,
                         (SELECT COUNT(*) FROM likes l WHERE l.post_id = p.id) AS like_count,
                         (SELECT COUNT(*) FROM comments c WHERE c.post_id = p.id AND c.deleted_at IS NULL) AS comment_count
                  FROM saved_posts s JOIN posts p ON p.id = s.post_id JOIN users u ON u.id = p.author_id
@@ -317,6 +318,7 @@ const saved = {
               .prepare(
                 `SELECT s.created_at AS saved_at, s.collection_id, p.*, u.username AS author_username, u.pk AS author_pk,
                         m.width AS media_width, m.height AS media_height,
+                        m.duration_ms AS media_duration_ms, (SELECT c.storage_key FROM media c WHERE c.id = m.cover_media_id) AS cover_key,
                         (SELECT COUNT(*) FROM likes l WHERE l.post_id = p.id) AS like_count,
                         (SELECT COUNT(*) FROM comments c WHERE c.post_id = p.id AND c.deleted_at IS NULL) AS comment_count
                  FROM saved_posts s JOIN posts p ON p.id = s.post_id JOIN users u ON u.id = p.author_id
