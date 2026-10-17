@@ -144,7 +144,7 @@ test('signed-in stories and not-found routes, from pinned answers only', async (
   await t.test('/direct/inbox/, a /direct/t/ thread and /reels/: their client roots, signed in only', async () => {
     const expected = [
       ['/direct/inbox/', 'PolarisDirectInboxRoot', {}, 'DirectInboxPage'],
-      ['/direct/t/340282366841710300/', 'PolarisDirectInboxRoot', { thread_key: '340282366841710300' }, 'DirectThreadPage'],
+      ['/direct/t/340282366841710300/', 'PolarisDirectInboxRoot', { thread_key: '340282366841710300' }, 'DirectInboxPage'],
       ['/reels/', 'PolarisClipsTabRoot', { shortcode: null }, 'reelsTab'],
     ];
     for (const [p, root, params, pageID] of expected) {

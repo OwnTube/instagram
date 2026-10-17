@@ -197,9 +197,12 @@ function activityRoute() {
  * `/direct/t/{?thread_key}/`, an extra URL of the inbox route) it also
  * preloads that thread's header and messages. The client builds
  * `/direct/inbox/` as a literal (no route builder, so no default params).
- * Page id: `DirectInboxPage`, or `DirectThreadPage` for a thread (the ids the
- * client's Direct checks compare against); trace policy
- * `polaris.directInboxPage` (see activityRoute) for both, one root.
+ * Page id `DirectInboxPage` for both: the thread URL is an extra URL of the
+ * same route, so it carries the same route config, and that id is the one
+ * useShouldHideChatTabs lists (it has no thread page id), so the client does
+ * not open its chat tabs over the page. Components on the thread pass their
+ * own `DirectThreadPage` to usePolarisPageID. Trace policy
+ * `polaris.directInboxPage` (see activityRoute).
  */
 function directInboxRoute(threadKey = null) {
   return {
@@ -210,7 +213,9 @@ function directInboxRoute(threadKey = null) {
     params: threadKey ? { thread_key: threadKey } : {},
     routePath: threadKey ? '/direct/t/{?thread_key}/' : '/direct/inbox/',
     tracePolicy: 'polaris.directInboxPage',
-    pageID: threadKey ? 'DirectThreadPage' : 'DirectInboxPage',
+    pageID: 'DirectInboxPage',
+    // usePolarisIsOnDirectPage: entity_type `direct` (or `direct_old`).
+    entityKeyConfig: { entity_type: { source: 'constant', value: 'direct' } },
   };
 }
 
@@ -231,6 +236,8 @@ function reelsRoute() {
     routePath: '/reels/{?shortcode}/',
     tracePolicy: 'polaris.reelsTab',
     pageID: 'reelsTab',
+    // usePolarisIsOnReelsPage: entity_type `clip`.
+    entityKeyConfig: { entity_type: { source: 'constant', value: 'clip' } },
   };
 }
 
@@ -293,6 +300,9 @@ function toSignedInRoute(node, viewer, spec = homeRoute(), url = '/') {
   route.stripParams = [];
   route.routePath = spec.routePath;
   route.url = url;
+  // The route's entity, read by getCometEntityKey ({key: {source, value}}),
+  // e.g. what usePolarisIsOnDirectPage tests; absent unless the spec names one.
+  route.entityKeyConfig = spec.entityKeyConfig || null;
   args.expectedPreloaders = [];
   args.additional_roots = [];
   args.ssrEnabled = false;

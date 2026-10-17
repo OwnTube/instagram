@@ -56,6 +56,8 @@
  *    tab's IGDChatTabRootOffMsysQuery; text messages are SlideMessageText
  *    with content_type `TEXT`; useIGDMarkThreadAsReadMutation (opening a
  *    thread marks it seen) and its ...ValidationMutation;
+ *  - IGDirectTextSendMutation: the thread composer's send, stored as a
+ *    messages row;
  *  - PolarisSuggestedUserListRefetchQuery: the suggestions list's refetch
  *    (the empty feed), same response tree as PolarisSuggestedUserListQuery;
  *  - IGPresenceUnifiedSetupQuery `xdt_api__v1__get__presence__disabled
@@ -118,9 +120,10 @@ function mutualName(db, viewerId, userId) {
 
 /**
  * A conversation's newest messages as a SlideMessage connection (newest first,
- * the order of Direct's thread item lists).
+ * the order of Direct's thread item lists). `senders` maps a member's pk to
+ * the SlideUser shown beside their messages (name, avatar).
  */
-function slideMessages(db, conversationId, first, threadPk) {
+function slideMessages(db, conversationId, first, threadPk, senders = new Map()) {
   const rows = db
     .prepare(
       `SELECT m.pk, m.body, m.created_at, u.pk AS sender_pk FROM messages m JOIN users u ON u.id = m.sender_id
@@ -132,6 +135,7 @@ function slideMessages(db, conversationId, first, threadPk) {
       __typename: 'SlideMessage',
       id: String(m.pk),
       sender_fbid: String(m.sender_pk),
+      sender: senders.get(String(m.sender_pk)) || null,
       timestamp_ms: ms(m.created_at),
       igd_snippet: m.body,
       text_body: m.body,
@@ -223,11 +227,22 @@ function threadEdge(db, viewer, c, { messages = 0 } = {}) {
     thread_fbid: String(c.pk),
     nicknames: [],
     is_pin: false,
-    thread_subtype: null,
+    // String names of MessagingThreadSubtype: a one-to-one thread is
+    // IG_ONLY_ONE_TO_ONE (isIGDOneToOneThread); groups are IGD_GROUP. The
+    // thread composer requires a subtype (nullthrows).
+    thread_subtype: others.length > 1 ? 'IGD_GROUP' : 'IG_ONLY_ONE_TO_ONE',
     viewer: { id: viewerUser.id, username: viewerUser.username, full_name: viewerUser.full_name, interop_messaging_user_fbid: String(viewer.pk), profile_pic_url: viewerUser.profile_pic_url },
     is_muted: false,
   };
-  if (messages > 0) thread.slide_messages = slideMessages(db, c.id, messages, c.pk);
+  if (messages > 0) {
+    const senders = new Map(
+      members.map((u) => {
+        const dict = { ...present.user(db, u, viewer.id), interop_messaging_user_fbid: String(u.pk), ai_agent_type: null };
+        return [String(u.pk), { __typename: 'SlideUser', id: String(u.pk), igid: String(u.pk), name: u.display_name || u.username, user_dict: dict }];
+      })
+    );
+    thread.slide_messages = slideMessages(db, c.id, messages, c.pk, senders);
+  }
   return { node: { __typename: 'SlideThread', id: `slide_thread:${c.pk}`, as_ig_direct_thread: thread }, cursor: String(c.pk) };
 }
 
@@ -451,6 +466,27 @@ function createHomeOperations(db) {
       const row = db.prepare('SELECT last_seen_at FROM conversation_members WHERE conversation_id = ? AND user_id = ?').get(c.id, viewer.id);
       return {
         xig_direct_item_seen_mutation_with_slide_messaging_response: { __typename: 'XFBSlideReadReceipt', participant_eimu_id: String(viewer.pk), watermark_timestamp_ms: ms(row.last_seen_at) },
+      };
+    },
+
+    // The thread composer's send (IGDTextPublisher): flat variables
+    // (ig_thread_igid, text {sensitive_string_value}, offline_threading_id,
+    // ..; IGDMAPISendTextMessage; the operation builds its `data` argument
+    // from them); the reply is the stored message
+    // (SlideMessage {message_id, timestamp_ms}). A repeated
+    // offline_threading_id returns the original message.
+    IGDirectTextSendMutation(vars, ctx) {
+      const viewer = viewerOf(ctx);
+      const data = vars;
+      const c = viewerConversation(db, viewer, data.ig_thread_igid);
+      if (!c) throw badRequest('Unknown thread');
+      const text = String((data.text && data.text.sensitive_string_value) ?? '').trim();
+      if (!text) throw badRequest('Message cannot be empty.');
+      if (text.length > 5000) throw badRequest('Message is too long.');
+      const clientContext = data.offline_threading_id != null ? String(data.offline_threading_id).slice(0, 64) : undefined;
+      const msg = messages.send(db, c.id, viewer.id, text, { clientContext });
+      return {
+        xig_direct_text_send_with_slide_messaging_response: { __typename: 'SlideMessage', id: String(msg.pk), message_id: String(msg.pk), timestamp_ms: ms(msg.createdAt) },
       };
     },
 

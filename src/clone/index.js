@@ -296,7 +296,7 @@ function createClone({ db, dataDir = '.data', logger = console, env = process.en
   router.get('/__clone/health', (req, res) =>
     res.json({
       ok: true,
-      graphql: { supported: graphql.supported(), unsupported: graphql.unsupported() },
+      graphql: { supported: graphql.supported(), unsupported: graphql.unsupported(), answered: graphql.answered() },
       rest: { unsupported: [...unsupportedRest].map(([route, count]) => ({ route, count })).sort((a, b) => b.count - a.count) },
       passwordEncryption: { keyId: codec.keyId, version: 10 },
       signup: { emailRequired: false, verificationRequired: false, mailTransport: mailer.transport, devOutbox: outbox.enabled },

@@ -82,6 +82,8 @@ function referencesFrom({ documents, answers, stored }) {
             for (const e of Object.values(n.rsrcMap)) if (e && e.src) add(e.src, e.type || 'js', 'rsrcMap');
           }
           for (const k of ['spi', '_spi']) if (typeof n[k] === 'string') add(n[k], 'img', 'ixData');
+          // Binary resources the client fetches by id (wasm, audio, animations).
+          if (n.bxData && typeof n.bxData === 'object') for (const e of Object.values(n.bxData)) if (e && typeof e.uri === 'string') add(e.uri, 'binary', 'bxData');
           // A non-sprited image entry ({sprited: 0, uri, width, height}).
           if ('sprited' in n && typeof n.uri === 'string') add(n.uri, 'img', 'ixData');
         }
@@ -101,6 +103,8 @@ function referencesFrom({ documents, answers, stored }) {
           for (const k of ['spi', '_spi']) if (e && typeof e[k] === 'string') add(e[k], 'img', 'bootloader');
           if (e && 'sprited' in e && typeof e.uri === 'string') add(e.uri, 'img', 'bootloader');
         }
+        const bx = answer && answer.hrp && answer.hrp.hsrp && answer.hrp.hsrp.hsdp && answer.hrp.hsrp.hsdp.bxData;
+        for (const e of Object.values(bx || {})) if (e && typeof e.uri === 'string') add(e.uri, 'binary', 'bootloader');
       } catch {
         /* not a JSON answer */
       }

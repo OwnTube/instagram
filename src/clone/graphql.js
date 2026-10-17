@@ -42,6 +42,8 @@ const AUTH_OPERATIONS = new Set(['useCDSWebLoginMutation', 'useCAARegistrationFo
 
 function createGraphql({ db, contracts = null }) {
   const unsupported = new Map();
+  // Answered operations by name (counts only, never variables), for health.
+  const answered = new Map();
   let loginCore = null;
   let signupCore = null;
 
@@ -352,6 +354,7 @@ function createGraphql({ db, contracts = null }) {
         status: 'fail',
       });
     }
+    answered.set(name, (answered.get(name) || 0) + 1);
     try {
       const data = await resolver(vars, { viewer: req.viewer || null, req, res });
       // Fill fields the resolver does not produce with explicit nulls, as the
@@ -379,6 +382,7 @@ function createGraphql({ db, contracts = null }) {
     setSignupCore(core) { signupCore = core; },
     supported: () => Object.keys(resolvers),
     unsupported: () => [...unsupported.values()].sort((a, b) => b.count - a.count),
+    answered: () => Object.fromEntries(answered),
   };
 }
 

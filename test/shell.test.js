@@ -73,6 +73,13 @@ test('personalize', async (t) => {
     assert.match(personalize(anonymousPage(), { encryption: OURS, identity: true }), /"USER_ID":"0"/);
   });
 
+  await t.test("the page's server time is this response's, not the stored page's", () => {
+    const stored = { serverTime: 1700000000000, timeOfRequestStart: 1699999999900.5, timeOfResponseStart: 1699999999950.2 };
+    const html = page([{ define: [['ServerTimeData', [], stored, 5]] }]);
+    const out = personalize(html, { encryption: OURS, now: 1800000000000 });
+    assert.match(out, /"ServerTimeData",\[\],\{"serverTime":1800000000000,"timeOfRequestStart":1800000000000,"timeOfResponseStart":1800000000000\}/);
+  });
+
   await t.test('markup in a display name cannot break out of a JSON block', () => {
     const name = '</script><img src=x onerror=alert(1)>';
     const out = personalize(anonymousPage(), { viewer: viewer({ display_name: name }), csrfToken: 'x', encryption: OURS, identity: true });

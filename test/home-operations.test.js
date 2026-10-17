@@ -96,6 +96,7 @@ test('signed-in home operations', async (t) => {
     assert.strictEqual(detail.as_ig_direct_thread.thread_fbid, key);
     const message = detail.as_ig_direct_thread.slide_messages.edges[0].node;
     assert.deepStrictEqual([message.content_type, message.text_body, message.thread_fbid], ['TEXT', 'hi ann', key]);
+    assert.deepStrictEqual([message.sender.__typename, message.sender.user_dict.username, typeof message.sender.user_dict.profile_pic_url], ['SlideUser', 'bob_home', 'string'], 'the sender carries name and avatar');
     const header = (await gql(ann, 'IGDInboxHeaderOffMsysQuery', { thread_fbid: key })).body.data.get_slide_thread_nullable;
     assert.strictEqual(header.as_ig_direct_thread.users[0].username, 'bob_home');
     const outsider = (await gql(cat, 'IGDThreadDetailQuery', { thread_fbid: key })).body.data;
@@ -110,6 +111,16 @@ test('signed-in home operations', async (t) => {
     const mine = after.slide_read_receipts.find((r) => r.participant_fbid === String(a.pk));
     assert.ok(Number(mine.watermark_timestamp_ms) >= Number(after.last_activity_timestamp_ms), 'the thread is read for ann');
     assert.strictEqual((await gql(cat, 'useIGDMarkThreadAsReadMutation', { data: { item_id: '', message_id: msgId }, metadata: { ig_thread_igid: key } })).status, 400);
+    // The composer's send stores the message; a retry with the same
+    // offline_threading_id does not store it twice; a non-member cannot send.
+    const send = { ig_thread_igid: key, text: { sensitive_string_value: 'from the composer' }, offline_threading_id: '7234567890123456789' };
+    const sent = (await gql(ann, 'IGDirectTextSendMutation', send)).body.data.xig_direct_text_send_with_slide_messaging_response;
+    assert.match(sent.message_id, /^\d+$/);
+    assert.strictEqual((await gql(ann, 'IGDirectTextSendMutation', send)).body.data.xig_direct_text_send_with_slide_messaging_response.message_id, sent.message_id);
+    const listed = (await gql(ann, 'IGDThreadDetailQuery', { thread_fbid: key, __relay_internal__pv__IGDInitialMessagePageCountrelayprovider: 20 })).body.data;
+    assert.ok(JSON.stringify(listed).includes('from the composer'), 'the thread lists the sent message');
+    assert.strictEqual((await gql(cat, 'IGDirectTextSendMutation', { ...send, offline_threading_id: '1' })).status, 400);
+    assert.strictEqual((await gql(ann, 'IGDirectTextSendMutation', { ...send, text: { sensitive_string_value: '  ' }, offline_threading_id: '2' })).status, 400);
     const me = (await gql(ann, 'IGDThreadListHeaderAccountSwitcherOffMsysQuery', {})).body.data.viewer.xdt_user;
     assert.strictEqual(me.username, 'ann_home');
   });

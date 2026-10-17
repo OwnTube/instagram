@@ -15,6 +15,9 @@
  *   prefetches   Relay prefetches are upstream data for upstream accounts.
  *                With dropPrefetches they are removed, so the client issues
  *                the query itself and our GraphQL endpoint answers it.
+ *   server time  ServerTimeData (the response's own clock reading) becomes
+ *                this server's time; a pinned document's would set the
+ *                client's clock back to when it was acquired.
  *   runtime      /__clone/runtime.js is inserted as the first script.
  *
  * The output is per-browser (it carries the CSRF token) and must be served
@@ -70,7 +73,7 @@ function replacePlaceholders(str, viewer, csrfToken, escape = (x) => x) {
  * the anonymous page to a signed-in route: `route` (src/shell/signedInRoute.js,
  * default the home feed) at `routeUrl`.
  */
-function personalize(html, { viewer = null, csrfToken, encryption, dropPrefetches = false, identity = false, signedInHome = false, feedRoot = null, route = null, routeUrl = '/', toLocal = (u) => u, stats } = {}) {
+function personalize(html, { viewer = null, csrfToken, encryption, dropPrefetches = false, identity = false, signedInHome = false, feedRoot = null, route = null, routeUrl = '/', toLocal = (u) => u, stats, now = Date.now() } = {}) {
   if (typeof html !== 'string' || !html) return html;
   const counts = { encryption: 0, csrf: 0, viewer: 0, prefetchesDropped: 0, placeholders: 0, signedInRoute: 0 };
   // The experimental signed-in route needs identity that agrees with it.
@@ -121,6 +124,15 @@ function personalize(html, { viewer = null, csrfToken, encryption, dropPrefetche
     if (isDefineTuple(node) && node[0] === 'PolarisSiteData' && node[2] && node[2].cross_site_request_url != null) {
       node[2].cross_site_request_url = null;
       counts.crossSiteProbe = (counts.crossSiteProbe || 0) + 1;
+    }
+    // ServerTime compares these with the page load's own timing and, when they
+    // disagree by more than the transfer time, offsets every client clock
+    // reading (message and seen timestamps, relative times) by the difference.
+    if (isDefineTuple(node) && node[0] === 'ServerTimeData' && node[2] && typeof node[2].serverTime === 'number') {
+      node[2].serverTime = now;
+      node[2].timeOfRequestStart = now;
+      node[2].timeOfResponseStart = now;
+      counts.serverTime = 1;
     }
     // The Bootloader batches the endpoint modules asked for in one tick into one
     // request (`modules=A,B`), so which sets it asks for depends on timing,

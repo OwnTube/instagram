@@ -13,8 +13,9 @@
  *      and the message;
  *   4. opening the thread marks it read: A's last_seen_at is set in the
  *      database (useIGDMarkThreadAsReadMutation);
- *   5. A types a reply in the thread's composer and sends it: the message is
- *      stored (messages row) and shown;
+ *   5. A types a reply in the thread's composer and presses Enter: the
+ *      message is stored (IGDirectTextSendMutation, a messages row) and shown
+ *      after B's;
  *   6. signed out, /direct/inbox/ is not served the anonymous home page;
  *   7. nothing left this origin; the server attempted no upstream request.
  *
@@ -126,7 +127,9 @@ async function main() {
     check('opening the thread marks it read for A (conversation_members.last_seen_at)', seen, seen ? seen.last_seen_at : 'not set');
 
     // 5. Reply through the composer.
-    const composer = "document.querySelector('[role=textbox][contenteditable=true], textarea[placeholder]')";
+    // The thread page's own composer: the widest visible message box (a chat
+    // tab, when one is open, has its own, narrower one).
+    const composer = "[...document.querySelectorAll('textarea, [role=textbox][contenteditable=true]')].filter((e) => e.getBoundingClientRect().width > 0).sort((x, y) => y.getBoundingClientRect().width - x.getBoundingClientRect().width)[0]";
     const hasComposer = await waitFor(session, `Boolean(${composer})`, 15000);
     if (hasComposer) {
       await evaluate(session, `${composer}.focus()`);
@@ -140,9 +143,11 @@ async function main() {
       stored = sql('SELECT m.pk FROM messages m JOIN users u ON u.id = m.sender_id WHERE m.body = ? AND u.username_ci = ?', reply, nameA);
       if (!stored) await sleep(500);
     }
-    const shown = hasComposer && (await waitFor(session, `document.body.innerText.includes(${JSON.stringify(reply)})`, 10000));
+    // Shown, and after B's message: the newest message is the last one (a
+    // client clock off from this server's would misplace it).
+    const shown = hasComposer && (await waitFor(session, `(() => { const t = (document.querySelector('[role=main]') || document.body).innerText; return t.lastIndexOf(${JSON.stringify(reply)}) > t.lastIndexOf('hello from B'); })()`, 10000));
     await shot(session, 'direct-03-reply.png');
-    check("A's reply typed in the thread's composer is stored and shown", stored && shown, `composer ${hasComposer}, stored ${Boolean(stored)}, shown ${shown}`);
+    check("A's reply typed in the thread's composer is stored and shown after B's message", stored && shown, `composer ${hasComposer}, stored ${Boolean(stored)}, shown in order ${shown}`);
 
     const errors = session.consoleMessages.filter((m) => m.level === 'error').map((m) => m.text.slice(0, 160));
     if (errors.length) console.log(`INFO  console errors: ${[...new Set(errors)].slice(0, 6).join(' | ')}`);
