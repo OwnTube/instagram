@@ -12,3 +12,7 @@ scripts/diagnostics/*.json
 
 # Screenshots and other output of the browser checks
 test-artifacts/
+
+# The packaged client's bodies (Meta's bundles) are not committed until the
+# decision to publish them is made; bundle.json and the manifest are.
+client/blobs/

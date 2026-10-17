@@ -1,0 +1,10 @@
+{
+ "format": 1,
+ "snapshot": "rev1050722040-20261017T153014Z",
+ "revision": "1050722040",
+ "manifestSha256": "0f9dd5e89f3badc9654b6f5527e2f098bb6cce63a1b34e5675c90a656d6252dd",
+ "blobs": 8766,
+ "bytes": 174175831,
+ "contentsSha256": "84517a7c2fb7f1c66ce65020e4a0ee5ff08d94d36680418de2b47204d098e499",
+ "exportedAt": "2026-10-17T15:54:04.142Z"
+}

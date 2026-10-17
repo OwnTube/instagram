@@ -33,6 +33,9 @@
     "client:activate": "node scripts/client-snapshot.js activate",
     "client:rollback": "node scripts/client-snapshot.js rollback",
     "client:status": "node scripts/client-snapshot.js status",
+    "client:setup": "node scripts/client-bundle.js setup",
+    "client:bundle": "node scripts/client-bundle.js export",
+    "client:bundle-check": "node scripts/client-bundle.js check",
     "verify:pinned-restart": "node scripts/pinned-restart-check.js"
   },
   "engines": {

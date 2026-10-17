@@ -3,8 +3,10 @@
 Serves a **pinned snapshot of the original Instagram web client** (the real
 anonymous HTML documents, JavaScript bundles, stylesheets, images and
 bootloader answers of ONE client revision) together with a local
-compatibility backend that answers the client's own API calls. Nothing from
-Instagram is committed to this repository; the snapshot lives in `.cache/`.
+compatibility backend that answers the client's own API calls. The server
+serves the snapshot installed in `.cache/client/`; `client/` is the packaged
+copy that `npm run client:setup` installs from, offline (see
+[Fresh install and upgrade](#fresh-install-and-upgrade)).
 
 **Client serving is pinned-only.** The server never fetches, refreshes or
 substitutes the client at runtime: there is no live mode, no fallback to
@@ -26,6 +28,9 @@ The served client changes only through operator commands:
 | `npm run client:activate -- <id>` | Serves a verified snapshot (re-checks every hash); the previous one is kept for rollback. |
 | `npm run client:rollback` | Re-activates the previous snapshot that still validates. |
 | `npm run client:status` | Active snapshot, history, routes, scope, integrity. |
+| `npm run client:setup [-- --activate]` | Installs the packaged snapshot in `client/` into `.cache/client/` without any network access: re-hashes every blob, activates it when no valid snapshot is active (keeps a valid active one unless `--activate`). Idempotent. |
+| `npm run client:bundle [-- <id>]` | Writes the active (or named verified) snapshot to `client/`, replacing the previous bundle: its manifest byte for byte, its blobs, `bundle.json`. |
+| `npm run client:bundle-check` | Validates `client/` without installing it. |
 
 Snapshots: `.cache/client/` (`blobs/` content-addressed by sha256,
 `snapshots/<id>/manifest.json`, `state.json`); format in `src/clientSnapshot.js`.
@@ -186,13 +191,41 @@ backend behaviour. It is off only when `BACKEND_ENABLED=0`.
 
 ## 4. Running it
 
+### Fresh install and upgrade
+
 ```bash
-npm install
+git clone https://github.com/vibecodeforever/instagram.git && cd instagram
+npm ci                    # the four npm dependencies
+npm run client:setup      # offline: client/ -> .cache/client/, every hash checked, activated
 npm start                 # http://localhost:12000
 ```
 
-Then open `http://localhost:12000/` — the real Instagram client is fetched and
-served at that point.
+`client:setup` reads only `client/` (layout in `client/README.md`): it checks
+`bundle.json` against the manifest and every blob against its sha256, copies
+what `.cache/client/` lacks, and activates the bundled snapshot if no valid
+snapshot is active. It never contacts Instagram (any network attempt fails
+the command), never falls back to fetching, and fails with the reason and the
+fix if the bundle is missing or altered. Running it again changes nothing.
+
+Upgrading to a newer packaged client:
+
+```bash
+git pull
+npm ci
+npm run client:setup -- --activate   # install the new bundled snapshot and serve it
+npm run client:status                # active snapshot, previous ones kept for rollback
+npm run client:rollback              # only if the new one misbehaves
+```
+
+Without `--activate`, a valid snapshot you already serve stays active and the
+bundled one is installed alongside it (`npm run client:activate -- <id>` later).
+
+Producing a new bundle (maintainers): `client:acquire` -> `client:build --
+--acquired <dir>` -> `client:verify -- <id> --browser` -> `client:activate --
+<id>` -> `npm run client:bundle` -> commit `client/`.
+
+Then open `http://localhost:12000/`: the pinned client is served from
+`.cache/client/`; nothing is fetched from Instagram.
 
 Health and diagnostics:
 
