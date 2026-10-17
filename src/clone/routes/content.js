@@ -371,8 +371,10 @@ function register(router, ctx) {
 
   /* -------------------------------- activity ------------------------------ */
 
-  router.get('/api/v1/news/inbox/', requireViewer, (req, res) => {
-    const result = notifications.list(db, req.viewer.id, { limit: 50 });
+  // The genuine activity feed POSTs {max_id, selected_filters}
+  // (PolarisAPIGetInboxData); max_id is the page cursor, filters are not kept.
+  function newsInbox(req, res) {
+    const result = notifications.list(db, req.viewer.id, { limit: 50, cursor: req.params_.max_id || undefined });
     const stories = result.items.map((n) => present.activity(db, n));
     const unread = stories.filter((s) => !s.read);
     return igOk(res, {
@@ -381,7 +383,9 @@ function register(router, ctx) {
       old_stories: stories.filter((s) => s.read),
       continuation_token: result.nextCursor,
     });
-  });
+  }
+  router.get('/api/v1/news/inbox/', requireViewer, newsInbox);
+  router.post('/api/v1/news/inbox/', requireViewer, newsInbox);
   router.post('/api/v1/news/inbox_seen/', requireViewer, (req, res) => {
     notifications.markAllRead(db, req.viewer.id);
     return igOk(res, {});

@@ -300,6 +300,8 @@ test('the original client flows, answered by our backend', async (t) => {
     const kinds = news.body.new_stories.map((s) => s.story_type);
     assert.ok(kinds.includes(60), 'a like notification');
     assert.ok(kinds.includes(101), 'a follow notification');
+    const posted = await alice.post('/api/v1/news/inbox/', { max_id: '', selected_filters: '' });
+    assert.deepStrictEqual(posted.body.new_stories.map((s) => s.story_type), kinds, 'the genuine client POSTs the same request');
   });
 
   await t.test('unknown operations fail loudly and are recorded, never forwarded', async () => {
