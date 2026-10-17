@@ -226,7 +226,7 @@ function createClone({ db, dataDir = '.data', logger = console, env = process.en
     }
     return moduleIndex;
   });
-  const graphql = createGraphql({ db, contracts });
+  const graphql = createGraphql({ db, contracts, media });
   if (config.mailTransport === 'outbox' && env.NODE_ENV === 'production') config.mailTransport = 'disabled';
   const mailer = createMailer({ transport: config.mailTransport, logger });
   const outbox = mailer.outbox;
@@ -370,8 +370,19 @@ function createClone({ db, dataDir = '.data', logger = console, env = process.en
     return res.type('application/x-javascript').send(`for (;;);${JSON.stringify({ __ar: 1, payload: { payloads, sr_payload: {} }, lid: '0' })}`);
   });
 
+  // The change-photo menu (usePolarisGetProfilePicEditSyncProps ->
+  // PolarisEditProfilePicMenu) takes its title and buttons from this answer
+  // and renders nothing without a title. Accounts here have no linked
+  // Facebook/Accounts Center profile, so there are no sync reminders.
   router.get('/api/v1/web/get_profile_pic_props/:username/', (req, res) =>
-    igOk(res, { show_profile_pic_sync_reminders: false, show_change_profile_pic_confirm_dialog: false })
+    igOk(res, {
+      show_profile_pic_sync_reminders: false,
+      show_change_profile_pic_confirm_dialog: false,
+      change_profile_pic_actions_screen_header: 'Change profile photo',
+      change_profile_pic_actions_screen_upload_cta: 'Upload photo',
+      change_profile_pic_actions_screen_remove_cta: 'Remove current photo',
+      change_profile_pic_actions_screen_cancel_cta: 'Cancel',
+    })
   );
 
   // A clone-owned path with no handler: say so explicitly. Forwarding it to

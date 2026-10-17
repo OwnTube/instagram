@@ -117,6 +117,13 @@ function createMediaStore({ db, dir }) {
     return { ...row, url: `${URL_PREFIX}/${row.storage_key}` };
   }
 
+  /** Claim an upload as the owner's profile picture: an avatar, servable to anyone once attached. */
+  function claimAvatar(ownerId, uploadId) {
+    const upload = claimUpload(ownerId, uploadId);
+    db.prepare("UPDATE media SET purpose = 'avatar', attached_at = ? WHERE id = ?").run(nowIso(), upload.id);
+    return upload;
+  }
+
   function markAttached(id) {
     db.prepare('UPDATE media SET attached_at = ? WHERE id = ? AND attached_at IS NULL').run(nowIso(), id);
   }
@@ -145,7 +152,7 @@ function createMediaStore({ db, dir }) {
     res.sendFile(path.join(root, row.storage_key));
   }
 
-  return { save, getById, claimUpload, markAttached, canServe, handler, root };
+  return { save, getById, claimUpload, claimAvatar, markAttached, canServe, handler, root };
 }
 
 module.exports = { createMediaStore, sniff, dimensions, URL_PREFIX, MAX_BYTES };

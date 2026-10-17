@@ -62,6 +62,7 @@ function user(db, row, viewerId = null, { withFriendship = true } = {}) {
     is_verified: false,
     profile_pic_url: avatarOf(row),
     has_anonymous_profile_picture: !(row.avatar_url || row.avatarUrl),
+    has_profile_pic: Boolean(row.avatar_url || row.avatarUrl),
   };
   if (withFriendship && viewerId && viewerId !== row.id) out.friendship_status = friendshipStatus(db, viewerId, row);
   return out;

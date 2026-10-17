@@ -42,7 +42,7 @@ function limitOf(vars, fallback = 12) {
 
 const AUTH_OPERATIONS = new Set(['useCDSWebLoginMutation', 'useCAARegistrationFormSubmitMutation']);
 
-function createGraphql({ db, contracts = null }) {
+function createGraphql({ db, contracts = null, media = null }) {
   const unsupported = new Map();
   // Answered operations by name (counts only, never variables), for health.
   const answered = new Map();
@@ -261,6 +261,25 @@ function createGraphql({ db, contracts = null }) {
     // The post menu's "Add to favorites" / "Remove from favorites"
     // (usePolarisUpdateFeedFavoritesUpdatable: `data` {add, remove, source};
     // the client updates is_feed_favorite itself).
+    // Profile photo (PolarisUserActionSetProfilePic): the photo goes up through
+    // rupload_igphoto first, then this mutation names its upload_id.
+    PolarisUserActionSetProfilePicMutation(vars, ctx) {
+      const viewer = needViewer(ctx);
+      if (!media) throw badRequest('Uploads are not available');
+      if (!vars.upload_id) throw badRequest('upload_id is required');
+      const upload = media.claimAvatar(viewer.id, String(vars.upload_id));
+      db.prepare('UPDATE users SET avatar_url = ?, avatar_media_id = ?, updated_at = ? WHERE id = ?').run(upload.url, upload.id, new Date().toISOString(), viewer.id);
+      const user = users.getById(db, viewer.id);
+      return { xig_web_set_profile_picture: { user: { id: String(user.pk), has_profile_pic: true, profile_pic_url: upload.url, profile_pic_url_hd: upload.url } } };
+    },
+
+    PolarisUserActionRemoveProfilePicMutation(vars, ctx) {
+      const viewer = needViewer(ctx);
+      db.prepare('UPDATE users SET avatar_url = NULL, avatar_media_id = NULL, updated_at = ? WHERE id = ?').run(new Date().toISOString(), viewer.id);
+      const user = users.getById(db, viewer.id);
+      return { xig_remove_profile_picture: { user: { id: String(user.pk), has_profile_pic: false, profile_pic_url: present.DEFAULT_AVATAR, profile_pic_url_hd: present.DEFAULT_AVATAR } } };
+    },
+
     usePolarisUpdateFeedFavoritesUpdatableFavoriteMutation(vars, ctx) {
       updateList(needViewer(ctx), 'favorites', vars.data || {});
       return { xig_update_feed_favorites: { __typename: 'XIGUpdateFeedFavoritesMutationResponse' } };
