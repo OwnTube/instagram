@@ -119,26 +119,40 @@ bootstrap shape); the genuine browser checks run against the real snapshot.
 
 ## Current snapshot (2026-10-17)
 
-Active: `rev1050722040-20261017T153014Z`, revision 1050722040, built from
-acquisition `20261017T152635Z` plus the local stores. Rollback:
-`rev1050701999-20261017T075357Z` (kept verified; `client:rollback` returns to
-it). 15 documents, 39 answers, 8743 assets (8766 unique blobs, 174.2 MB),
-known missing 0, integrity ok, all 4 bundle patches apply. This is the
-snapshot packaged in `client/` (`npm run client:setup`, below).
+Active: `rev1050722040-20261017T170808Z`, revision 1050722040, built from
+acquisition `20261017T170420Z` plus the local stores of the same revision.
+Rollback: `rev1050722040-20261017T153014Z` (kept verified; `client:rollback`
+returns to it). 16 documents, 51 answers, 8758 assets (8794 unique blobs,
+178.4 MB), known missing 0, integrity ok, all 4 bundle patches apply. This is
+the snapshot packaged in `client/` (`npm run client:setup`, below).
 
-Acquisition 20261017T152635Z (anonymous, one bounded pass, provenance in the
-manifest): 3 documents (`/`, `/accounts/emailsignup/`, and the not-found page
-`/no..such..account/`, which answered 200 where a 404 is expected, so the pass
-stopped there and did not store it), 39 bootloader answers and 47 assets, all
-at 200; nothing retried. New against the previous snapshot: the Direct
-"New message" dialog (`IGDOmniPickerDialogRoot.react`) and its search list.
+Acquisition 20261017T170420Z (anonymous, one bounded pass, started because
+twelve lazily loaded modules the client asked for were missing; provenance in
+the manifest): 3 documents (`/`, `/accounts/emailsignup/`, `/accounts/login/`)
+and 51 bootloader answers at 200, all declaring revision 1050722040 (the
+active revision); the pass stopped at the password-reset document (HTTP 403)
+and did not retry. Its asset step was completed with `--assets-for` (15 assets
+from the static host). New answers: the highlight dialog
+(`PolarisCreateAndAddHighlightsModal.react`), the stories overlay
+(`PolarisDesktopStoriesPage.react`), post options
+(`PolarisPostOptionsPopover.next.react`), the share sheet
+(`PolarisShareSheetV3Root.react`, `...ContactSearchRoot.react`,
+`...PostShareBarRoot.react`), the liked-by list
+(`PolarisLikedByListContainer.react`), follow lists
+(`PolarisFollowListModalWrapper.react`), Notes
+(`PolarisInboxTrayComposer.react`), the optimistic Direct thread
+(`IGDOptimisticThreadViewContainer.react`), switch accounts
+(`PolarisSwitchAccountsModal.react`) and the help-centre suggestion dialog
+(`PolarisVenusFlytrapHelpCenterSuggestionDialog.react`). The re-fetched
+answers of the same revision reference one resource file differently from the
+earlier answers (`IqdwOkqrv_M.js` is no longer referenced; its replacement was
+stored by the asset step).
 
-Verification (`client-snapshot.js verify rev1050722040-20261017T153014Z
+Verification (`client-snapshot.js verify rev1050722040-20261017T170808Z
 --browser`, upstream guard on): login 10/10, signup 13/13, feed 18/18, engage
 9/9, create 10/10, profile 10/10; scope complete; then activated. Also on it:
-restart 7/7, Direct 9/9, activity 8/8, search 9/9, stories 8/9 (same tray
-limitation as before), and the New-message search lists local accounts
-(`IGDOmniPickerSearchResultsListQuery`, items carrying `__isShareSheetItem`).
+restart 7/7, Direct 9/9, activity 8/8, search 9/9, stories 8/9 (the tray
+opens a story with a page load, as before).
 
 ### Packaged copy (`client/`)
 
