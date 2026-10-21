@@ -26,6 +26,7 @@ const { createClone, classify } = require('./clone');
 const { personalize, viewerObject } = require('./shell/personalize');
 const { parseAnswer, homeRoute, profileRoute, storiesRoute, activityRoute, directInboxRoute, reelsRoute, postRoute, errorRoute, unavailableRoute } = require('./shell/signedInRoute');
 const { matchPage } = require('./pages/registry');
+const { EMOJI_HOSTS, parseEmojiPath, emojiSvg } = require('./emoji');
 const { createPatcher } = require('./shell/bundlePatches');
 const { openPinnedClient } = require('./pinnedClient');
 const { rewriteHtml, rewriteCss, resolveProxyTarget, ALLOWED_HOSTS, mapUrl } = require('./rewrite');
@@ -134,6 +135,14 @@ const SELF_ONLY_CSP = [
 /* ------------------------------------------------------------------ */
 /* Static client assets: /__ig/<host>/<path>                           */
 /* ------------------------------------------------------------------ */
+
+// Emoji images (src/emoji.js): drawn here, never fetched.
+app.get('/__ig/:host/images/emoji.php/*', (req, res, next) => {
+  const emoji = EMOJI_HOSTS.has(req.params.host) ? parseEmojiPath(req.path.slice(`${config.assetPrefix}/${req.params.host}`.length)) : null;
+  if (!emoji) return next();
+  res.setHeader('cache-control', 'public, max-age=604800, immutable');
+  return res.type('image/svg+xml').send(emojiSvg(emoji));
+});
 
 app.get('/__ig/:host/*', (req, res) => {
   const pathAndQuery = req.originalUrl.slice(`${config.assetPrefix}/${req.params.host}`.length);
