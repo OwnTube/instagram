@@ -250,6 +250,28 @@ test('desktop Reels: PolarisClipsTabDesktopRoot as recorded, when the snapshot h
   assert.deepStrictEqual(s.upstream, []);
 });
 
+test('Explore: PolarisExploreRoot as recorded, its grid requested by the client', async (t) => {
+  const answers = {};
+  for (const m of ['PolarisFeedRoot.react', 'PolarisErrorRoot.entrypoint', 'PolarisErrorRoot.react', 'PolarisExploreRoot.entrypoint', 'PolarisExploreRoot.react']) answers[`${m}|`] = answerAt(100);
+  const s = await startCloneServer({}, { snapshot: { revision: '100', documents: { '/': documentAt(100), '/accounts/emailsignup/': documentAt(100) }, answers } });
+  t.after(() => s.close());
+  const viewer = new Browser(s.base);
+  const me = await viewer.signup(s, { username: 'explore_viewer' });
+  const res = await viewer.get('/explore/', { headers: { accept: 'text/html', 'sec-fetch-site': 'none' } });
+  assert.strictEqual(res.status, 200);
+  const route = [...res.text.matchAll(/<script type="application\/json"[^>]*data-sjs>(.*?)<\/script>/g)].map((m) => JSON.parse(m[1])).flatMap((b) => b.require || []).find((r) => r[0] === 'CometPlatformRootClient' && r[1] === 'initialize')[3][0].initialRouteInfo.route;
+  assert.strictEqual(route.actorID, String(me.pk));
+  assert.deepStrictEqual(route.rootView.entryPoint, { __dr: 'PolarisExploreRoot.entrypoint' });
+  assert.strictEqual(route.polarisRouteConfig.pageID, 'exploreLandingPage');
+  assert.strictEqual(route.canonicalRouteName, 'comet.igweb.PolarisExploreRoute');
+  const preload = route.rootView.props.polaris_preload.explore;
+  assert.deepStrictEqual([preload.request.method, preload.request.url, preload.request.params.query.module], ['GET', '/api/v1/discover/web/explore_grid/', 'explore_popular']);
+  // The request it names is answered locally.
+  const grid = await viewer.get('/api/v1/discover/web/explore_grid/?is_prefetch=false&omit_cover_media=false&module=explore_popular&include_fixed_destinations=true&is_nonpersonalized_explore=false');
+  assert.strictEqual(grid.status, 200);
+  assert.deepStrictEqual(s.upstream, []);
+});
+
 test('signed-in post page: PolarisPostRoot with cr:2882 bound, only when the snapshot holds the desktop post root', async (t) => {
   // PolarisPostRoot.react's answer leaves cr:2882 unbound, as the anonymous answer does.
   const unbound = { define: [['cr:2882', [], { __rc: [null, null] }, -1]], require: [] };

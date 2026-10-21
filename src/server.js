@@ -24,7 +24,7 @@ const backendApp = require('./backend');
 const backendConfig = require('./backend/config');
 const { createClone, classify } = require('./clone');
 const { personalize, viewerObject } = require('./shell/personalize');
-const { parseAnswer, homeRoute, profileRoute, storiesRoute, activityRoute, directInboxRoute, reelsRoute, postRoute, errorRoute, unavailableRoute } = require('./shell/signedInRoute');
+const { parseAnswer, homeRoute, profileRoute, storiesRoute, activityRoute, directInboxRoute, reelsRoute, exploreRoute, postRoute, errorRoute, unavailableRoute } = require('./shell/signedInRoute');
 const { matchPage } = require('./pages/registry');
 const { EMOJI_HOSTS, parseEmojiPath, emojiSvg } = require('./emoji');
 const { createPatcher } = require('./shell/bundlePatches');
@@ -392,6 +392,7 @@ function signedInRouteFor(req, viewer = null) {
   if (page.id === 'direct_inbox') return directInboxRoute();
   if (page.id === 'direct_thread') return /^\d{1,30}$/.test(params.thread_key) ? directInboxRoute(params.thread_key) : errorRoute(req.path);
   if (page.id === 'reels' && !params.shortcode) return reelsRoute();
+  if (page.id === 'explore') return exploreRoute();
   if (!cloneInstance) return unavailable();
   if (page.id === 'reels') {
     const post = cloneInstance.postByCode(params.shortcode, viewer);

@@ -141,7 +141,7 @@ test('the server dispatches every page as the registry says', async (t) => {
   assert.strictEqual((await viewer.get('/no_such_account_x/', { headers: nav })).status, 404);
   assert.strictEqual((await viewer.get('/someone/nonsense/', { headers: nav })).status, 404);
   const health = (await viewer.get('/__loader/health')).body;
-  assert.ok(health.routes.unavailable.explore, JSON.stringify(health.routes.unavailable));
+  assert.ok(health.routes.unavailable.accounts_edit, JSON.stringify(health.routes.unavailable));
   assert.ok(health.routes.unavailable.post, 'the post page is reported unavailable without its desktop root');
   assert.ok(rows.length >= 20, rows.join(', '));
   assert.deepStrictEqual(s.upstream, []);

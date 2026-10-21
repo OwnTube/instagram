@@ -291,6 +291,48 @@ function reelsRoute(shortcode = null, mediaId = null) {
 }
 
 /**
+ * Explore (`/explore/`), as recorded in revision 1051138993: entry point
+ * PolarisExploreRoot.entrypoint, root PolarisExploreRoot.react, page id
+ * exploreLandingPage, canonical route comet.igweb.PolarisExploreRoute,
+ * entity `explore`, route config {footerVariant: 'centered', shellProps:
+ * {isGlypHeaderIcon: false}}. PolarisExploreRootContentRelay.react reads
+ * `polaris_preload.explore` through usePolarisPreloadedGetQuery: the explore
+ * grid request (`GET /api/v1/discover/web/explore_grid/`, module
+ * `explore_popular`, with the recorded query flags). As for the post page,
+ * the spec is not preloaded by the server, so the client issues it itself.
+ */
+function exploreRoute() {
+  return {
+    entryPoint: 'PolarisExploreRoot',
+    root: 'PolarisExploreRoot',
+    answers: ['PolarisExploreRoot.entrypoint', 'PolarisExploreRoot.react'],
+    props: {
+      page_logging: { name: 'exploreLandingPage', params: {} },
+      polaris_preload: {
+        explore: {
+          expose: false,
+          preloaderID: null,
+          request: { method: 'GET', url: '/api/v1/discover/web/explore_grid/', params: { query: { is_prefetch: false, omit_cover_media: false, module: 'explore_popular', include_fixed_destinations: true, is_nonpersonalized_explore: false } } },
+          preloadEnabledOnInit: false,
+          preloadEnabledOnNav: false,
+        },
+      },
+      nonpersonalized: false,
+      explore_body_variant: 'legacy',
+      enable_relay_explore_grid: false,
+      enable_mobile_relay_explore_grid: false,
+    },
+    params: { variant: null },
+    routePath: '/explore/',
+    tracePolicy: 'polaris.exploreLandingPage',
+    pageID: 'exploreLandingPage',
+    routeConfig: { footerVariant: 'centered', shellProps: { isGlypHeaderIcon: false }, pageID: 'exploreLandingPage' },
+    canonicalRouteName: 'comet.igweb.PolarisExploreRoute',
+    entityKeyConfig: { entity_type: { source: 'constant', value: 'explore' } },
+  };
+}
+
+/**
  * A post page (`/p/{shortcode}/`, `/reel/{shortcode}/`):
  * XPolarisPostControllerRouteBuilder `/{permalink_key}/{shortcode}/{?slug}/`
  * with its default params. PolarisPostRoot.entrypoint preloads the "more
@@ -561,4 +603,4 @@ function insertFeedRoot(html, answers, docDefines, toLocal, initTuple, root = FE
   return { html: html.slice(0, at) + parts.join('') + html.slice(at), inserted: tags.length, missing };
 }
 
-module.exports = { emptySSRMount, isLoginHomeInitialize, toSignedInHome, toSignedInRoute, homeRoute, profileRoute, storiesRoute, activityRoute, directInboxRoute, reelsRoute, mobileReelsRoute, postRoute, errorRoute, unavailableRoute, isSSRInit, disableAnonymousSSR, insertFeedRoot, parseAnswer, FEED_ROOT, LOGGED_OUT_ONLY, NO_LOCAL_SERVICE };
+module.exports = { emptySSRMount, isLoginHomeInitialize, toSignedInHome, toSignedInRoute, homeRoute, profileRoute, storiesRoute, activityRoute, directInboxRoute, reelsRoute, mobileReelsRoute, exploreRoute, postRoute, errorRoute, unavailableRoute, isSSRInit, disableAnonymousSSR, insertFeedRoot, parseAnswer, FEED_ROOT, LOGGED_OUT_ONLY, NO_LOCAL_SERVICE };

@@ -61,7 +61,7 @@ const PAGES = [
     patterns: ['/explore/'],
     builder: 'XPolarisExploreControllerRouteBuilder',
     access: 'signed-in',
-    served: null,
+    served: 'exploreRoute',
     har: { entryPoint: 'PolarisExploreRoot', root: 'PolarisExploreRoot', pageID: 'exploreLandingPage', tracePolicy: 'polaris.exploreLandingPage', params: ['variant'] },
     data: 'local (GET /api/v1/discover/web/explore_grid/, src/clone/routes/content.js)',
     next: 'acquire PolarisExploreRoot.entrypoint and PolarisExploreRoot.react at the snapshot revision',
@@ -570,6 +570,7 @@ const SAMPLE_SPECS = {
   activityRoute: (r) => r.activityRoute(),
   directInboxRoute: (r) => r.directInboxRoute(),
   reelsRoute: (r) => r.reelsRoute(),
+  exploreRoute: (r) => r.exploreRoute(),
   postRoute: (r) => r.postRoute({ pk: '0', authorPk: '0', code: 'x' }),
 };
 
