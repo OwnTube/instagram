@@ -429,6 +429,29 @@ function createHomeOperations(db) {
     }
   }
 
+  /**
+   * The Reels connection (`xdt_api__v1__clips__home__connection_v2`): the
+   * reels the viewer may see, newest first (no recommendation ranking here);
+   * edges are XDTClipsItemDict nodes holding the media. A reel link asks for
+   * its reel through `data.chaining_media_id` (shortcode or media id): it is
+   * never repeated in the list, and with `linkedFirst` it opens the first page.
+   */
+  function clipsConnection(vars, viewer, { linkedFirst }) {
+    const first = Math.min(Math.max(Number(vars.first) || 10, 1), 30);
+    const chaining = vars.data && vars.data.chaining_media_id != null ? linkedClip(String(vars.data.chaining_media_id), viewer) : null;
+    const page = posts.listClips(db, viewer.id, { limit: first, cursor: vars.after || null });
+    const rest = chaining ? page.items.filter((p) => p.id !== chaining.id) : page.items;
+    const items = chaining && linkedFirst && !vars.after ? [chaining, ...rest].slice(0, first) : rest;
+    const edges = items.map((p) => ({ cursor: p.id, node: { __typename: 'XDTClipsItemDict', media: present.media(db, p, viewer.id) } }));
+    return {
+      xdt_api__v1__clips__home__connection_v2: {
+        edges,
+        gating: null,
+        page_info: { end_cursor: page.nextCursor, has_next_page: Boolean(page.nextCursor), has_previous_page: false, start_cursor: edges[0]?.cursor ?? null },
+      },
+    };
+  }
+
   const operations = {
     PolarisStoriesV3TrayContainerQuery(vars, ctx) {
       const viewer = viewerOf(ctx);
@@ -744,38 +767,24 @@ function createHomeOperations(db) {
       return { xig_direct_mark_read_id_validation: Boolean(found) };
     },
 
-    // The Reels tab's clips: the reels (video posts) the viewer may see,
-    // newest first (no recommendation ranking here); edges are
-    // XDTClipsItemDict nodes holding the media. A reel link (/reels/<code>/)
-    // asks for that reel first: `data.chaining_media_id` is the URL's
-    // shortcode (or the route's media id), and the first page starts with it
-    // when the viewer may see it.
+    // The mobile Reels viewer's clips (clipsConnection). It has no seed
+    // query, so a linked reel opens its first page.
     PolarisClipsHomeRootQuery(vars, ctx) {
-      const viewer = viewerOf(ctx);
-      const first = Math.min(Math.max(Number(vars.first) || 10, 1), 30);
-      const chaining = vars.data && vars.data.chaining_media_id != null ? linkedClip(String(vars.data.chaining_media_id), viewer) : null;
-      const page = posts.listClips(db, viewer.id, { limit: first, cursor: vars.after || null });
-      // The linked reel opens the first page and is not repeated on later ones.
-      const rest = chaining ? page.items.filter((p) => p.id !== chaining.id) : page.items;
-      const items = chaining && !vars.after ? [chaining, ...rest].slice(0, first) : rest;
-      const edges = items.map((p) => ({ cursor: p.id, node: { __typename: 'XDTClipsItemDict', media: present.media(db, p, viewer.id) } }));
-      return {
-        xdt_api__v1__clips__home__connection_v2: {
-          edges,
-          gating: null,
-          page_info: { end_cursor: page.nextCursor, has_next_page: Boolean(page.nextCursor), has_previous_page: false, start_cursor: edges[0]?.cursor ?? null },
-        },
-      };
+      return clipsConnection(vars, viewerOf(ctx), { linkedFirst: true });
     },
 
     // The desktop Reels page (PolarisClipsTabDesktopContainer.react): its
     // page and pagination queries select the same connection with the same
-    // variables (after, before, data, first, last).
+    // variables (after, before, data, first, last). A linked reel is not in
+    // it: the page shows it from its seed query, and drops from the list
+    // whatever duplicates the seed (filterPolarisClipsDesktopDuplicateEdges,
+    // which, given a duplicate, returns a new list on every render and makes
+    // the container's list effect loop).
     PolarisClipsTabDesktopContainerQuery(vars, ctx) {
-      return operations.PolarisClipsHomeRootQuery(vars, ctx);
+      return clipsConnection(vars, viewerOf(ctx), { linkedFirst: false });
     },
     PolarisClipsTabDesktopPaginationQuery(vars, ctx) {
-      return operations.PolarisClipsHomeRootQuery(vars, ctx);
+      return clipsConnection(vars, viewerOf(ctx), { linkedFirst: false });
     },
     // Its seed query: the linked reel by media id (`xig_fetch_media(id:)`),
     // null when the viewer may not see it.

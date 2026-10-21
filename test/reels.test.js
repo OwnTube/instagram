@@ -127,12 +127,14 @@ test('reels', async (t) => {
     assert.deepStrictEqual(codes(tab), all.slice(0, 1));
     const end = tab.body.data.xdt_api__v1__clips__home__connection_v2.page_info.end_cursor;
     assert.deepStrictEqual(codes(await gql(bob, 'PolarisClipsTabDesktopPaginationQuery', { first: 10, after: end, data: {} })), all.slice(1));
-    // A linked reel is first, and later pages do not repeat it.
+    // A linked reel is not in the desktop list on any page: the page shows it
+    // from its seed query, and a duplicate in the list makes the client's list effect loop.
     const linked = all[all.length - 1];
-    const first = await gql(bob, 'PolarisClipsTabDesktopContainerQuery', { first: 1, data: { chaining_media_id: linked } });
-    assert.deepStrictEqual(codes(first), [linked]);
-    const next = await gql(bob, 'PolarisClipsTabDesktopPaginationQuery', { first: 10, after: first.body.data.xdt_api__v1__clips__home__connection_v2.page_info.end_cursor, data: { chaining_media_id: linked } });
-    assert.ok(!codes(next).includes(linked), 'not repeated');
+    const first = await gql(bob, 'PolarisClipsTabDesktopContainerQuery', { first: 10, data: { chaining_media_id: linked, should_refetch_chaining_media: true } });
+    assert.deepStrictEqual(codes(first), all.filter((c) => c !== linked));
+    const firstOne = await gql(bob, 'PolarisClipsTabDesktopContainerQuery', { first: 1, data: { chaining_media_id: all[0] } });
+    const next = await gql(bob, 'PolarisClipsTabDesktopPaginationQuery', { first: 10, after: firstOne.body.data.xdt_api__v1__clips__home__connection_v2.page_info.end_cursor, data: { chaining_media_id: all[0] } });
+    assert.ok(!codes(firstOne).includes(all[0]) && !codes(next).includes(all[0]), 'never listed');
     const seed = await gql(bob, 'PolarisClipsTabDesktopContainerSeedMediaQuery', { mediaId: reel.pk });
     assert.strictEqual(seed.body.data.xig_fetch_media.code, reel.code);
     assert.strictEqual(seed.body.data.xig_fetch_media.media_type, 2);
