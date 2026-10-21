@@ -68,6 +68,29 @@ These are pending tasks; this review does not mark any page fixed.
   with evidence instead of inventing a web page.
 
 - [ ] **2. Add a local HAR/capture import path and finish the capture.**
+  Import path done: `node scripts/client-import-har.js <file.har>` takes only
+  static bundles (URL-keyed; a stored URL is never overwritten; differing
+  bytes are reported), bootloader answers (keyed by `modules|nb_modules`
+  only) and navigation documents, staged per revision under
+  `.cache/acquired/har-<stamp>-rev<rev>/`. It never reads API responses,
+  headers or cookies, and never copies the HAR. `client-snapshot.js build
+  --acquired A,B` combines staging of one revision and refuses mixed
+  revisions (`test/client-import.test.js`).
+
+  Supplied HAR imported: 44 new static bundles, 13 already stored with
+  identical bytes, 9 answers of revision 1051138993, no documents (the build
+  refuses it alone).
+
+  Capture status, 2026-10-21: one anonymous pass at 14:52Z found Instagram
+  serving revision 1051138993, the HAR's own revision. It staged `/`, then
+  `/accounts/login/` answered 429 as the pass's 2nd request; the pass sent
+  nothing more. Acquisition now fetches `/accounts/login/` and
+  `/accounts/password/reset/` (throttled or refused in earlier passes) after
+  the answers and assets, so a 429 there no longer costs the rest.
+
+  Next: after the cooldown, one pass for revision 1051138993 (or whatever
+  revision is current then). Then build it with the HAR staging if the
+  revisions match.
   Import actual HTML, JavaScript, CSS and bootloader response bodies, decoding
   HAR base64 where needed, into a staged candidate with provenance and hashes.
   The existing `scripts/capture-authenticated.js` produces response shapes;

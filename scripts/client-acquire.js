@@ -7,9 +7,10 @@
  * src/upstream.js; a page load cannot start it.
  *
  * One bounded, anonymous pass (no cookies of any account, no login):
- *   1. the navigation documents (/, /accounts/emailsignup/, /accounts/login/,
- *      /accounts/password/reset/) - all must be 200 HTML of the SAME revision,
- *      else the pass stops - and the not-found page (NOT_FOUND_PATH, 404);
+ *   1. the navigation documents (/ and the registry's anonymous pages) - all
+ *      must be 200 HTML of the SAME revision, else the pass stops - and the
+ *      not-found page (NOT_FOUND_PATH, 404); those found throttled before
+ *      (THROTTLED_DOCUMENTS) and the not-found page come last, after 2 and 3;
  *   2. the bootloader-endpoint answers for the modules the client needs (the
  *      registry's page roots, src/pages/registry.js, and the lazily loaded
  *      modules already known),
@@ -76,6 +77,11 @@ const DOCUMENTS = ['/', ...PAGES.filter((p) => p.access === 'anonymous').map((p)
 // account. Usernames cannot contain "..", so this path never names an account.
 // It is expected to answer 404 (anything else is recorded and not staged).
 const NOT_FOUND_PATH = '/no..such..account/';
+// Documents that answered 429 or 403 in earlier passes (provenance of the
+// passes under .cache/acquired/: /accounts/login/ 429 in 5 of 10 passes, as
+// early as a pass's 2nd request; /accounts/password/reset/ 403; the not-found
+// page 429 once). They are fetched last, after the answers and assets.
+const THROTTLED_DOCUMENTS = new Set(['/accounts/login/', '/accounts/password/reset/']);
 const ACQUIRED_DIR = path.join(ROOT, '.cache', 'acquired');
 // The longest cooldown src/upstream.js ever applies; used when a 429 carried
 // no Retry-After (or its pass recorded none).
@@ -345,6 +351,13 @@ async function main() {
   try {
     if (!(await document(DOCUMENTS[0]))) return 1;
     const rev = provenance.revision;
+    // The documents the browser checks need, then every answer, then the
+    // documents earlier passes found throttled (THROTTLED_DOCUMENTS): a 429
+    // on one of those comes last, after everything else is staged.
+    for (const p of DOCUMENTS.slice(1).filter((d) => !THROTTLED_DOCUMENTS.has(d))) {
+      if (skipped.has(p)) continue;
+      if (!(await document(p))) return 1;
+    }
     for (const s of sets) {
       const q = `${s.modules ? `modules=${encodeURIComponent(s.modules)}` : ''}${s.nbModules ? `${s.modules ? '&' : ''}nb_modules=${encodeURIComponent(s.nbModules)}` : ''}`;
       const res = await get('answer', `${ORIGIN}/ajax/bootloader-endpoint/?${q}&__d=www&__a=1&__rev=${rev}`, { accept: '*/*' });
@@ -360,12 +373,12 @@ async function main() {
       }
       await sleep(PAUSE_MS);
     }
-    for (const p of DOCUMENTS.slice(1)) {
+    if (!(await assets())) return 1;
+    for (const p of DOCUMENTS.slice(1).filter((d) => THROTTLED_DOCUMENTS.has(d))) {
       if (skipped.has(p)) continue;
       if (!(await document(p))) return 1;
     }
     if (!skipped.has(NOT_FOUND_PATH) && !(await document(NOT_FOUND_PATH, 404))) return 1;
-    if (!(await assets())) return 1;
     provenance.complete = true;
     return 0;
   } finally {

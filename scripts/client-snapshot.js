@@ -6,7 +6,7 @@
  * Nothing here runs on a page load; every change of the served client is one of
  * these deliberate commands.
  *
- *   node scripts/client-snapshot.js build [--revision N] [--acquired DIR]
+ *   node scripts/client-snapshot.js build [--revision N] [--acquired DIR[,DIR...]]
  *                                                       candidate from the local stores
  *                                                       (and an acquisition's staging dir)
  *   node scripts/client-snapshot.js verify <id> [--browser] integrity (+ genuine browser checks)
@@ -73,23 +73,28 @@ function storeEntries(dir) {
 }
 
 /**
- * Build a candidate from the stores. `acquired` names an acquisition staging
- * directory (scripts/client-acquire.js): its documents and answers are read
- * first, its revision is the snapshot's, and its provenance is recorded.
+ * Build a candidate from the stores. `acquired` names one acquisition staging
+ * directory (scripts/client-acquire.js, scripts/client-import-har.js) or a
+ * list of them: their documents and answers are read first, in order, and
+ * their provenance is recorded. They must all be of one revision, which is
+ * the snapshot's; staging of different revisions is refused, never combined.
  */
 function build({ revision, dir = CLIENT_DIR, acquired = null } = {}) {
   const store = openSnapshotStore(dir);
   const rejected = [];
   const knownMissing = [];
-  let provenance = null;
-  if (acquired) {
-    provenance = JSON.parse(fs.readFileSync(path.join(acquired, 'provenance.json'), 'utf8'));
-    if (!provenance.revision) throw new Error(`acquisition ${acquired} found no revision (${provenance.stoppedReason || 'incomplete'})`);
-    if (revision && String(revision) !== String(provenance.revision)) throw new Error(`--revision ${revision} but the acquisition is revision ${provenance.revision}`);
-    revision = provenance.revision;
+  const staged = acquired ? (Array.isArray(acquired) ? acquired : [acquired]) : [];
+  const provenances = [];
+  for (const a of staged) {
+    const p = JSON.parse(fs.readFileSync(path.join(a, 'provenance.json'), 'utf8'));
+    if (!p.revision) throw new Error(`acquisition ${a} found no revision (${p.stoppedReason || 'incomplete'})`);
+    if (revision && String(revision) !== String(p.revision)) throw new Error(`${path.basename(a)} is revision ${p.revision}, not ${revision}: staging of different revisions is not combined`);
+    revision = p.revision;
+    provenances.push({ dir: path.basename(a), ...p });
   }
-  const docDirs = acquired ? [path.join(acquired, 'documents'), DOC_DIR] : [DOC_DIR];
-  const bootDirs = acquired ? [path.join(acquired, 'bootloader'), BOOT_DIR] : [BOOT_DIR];
+  const provenance = provenances.length === 0 ? null : provenances.length === 1 ? provenances[0] : provenances;
+  const docDirs = [...staged.map((a) => path.join(a, 'documents')), DOC_DIR];
+  const bootDirs = [...staged.map((a) => path.join(a, 'bootloader')), BOOT_DIR];
   const firstByKey = (entries) => [...new Map(entries.reverse().map((e) => [e.key, e])).values()];
   const docs = firstByKey(docDirs.flatMap(storeEntries)).filter((e) => e.key.startsWith(`doc:${ORIGIN}:`) && fs.existsSync(e.file));
   const home = docs.find((e) => e.key === `doc:${ORIGIN}:nav:/`);
@@ -177,7 +182,7 @@ function build({ revision, dir = CLIENT_DIR, acquired = null } = {}) {
     revision: rev,
     createdAt: new Date().toISOString(),
     status: 'candidate',
-    source: acquired ? `acquired:${path.basename(acquired)} + local-stores` : 'local-stores',
+    source: staged.length ? `acquired:${staged.map((a) => path.basename(a)).join('+')} + local-stores` : 'local-stores',
     provenance,
     patchSet: sha256(Buffer.from(JSON.stringify(PATCHES))).slice(0, 16),
     documents,
@@ -321,7 +326,8 @@ function main() {
     return i >= 0 ? process.argv[i + 1] : undefined;
   };
   if (cmd === 'build') {
-    const m = build({ revision: value('--revision'), acquired: value('--acquired') || null });
+    // --acquired A[,B...]: staging directories of one revision, read in that order.
+    const m = build({ revision: value('--revision'), acquired: value('--acquired') ? value('--acquired').split(',') : null });
     console.log(summary(m));
     const integrity = m.validation[m.validation.length - 1];
     console.log(`  integrity: ${integrity.ok ? 'ok' : `FAILED: ${integrity.errors.slice(0, 5).join('; ')}`}`);
