@@ -10,7 +10,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
 const { personalize, RUNTIME_TAG } = require('../src/shell/personalize');
-const { routeKind } = require('../src/shell/templates');
+const { matchPage } = require('../src/pages/registry');
 const { createPatcher } = require('../src/shell/bundlePatches');
 const { editJsonBlocks } = require('../src/shell/sjs');
 
@@ -102,21 +102,37 @@ test('personalize', async (t) => {
   });
 });
 
-test('routeKind', () => {
+test('matchPage: which registered page a path is', () => {
   const cases = {
     '/': 'home',
     '/explore/': 'explore',
-    '/direct/inbox/': 'direct',
+    '/direct/inbox/': 'direct_inbox',
+    '/direct/t/123/': 'direct_thread',
     '/accounts/edit/': 'accounts_edit',
     '/p/AbC_-1/': 'post',
+    '/reel/AbC_-1/': 'post',
     '/stories/someone/': 'stories',
+    '/stories/someone/3456/': 'stories',
+    '/stories/highlights/987/': 'stories_highlight',
     '/someone/': 'profile',
     '/some.one_2': 'profile',
-    '/accounts/login/': null,
+    '/someone/reels/': 'profile_reels',
+    '/someone/tagged/': 'profile_tagged',
+    '/someone/saved/': 'profile_saved',
+    '/reels/': 'reels',
+    '/reels/AbC1/': 'reels',
+    '/notifications/': 'notifications',
+    '/accounts/activity/': 'notifications',
+    '/accounts/login/': 'login',
+    '/explore/../': null,
     '/static/x.js': null,
     '/__clone/health': null,
+    '/accounts/': null,
+    '/someone/nonsense/': null,
   };
-  for (const [path, kind] of Object.entries(cases)) assert.strictEqual(routeKind(path), kind, path);
+  for (const [path, id] of Object.entries(cases)) assert.strictEqual(matchPage(path)?.page.id ?? null, id, path);
+  assert.deepStrictEqual(matchPage('/stories/someone/3456/').params, { username: 'someone', initial_media_id: '3456' });
+  assert.strictEqual(matchPage('/someone/reels/').params.tab, 'reels');
 });
 
 test('bundle patcher edits only the named module', () => {

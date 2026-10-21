@@ -11,7 +11,8 @@
  *      /accounts/password/reset/) - all must be 200 HTML of the SAME revision,
  *      else the pass stops - and the not-found page (NOT_FOUND_PATH, 404);
  *   2. the bootloader-endpoint answers for the modules the client needs (the
- *      signed-in routes' roots and the lazily loaded modules already known),
+ *      registry's page roots, src/pages/registry.js, and the lazily loaded
+ *      modules already known),
  *      each asked for that revision; an answer declaring another revision is
  *      refused, never kept;
  *   3. the public static assets those documents and answers reference that the
@@ -62,14 +63,15 @@ const { createAssetStore } = require('../src/assetStore');
 const { fetchUpstream, UpstreamError } = require('../src/upstream');
 const { answerRevision, revisionOfText, openSnapshotStore } = require('../src/clientSnapshot');
 const { referencesFrom, storedKeys } = require('./asset-cache');
-const { ROUTES } = require('./client-snapshot');
+const { acquisitionModules, PAGES } = require('../src/pages/registry');
 
 const ORIGIN = 'https://www.instagram.com';
 const BOOT_DIR = process.env.BOOTLOADER_CACHE_DIR || '.cache/bootloader';
 const ASSET_DIR = process.env.ASSET_CACHE_DIR || '.cache/assets';
 // Public anonymous pages. A pass fetches all of them at one revision; a page
 // cannot be added to an existing snapshot later (it would be another revision).
-const DOCUMENTS = ['/', '/accounts/emailsignup/', '/accounts/login/', '/accounts/password/reset/'];
+// The root document (every signed-in page renders from it) and the registry's anonymous pages.
+const DOCUMENTS = ['/', ...PAGES.filter((p) => p.access === 'anonymous').map((p) => p.sample())];
 // Instagram's own "page not available" document, for profile URLs naming no
 // account. Usernames cannot contain "..", so this path never names an account.
 // It is expected to answer 404 (anything else is recorded and not staged).
@@ -102,7 +104,8 @@ function option(name, fallback) {
  */
 function moduleSets() {
   const sets = new Map();
-  for (const spec of Object.values(ROUTES)) for (const a of spec.answers) sets.set(`${a}|`, { modules: a, nbModules: '' });
+  // Every page of the registry: its served route's answers and its recorded signed-in root.
+  for (const a of acquisitionModules()) sets.set(`${a}|`, { modules: a, nbModules: '' });
   try {
     const store = openSnapshotStore(path.join(ROOT, '.cache', 'client'));
     const active = store.readState().active;

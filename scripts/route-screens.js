@@ -2,7 +2,7 @@
 'use strict';
 
 /**
- * Screenshots of the backlog routes as a signed-in local account sees them in
+ * Screenshots of every page of the page registry (src/pages/registry.js) as a signed-in local account sees them in
  * the GENUINE client, strictly offline (the pinned snapshot only; upstream
  * guard on). Complements scripts/route-audit.js, which only reports what the
  * server answers: this renders each page in headless Chromium and records,
@@ -26,6 +26,7 @@ const { DatabaseSync } = require('node:sqlite');
 const { launchChromium, openSession, captureScreenshot, watchExternal } = require('./lib/browser');
 const { sunsetPng, evaluate, sleep } = require('./lib/scenario');
 const { Browser } = require('../test/clone-helpers');
+const { PAGES } = require('../src/pages/registry');
 
 const ROOT = path.join(__dirname, '..');
 const SCRATCH = path.join(ROOT, '.scratch', 'route-screens');
@@ -66,11 +67,10 @@ async function main() {
     const code = db.prepare('SELECT p.code FROM posts p JOIN users u ON u.id = p.author_id WHERE u.username_ci = ?').get(b.username).code;
     db.close();
 
-    const routes = [
-      '/', `/${b.username}/`, `/p/${code}/`, `/stories/${b.username}/`, '/no..such..account/', '/no_such_user_here/',
-      '/explore/', '/reels/', '/direct/inbox/', '/notifications/', '/accounts/activity/', '/accounts/login/', '/accounts/password/reset/',
-      '/accounts/emailsignup/', '/accounts/edit/', '/create/select/',
-    ];
+    const thread = await A.post('/api/v1/direct_v2/threads/broadcast/text/', { recipient_users: JSON.stringify([[String(b.pk)]]), text: 'route screens', client_context: `screens-${tag}` });
+    // Every page of the registry with a sample URL, then two URLs that name nothing.
+    const fixtures = { username: b.username, postCode: code, storyOwner: b.username, threadId: String(thread.body.payload.thread_id) };
+    const routes = [...PAGES.map((p) => p.sample && p.sample(fixtures)).filter(Boolean), '/no..such..account/', '/no_such_user_here/'];
     session = await openSession(browserWsUrl);
     watchExternal(session, base);
     await session.cdp.send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false });

@@ -36,7 +36,7 @@ const { spawnSync } = require('node:child_process');
 const ROOT = path.join(__dirname, '..');
 const { openSnapshotStore, answerRevision, revisionOfText, sha256 } = require('../src/clientSnapshot');
 const { referencesFrom, storedKeys } = require('./asset-cache');
-const { homeRoute, profileRoute } = require('../src/shell/signedInRoute');
+const pages = require('../src/pages/registry');
 const { createPatcher, PATCHES } = require('../src/shell/bundlePatches');
 
 const CLIENT_DIR = process.env.CLIENT_DIR || '.cache/client';
@@ -45,10 +45,10 @@ const BOOT_DIR = process.env.BOOTLOADER_CACHE_DIR || '.cache/bootloader';
 const ORIGIN = 'https://www.instagram.com';
 
 /** The routes a snapshot can claim, with the answers each needs. */
-const ROUTES = {
-  home: homeRoute(),
-  profile: profileRoute({ pk: '0', display_name: null }),
-};
+// From the page registry (src/pages/registry.js): every page this server serves signed in.
+const ROUTES = Object.fromEntries(
+  pages.PAGES.filter((p) => p.served).map((p) => [p.id, { root: p.served, answers: pages.servedAnswers(p) }]),
+);
 /**
  * Browser checks (scripts/genuine-*-check.js). A snapshot becomes verified only
  * if every core check passes; the others are run and recorded as the
@@ -161,6 +161,8 @@ function build({ revision, dir = CLIENT_DIR, acquired = null } = {}) {
     routes[name] = { root: spec.root, answers: spec.answers, supported: missing.length === 0, missing };
     for (const a of missing) knownMissing.push({ kind: 'answer', key: `${a}|`, reason: `needed by the ${name} route; no answer of revision ${rev}` });
   }
+  // Every registered page, served or not: what it needs and what is still missing.
+  const pageCoverage = pages.coverage({ hasAnswer: (a) => Boolean(answers[`${a}|`]), hasDocument: (p) => Boolean(documents[p]) });
 
   // Bundle patches over the snapshot's scripts (applied when served).
   const patcher = createPatcher();
@@ -182,6 +184,7 @@ function build({ revision, dir = CLIENT_DIR, acquired = null } = {}) {
     answers,
     assets,
     routes,
+    pages: pageCoverage,
     knownMissing,
     rejected,
     patches,
@@ -199,6 +202,7 @@ function summary(m) {
     `snapshot ${m.id}  revision ${m.revision}  status ${m.status}`,
     `  documents ${Object.keys(m.documents).length}, answers ${Object.keys(m.answers).length}, assets ${Object.keys(m.assets).length}`,
     `  routes ${routes}`,
+    m.pages ? `  pages ${m.pages.filter((p) => p.status === 'served').length} served, ${m.pages.filter((p) => p.status === 'document').length} anonymous documents, ${m.pages.filter((p) => p.status === 'missing-document').length} missing documents, ${m.pages.filter((p) => p.status === 'missing-answers').length} missing answers, ${m.pages.filter((p) => p.status === 'not-served').length} not served: ${m.pages.filter((p) => !['served', 'document'].includes(p.status)).map((p) => p.id).join(',')}` : '  pages not recorded (built before the page registry)',
     `  patches ${m.patches.map((p) => `${p.id}:${p.applied ? 'applies' : 'MISSED'}`).join(' ')}`,
     `  known missing ${m.knownMissing.length}${m.knownMissing.length ? `: ${m.knownMissing.slice(0, 6).map((x) => `${x.kind} ${x.key}`).join('; ')}` : ''}`,
     `  rejected ${m.rejected.length}${m.rejected.length ? `: ${m.rejected.map((x) => `${x.kind} ${x.key} (${x.reason})`).join('; ')}` : ''}`,

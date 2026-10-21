@@ -10,8 +10,10 @@
  *  - an anonymous visitor still gets the page's own server render, unless
  *    their window (the `wd` cookie) is narrower than the render's layout;
  *  - a route whose answers the snapshot does not hold (here the profile) is
- *    served as the page's own route and reported in diagnostics; nothing is
- *    fetched to fill it, and no answer of another revision is used;
+ *    answered 501 as not available (the client's error route when the
+ *    snapshot has it), never as the anonymous page, and reported in
+ *    diagnostics; nothing is fetched to fill it, and no answer of another
+ *    revision is used;
  *  - SHELL_SIGNED_IN_HOME=0 opts out.
  */
 
@@ -79,9 +81,12 @@ test('signed-in route: default, no login markup, pinned answers only', async (t)
   });
 
   await t.test('a route the snapshot cannot answer is reported, not fetched or mixed', async () => {
-    const html = await get(viewer, '/route_viewer/');
-    assert.match(html, /"consistency":\{"rev":100\}/, 'the pinned revision only');
-    assert.ok(!html.includes('PolarisProfileRoot'), 'no profile route without its pinned answers');
+    const res = await viewer.get('/route_viewer/', { headers: { accept: 'text/html', 'sec-fetch-site': 'none' } });
+    // Not the anonymous page, and (this snapshot has no error route either) a plain explanation.
+    assert.strictEqual(res.status, 501);
+    assert.match(res.text, /not available on this server: answers PolarisProfilePostsTabRoot\.entrypoint, PolarisProfileRoot\.react not in snapshot revision 100/);
+    assert.ok(!/Log into Instagram|PolarisProfileRoot\.entrypoint/.test(res.text), 'neither the login page nor a profile route without its pinned answers');
+    assert.strictEqual(res.headers.get('x-clone-page'), 'profile');
     const h = await health();
     assert.ok(h.routes.unsupported >= 1);
     assert.ok(
@@ -239,15 +244,17 @@ test('signed-in post page: PolarisPostRoot with cr:2882 bound, only when the sna
     assert.deepStrictEqual(s.upstream, []);
   });
 
-  await t.test('without it (the current snapshot): the page keeps its own route and the gap is reported', async () => {
+  await t.test('without it (the current snapshot): the client error route, HTTP 501, and the gap is reported', async () => {
     const s = await startCloneServer({}, { snapshot: { revision: '100', documents: { '/': documentAt(100) }, answers } });
     t.after(() => s.close());
     const author = new Browser(s.base);
     await author.signup(s, { username: 'post_author2' });
     const media = await post(s, author);
     const res = await get(author, `/p/${media.code}/`);
-    assert.strictEqual(res.status, 200);
-    assert.strictEqual(initialize(res.text).actorID, '0', 'not switched');
+    assert.strictEqual(res.status, 501);
+    assert.deepStrictEqual(initialize(res.text).rootView.entryPoint, { __dr: 'PolarisErrorRoot.entrypoint' }, 'the client error page, not the anonymous page');
+    assert.notStrictEqual(initialize(res.text).actorID, '0');
+    assert.match(res.headers.get('x-clone-page-unavailable'), /PolarisDesktopPostRoot\.react not in snapshot revision 100/);
     const health = await author.get('/__loader/health');
     assert.ok(health.body.client.missingRequests.some((m) => m.kind === 'route' && m.key === 'PolarisPostRoot'), JSON.stringify(health.body.client.missingRequests));
   });

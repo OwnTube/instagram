@@ -24,8 +24,8 @@ const backendApp = require('./backend');
 const backendConfig = require('./backend/config');
 const { createClone, classify } = require('./clone');
 const { personalize, viewerObject } = require('./shell/personalize');
-const { parseAnswer, homeRoute, profileRoute, storiesRoute, activityRoute, directInboxRoute, reelsRoute, postRoute, errorRoute } = require('./shell/signedInRoute');
-const { routeKind } = require('./shell/templates');
+const { parseAnswer, homeRoute, profileRoute, storiesRoute, activityRoute, directInboxRoute, reelsRoute, postRoute, errorRoute, unavailableRoute } = require('./shell/signedInRoute');
+const { matchPage } = require('./pages/registry');
 const { createPatcher } = require('./shell/bundlePatches');
 const { openPinnedClient } = require('./pinnedClient');
 const { rewriteHtml, rewriteCss, resolveProxyTarget, ALLOWED_HOSTS, mapUrl } = require('./rewrite');
@@ -222,7 +222,7 @@ function routeAnswers(html, modules) {
 
 // Which revision each signed-in route root was last served at, and how often a
 // route could not be served signed in (its answers are not in the snapshot).
-const routeState = { served: {}, unsupported: 0 };
+const routeState = { served: {}, unsupported: 0, unavailable: {} };
 
 function routeWithAnswers(route, html) {
   const answers = routeAnswers(html, route.answers);
@@ -347,52 +347,54 @@ function markPrivate(res) {
 }
 
 /**
- * The snapshot document for a request. Profiles, posts, stories and DM threads
- * carry clone identifiers in their URL; they all render from the same
- * route-independent app shell, so the root (or the inbox) document is used.
+ * The snapshot document for a request (src/pages/registry.js decides which
+ * page a path is). A signed-in viewer's app pages all render from the
+ * route-independent app shell, the root document. Signed out, profiles,
+ * posts, stories and reels links get the anonymous root page (the client's
+ * logged-out view of them), a thread link the inbox document, and any other
+ * path its own document, if the snapshot has one.
  */
 function canonicalDocPath(req) {
-  const kind = routeKind(req.path);
-  if (kind === 'profile' || kind === 'post' || kind === 'stories') return '/';
-  // The activity feed is a signed-in route only; with no viewer the path keeps
-  // its own (unacquired) document rather than the anonymous home page.
-  if (kind === 'activity' && cloneInstance && cloneInstance.viewerFor(req)) return '/';
-  if (/^\/(direct\/inbox|reels)\/?$/.test(req.path) && cloneInstance && cloneInstance.viewerFor(req)) return '/';
-  if (/^\/direct\/(t|thread)\//.test(req.path)) return cloneInstance && cloneInstance.viewerFor(req) ? '/' : '/direct/inbox/';
-  if (/^\/(reel|reels|tv)\/[A-Za-z0-9_-]+/.test(req.path)) return '/';
+  const match = matchPage(req.path);
+  if (!match || match.page.access !== 'signed-in') return req.originalUrl;
+  if (cloneInstance && cloneInstance.viewerFor(req)) return '/';
+  const id = match.page.id;
+  if (id === 'post' || id === 'stories' || id.startsWith('profile') || (id === 'reels' && match.params.shortcode)) return '/';
+  if (id === 'direct_thread') return '/direct/inbox/';
   return req.originalUrl;
 }
 
 /**
- * The signed-in route for a document request (src/shell/signedInRoute.js):
- * the home feed; an existing local account's profile (posts tab) or stories;
- * the client's own not-found route (HTTP 404) for a profile or stories URL
- * naming no local account; a post page (`/p/` or `/reel/` + shortcode) for a
- * post the viewer may see, else the not-found route. A post page needs the
- * desktop post page modules in the snapshot (postRoute); without them it
- * falls back to the page's own route, as before. Anything else keeps the
- * page's own route.
+ * The signed-in route for a document request (src/shell/signedInRoute.js),
+ * from the page registry: the page's route when this server serves it; the
+ * client's not-found route (HTTP 404) for a profile, stories or post URL
+ * naming nothing the viewer may see; the client's "page not available"
+ * route (HTTP 501, with the reason) for a registered page this server does
+ * not serve yet. Never the anonymous page: null only for a path that is no
+ * signed-in page (an anonymous document such as /accounts/login/, or no page).
  */
 function signedInRouteFor(req, viewer = null) {
-  const kind = routeKind(req.path);
-  if (kind === 'home') return homeRoute();
-  if (kind === 'activity') return activityRoute();
-  if (/^\/direct\/inbox\/?$/.test(req.path)) return directInboxRoute();
-  const thread = /^\/direct\/t\/(\d{1,30})\/?$/.exec(req.path);
-  if (thread) return directInboxRoute(thread[1]);
-  if (/^\/reels\/?$/.test(req.path)) return reelsRoute();
-  const permalink = /^\/(p|reel)\/([A-Za-z0-9_-]{1,64})\/?$/.exec(req.path);
-  if (permalink && cloneInstance) {
-    const post = cloneInstance.postByCode(permalink[2], viewer);
-    return post ? postRoute(post, permalink[1]) : errorRoute(req.path);
+  const match = matchPage(req.path);
+  if (!match || match.page.access !== 'signed-in') return null;
+  const { page, params } = match;
+  const unavailable = () => unavailableRoute(req.path, page.id, page.next || 'not served by this server');
+  if (page.id === 'home') return homeRoute();
+  if (page.id === 'notifications') return activityRoute();
+  if (page.id === 'direct_inbox') return directInboxRoute();
+  if (page.id === 'direct_thread') return /^\d{1,30}$/.test(params.thread_key) ? directInboxRoute(params.thread_key) : errorRoute(req.path);
+  if (page.id === 'reels' && !params.shortcode) return reelsRoute();
+  if (!cloneInstance) return unavailable();
+  if (page.id === 'post') {
+    const post = cloneInstance.postByCode(params.shortcode, viewer);
+    return post ? postRoute(post, params.permalink_key) : errorRoute(req.path);
   }
-  if ((kind === 'profile' || kind === 'stories') && cloneInstance) {
-    const segments = req.path.split('/').filter(Boolean);
-    const user = cloneInstance.userByUsername(kind === 'stories' ? segments[1] : segments[0]);
+  if (page.id === 'stories' || page.id.startsWith('profile')) {
+    const user = cloneInstance.userByUsername(params.username);
     if (!user) return errorRoute(req.path);
-    return kind === 'stories' ? storiesRoute(user, viewerObject(user)) : profileRoute(user);
+    if (page.id === 'stories') return storiesRoute(user, viewerObject(user));
+    if (page.id === 'profile') return profileRoute(user);
   }
-  return null;
+  return unavailable();
 }
 
 /**
@@ -422,8 +424,24 @@ function sendHtml(req, res, status, html) {
   const ctx = cloneInstance ? cloneInstance.documentContext(req, res) : { viewer: null, csrfToken: null, encryption: null };
   const stats = {};
   // Signed-in viewers get the signed-in route (opt out: SHELL_SIGNED_IN_HOME=0).
-  const route = process.env.SHELL_SIGNED_IN_HOME !== '0' && ctx.viewer ? signedInRouteFor(req, ctx.viewer) : null;
-  const withAnswers = route ? routeWithAnswers(route, html) : null;
+  const page = matchPage(req.path);
+  if (page) res.setHeader('x-clone-page', page.page.id);
+  let route = process.env.SHELL_SIGNED_IN_HOME !== '0' && ctx.viewer ? signedInRouteFor(req, ctx.viewer) : null;
+  let withAnswers = route ? routeWithAnswers(route, html) : null;
+  // A signed-in page whose root the snapshot lacks is not served as the
+  // anonymous page: it is the client's "not available" route instead.
+  if (route && !withAnswers && !route.unavailable) {
+    route = unavailableRoute(req.path, page ? page.page.id : null, `answers ${route.answers.join(', ')} not in snapshot revision ${pinned.revision}`);
+    withAnswers = routeWithAnswers(route, html);
+  }
+  if (route && route.unavailable) {
+    routeState.unavailable[route.unavailable.page || req.path] = route.unavailable.reason;
+    res.setHeader('x-clone-page-unavailable', route.unavailable.reason.replace(/[^\x20-\x7e]/g, '?').slice(0, 300));
+  }
+  if (route && !withAnswers) {
+    markPrivate(res);
+    return res.status(501).type('text/plain').send(`This page is not available on this server: ${route.unavailable ? route.unavailable.reason : 'its route is not in the pinned client'}\n`);
+  }
   const signedInHome = Boolean(withAnswers);
   const feedRoot = withAnswers ? withAnswers.answers : null;
   const out = personalize(html, { ...ctx, identity: false, signedInHome, feedRoot, route, routeUrl: req.path, toLocal: mapUrl, dropPrefetches: forceDropPrefetches, serverRender: serverRenderFits(req), stats });

@@ -68,7 +68,8 @@ test('no clone identity or secret reaches upstream', async (t) => {
     const pages = ['/zebra_alice/', `/p/${post.code}/`, `/reel/${post.code}/`, '/stories/zebra_alice/', `/direct/t/${thread}/`, `/zebra_alice/?next=/p/${post.code}/`];
     for (const page of pages) {
       const res = await alice.visit(page);
-      assert.strictEqual(res.status, 200, page);
+      // 501: this fixture snapshot holds no route answers, so the page is "not available" (never the login page).
+      assert.ok([200, 501].includes(res.status), `${page}: ${res.status}`);
       assert.strictEqual(res.headers.get('x-client-snapshot'), 'rev100-test', page);
       const canonical = res.headers.get('x-clone-canonical');
       assert.ok(canonical === '/' || canonical === '/direct/inbox/', `${page} -> ${canonical}`);
@@ -87,8 +88,8 @@ test('no clone identity or secret reaches upstream', async (t) => {
 
   await t.test('the edit-profile page is a document request; the form post stays local', async () => {
     const page = await alice.visit('/accounts/edit/');
-    assert.strictEqual(page.status, 404, 'the page is not in the snapshot');
-    assert.match(page.text, /document \/accounts\/edit\//);
+    assert.strictEqual(page.status, 501, 'a registered page this server does not serve yet');
+    assert.match(page.text, /not available on this server/);
     const form = await alice.post('/accounts/edit/', { biography: 'from the form' });
     assert.notStrictEqual(form.status, 404, 'the profile form is answered by the backend');
     assert.deepStrictEqual(server.upstream, []);

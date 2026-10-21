@@ -142,6 +142,21 @@ bundle patch (`dgw-gateway-for-this-origin`) makes it open the gateway on
 this origin. `REALTIME_DEBUG=1` logs socket opens and the shape (never the
 contents) of sync traffic.
 
+### Page registry
+
+`src/pages/registry.js` is the one list of the client's web pages. Each entry
+records:
+- its URL patterns, taken from the client's own route builders;
+- whether it needs a signed-in viewer;
+- the root it is served with;
+- the signed-in root recorded for it (from a HAR's route definitions), or
+  the next step when none was recorded.
+
+Acquisition, the snapshot manifest, document dispatch and the route audit
+all read it. `npm run pages` prints which pages the active snapshot serves.
+A signed-in page this server cannot serve is answered with the client's own
+error page and HTTP 501, not with the anonymous login page.
+
 ## 3. Configuration
 
 All settings are environment variables with sensible defaults (`src/config.js`);
@@ -311,7 +326,7 @@ evictions) and the most recent resource-loading failures with their causes.
 ### Tests
 
 ```bash
-npm test              # every suite (400 tests at the last count)
+npm test              # every suite (404 tests at the last count)
 npm run test:backend  # migrations, auth/CSRF/isolation, API, crypto
 npm run test:loader   # loader rewriting + cache regression
 ```

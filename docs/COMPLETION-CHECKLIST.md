@@ -37,7 +37,25 @@ These are pending tasks; this review does not mark any page fixed.
 
 ### Task order
 
-- [ ] **1. Make one page registry drive acquisition, building, dispatch and verification.**
+- [x] **1. Make one page registry drive acquisition, building, dispatch and verification.**
+  Done: `src/pages/registry.js` lists 33 pages (patterns from the client's
+  own route builders; roots from the pinned routes or the HAR's recorded
+  signed-in route definitions; `root: null` plus a next step where none was
+  recorded) and `NOT_SERVED` with a reason for every other page builder.
+  It drives:
+  - acquisition: anonymous documents and the module sets of every page;
+  - the snapshot manifest: the `pages` coverage section;
+  - document dispatch: `src/server.js` `canonicalDocPath`/`signedInRouteFor`. A signed-in page
+    the server cannot serve is now the client's error route, HTTP 501 with
+    `x-clone-page-unavailable`, never the anonymous login page;
+  - verification: `scripts/route-audit.js`, `scripts/route-screens.js`, `npm run pages`.
+
+  `test/pages.test.js` fails if a route builder of the active snapshot is
+  missing from the registry. Current coverage (`npm run pages`, rev
+  1050722040): 7 served, 2 anonymous documents, 1 missing answer (post: no
+  `PolarisDesktopPostRoot.react`), 1 missing document
+  (`/accounts/password/reset/`), 20 not served. The route audit
+  (`node scripts/route-audit.js`) exits 1 until they are.
   Record each observed web route pattern, aliases, access requirements, genuine
   entry point/root, props, parameter extraction, component bindings, bootloader
   answers, required scripts/styles, data operations and browser assertions.

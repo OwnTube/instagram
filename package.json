@@ -38,7 +38,8 @@
     "client:bundle-check": "node scripts/client-bundle.js check",
     "client:fetch": "node scripts/client-bundle.js fetch",
     "client:pack": "node scripts/client-bundle.js pack",
-    "verify:pinned-restart": "node scripts/pinned-restart-check.js"
+    "verify:pinned-restart": "node scripts/pinned-restart-check.js",
+    "pages": "node scripts/page-coverage.js"
   },
   "engines": {
     "node": ">=22.13.0"

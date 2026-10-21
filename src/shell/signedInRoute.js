@@ -328,6 +328,16 @@ function errorRoute(url) {
 }
 
 /**
+ * A registered page this server does not serve (src/pages/registry.js: its
+ * root is not in the snapshot, or no route definition for it has been
+ * recorded): the client's own error route, as errorRoute, answered with HTTP
+ * 501 and the reason, so the page is never mistaken for a working one.
+ */
+function unavailableRoute(url, pageId, reason) {
+  return { ...errorRoute(url), status: 501, unavailable: { page: pageId, reason } };
+}
+
+/**
  * A route view in the shape the page server sends (the anonymous documents'
  * own routes): its entry point, the entry point's root component, the props.
  */
@@ -511,4 +521,4 @@ function insertFeedRoot(html, answers, docDefines, toLocal, initTuple, root = FE
   return { html: html.slice(0, at) + parts.join('') + html.slice(at), inserted: tags.length, missing };
 }
 
-module.exports = { emptySSRMount, isLoginHomeInitialize, toSignedInHome, toSignedInRoute, homeRoute, profileRoute, storiesRoute, activityRoute, directInboxRoute, reelsRoute, postRoute, errorRoute, isSSRInit, disableAnonymousSSR, insertFeedRoot, parseAnswer, FEED_ROOT, LOGGED_OUT_ONLY, NO_LOCAL_SERVICE };
+module.exports = { emptySSRMount, isLoginHomeInitialize, toSignedInHome, toSignedInRoute, homeRoute, profileRoute, storiesRoute, activityRoute, directInboxRoute, reelsRoute, postRoute, errorRoute, unavailableRoute, isSSRInit, disableAnonymousSSR, insertFeedRoot, parseAnswer, FEED_ROOT, LOGGED_OUT_ONLY, NO_LOCAL_SERVICE };
