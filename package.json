@@ -39,7 +39,8 @@
     "client:fetch": "node scripts/client-bundle.js fetch",
     "client:pack": "node scripts/client-bundle.js pack",
     "verify:pinned-restart": "node scripts/pinned-restart-check.js",
-    "pages": "node scripts/page-coverage.js"
+    "pages": "node scripts/page-coverage.js",
+    "journey:deeplinks": "node scripts/deeplink-journey.js"
   },
   "engines": {
     "node": ">=22.13.0"

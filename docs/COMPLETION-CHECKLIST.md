@@ -137,8 +137,14 @@ These are pending tasks; this review does not mark any page fixed.
     the viewer may see it (`test/reels.test.js`, `test/signed-in-route.test.js`).
     Browser: `/reels/<older>/` opens at the older reel, the tab at the newer
     one (`deeplink-reel-*.png`).
+  - Browser journey `npm run journey:deeplinks` (`scripts/deeplink-journey.js`):
+    story tray click from home, back, `/reels/`, a reel link, a story item
+    link, refresh, back, back, forward, refresh, forward. Every step keeps
+    its URL and shows the expected reel or story; 0 upstream requests
+    (`history-*.png`). The Reels tab replaces `/reels/` with the shown reel's
+    URL, as the client does.
   - Still open: profile tab dispatch (the tab roots are not in the pinned
-    revision), back/forward and refresh checks.
+    revision).
   Preserve tab, shortcode, initial story/highlight and query parameters using
   the actual client contracts. Verify direct load, refresh, in-app navigation
   and back/forward navigation. A missing route must not look like a successful
