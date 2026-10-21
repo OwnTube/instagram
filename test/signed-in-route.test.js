@@ -19,7 +19,7 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { startCloneServer, Browser, pngBytes } = require('./clone-helpers');
+const { startCloneServer, Browser, pngBytes, postReel } = require('./clone-helpers');
 const { answerAt, sjs } = require('./snapshot-fixture');
 
 function documentAt(rev) {
@@ -134,6 +134,10 @@ test('signed-in stories and not-found routes, from pinned answers only', async (
     assert.strictEqual(route.rootView.props.user_id, String(owner.pk));
     assert.strictEqual(route.rootView.props.user.username, 'story_owner');
     assert.ok(!/Log into Instagram/.test(res.text), 'no login markup');
+    // A story item's URL keeps its id: the client opens the reel at that item.
+    const item = await get(viewer, '/stories/story_owner/3456789012345/');
+    assert.strictEqual(item.status, 200);
+    assert.deepStrictEqual(initialize(item.text).params, { username: 'story_owner', initial_media_id: '3456789012345' });
   });
 
   await t.test('a profile or stories URL naming no account: the client not-found route, HTTP 404', async () => {
@@ -178,6 +182,26 @@ test('signed-in stories and not-found routes, from pinned answers only', async (
       assert.deepStrictEqual(route.polarisRouteConfig, { pageID }, p);
       const anon = await get(new Browser(s.base), p);
       assert.strictEqual(anon.status, 404, `${p} signed out: no document`);
+    }
+  });
+
+  await t.test("/reels/<code>/: the Reels tab at that reel; a code naming no reel is the not-found route", async () => {
+    const author = new Browser(s.base);
+    await author.signup(s, { username: 'reel_author' });
+    const reel = await postReel(author, 'linked reel');
+    const res = await get(viewer, `/reels/${reel.code}/`);
+    assert.strictEqual(res.status, 200);
+    const route = initialize(res.text);
+    assert.deepStrictEqual(route.rootView.entryPoint, { __dr: 'PolarisClipsTabRoot.entrypoint' });
+    assert.deepStrictEqual(route.params, { shortcode: reel.code });
+    assert.strictEqual(route.actorID, String(me.pk));
+    const id = String(Date.now());
+    await author.request('POST', `/rupload_igphoto/fb_uploader_${id}`, { raw: pngBytes(), headers: { 'content-type': 'image/png', 'x-instagram-rupload-params': JSON.stringify({ upload_id: id }) } });
+    const photo = (await author.post('/api/v1/media/configure/', { upload_id: id, caption: 'photo' })).body.media;
+    for (const p of [`/reels/${photo.code}/`, '/reels/NoSuchCode1/']) {
+      const miss = await get(viewer, p);
+      assert.strictEqual(miss.status, 404, p);
+      assert.deepStrictEqual(initialize(miss.text).rootView.entryPoint, { __dr: 'PolarisErrorRoot.entrypoint' }, p);
     }
   });
 

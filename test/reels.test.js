@@ -10,17 +10,9 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { startCloneServer, Browser, pngBytes } = require('./clone-helpers');
+const { startCloneServer, Browser, pngBytes, mp4Bytes, postReel } = require('./clone-helpers');
 
 const gql = (b, name, variables = {}) => b.post('/graphql/query', { doc_id: '1', fb_api_req_friendly_name: name, variables });
-
-// A minimal MP4 header: a 'ftyp' box (isom) followed by filler bytes.
-function mp4Bytes(size = 4096) {
-  const buf = Buffer.alloc(size, 7);
-  buf.writeUInt32BE(24, 0);
-  buf.write('ftypisom', 4, 'latin1');
-  return buf;
-}
 
 function putChunk(br, entity, chunk, { offset, total, uploadId }) {
   return br.request('POST', `/rupload_igvideo/${entity}`, {
@@ -105,6 +97,27 @@ test('reels', async (t) => {
     assert.strictEqual(conn.page_info.has_next_page, false);
     assert.deepStrictEqual((await gql(bob, 'PolarisClipsAdsPoolQuery', { is_ads_enabled: true })).body.data.xdt_injected_reels_units, { ad_media_items: [] });
     void b;
+  });
+
+  await t.test('a reel link asks for its reel first (chaining_media_id), on the first page only', async () => {
+    const newer = await postReel(ann, 'newer reel');
+    const tab = (vars) => gql(bob, 'PolarisClipsHomeRootQuery', { first: 5, ...vars }).then((r) => r.body.data.xdt_api__v1__clips__home__connection_v2.edges.map((e) => e.node.media.code));
+    assert.deepStrictEqual(await tab({ data: {} }), [newer.code, reel.code]);
+    assert.deepStrictEqual(await tab({ data: { chaining_media_id: reel.code, should_refetch_chaining_media: true } }), [reel.code, newer.code], 'by shortcode');
+    assert.deepStrictEqual(await tab({ data: { chaining_media_id: reel.pk } }), [reel.code, newer.code], 'by media id');
+    // A photo post or an unknown code is no reel: the tab as it is.
+    const id = String(Date.now() + 7);
+    await ann.request('POST', `/rupload_igphoto/fb_uploader_${id}`, { raw: pngBytes(), headers: { 'content-type': 'image/png', 'x-instagram-rupload-params': JSON.stringify({ upload_id: id }) } });
+    const photo = (await ann.post('/api/v1/media/configure/', { upload_id: id, caption: 'photo' })).body.media;
+    assert.deepStrictEqual(await tab({ data: { chaining_media_id: photo.code } }), [newer.code, reel.code]);
+    assert.deepStrictEqual(await tab({ data: { chaining_media_id: 'NoSuchCode1' } }), [newer.code, reel.code]);
+    // A private account's reel is not shown to a non-follower through a link.
+    assert.strictEqual((await ann.post('/api/v1/accounts/set_private/', {})).status, 200);
+    const cara = new Browser(server.base);
+    await cara.signup(server, { username: 'cara_reel_link' });
+    const caraTab = await gql(cara, 'PolarisClipsHomeRootQuery', { first: 5, data: { chaining_media_id: reel.code } });
+    assert.deepStrictEqual(caraTab.body.data.xdt_api__v1__clips__home__connection_v2.edges, []);
+    assert.strictEqual((await ann.post('/api/v1/accounts/set_public/', {})).status, 200);
   });
 
   await t.test('no upstream attempt', () => assert.deepStrictEqual(server.upstream, []));

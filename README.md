@@ -326,7 +326,7 @@ evictions) and the most recent resource-loading failures with their causes.
 ### Tests
 
 ```bash
-npm test              # every suite (404 tests at the last count)
+npm test              # every suite (408 tests at the last count)
 npm run test:backend  # migrations, auth/CSRF/isolation, API, crypto
 npm run test:loader   # loader rewriting + cache regression
 ```

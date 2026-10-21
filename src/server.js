@@ -384,6 +384,10 @@ function signedInRouteFor(req, viewer = null) {
   if (page.id === 'direct_thread') return /^\d{1,30}$/.test(params.thread_key) ? directInboxRoute(params.thread_key) : errorRoute(req.path);
   if (page.id === 'reels' && !params.shortcode) return reelsRoute();
   if (!cloneInstance) return unavailable();
+  if (page.id === 'reels') {
+    const post = cloneInstance.postByCode(params.shortcode, viewer);
+    return post && post.mediaType === 'video' ? reelsRoute(post.code) : errorRoute(req.path);
+  }
   if (page.id === 'post') {
     const post = cloneInstance.postByCode(params.shortcode, viewer);
     return post ? postRoute(post, params.permalink_key) : errorRoute(req.path);
@@ -391,7 +395,7 @@ function signedInRouteFor(req, viewer = null) {
   if (page.id === 'stories' || page.id.startsWith('profile')) {
     const user = cloneInstance.userByUsername(params.username);
     if (!user) return errorRoute(req.path);
-    if (page.id === 'stories') return storiesRoute(user, viewerObject(user));
+    if (page.id === 'stories') return storiesRoute(user, viewerObject(user), /^\d{1,30}$/.test(params.initial_media_id || '') ? params.initial_media_id : null);
     if (page.id === 'profile') return profileRoute(user);
   }
   return unavailable();

@@ -208,4 +208,25 @@ function pngBytes(width = 640, height = 480) {
   return buf;
 }
 
-module.exports = { startCloneServer, Browser, pngBytes };
+/** A minimal MP4 header: a 'ftyp' box (isom) followed by filler bytes. */
+function mp4Bytes(size = 4096) {
+  const buf = Buffer.alloc(size, 7);
+  buf.writeUInt32BE(24, 0);
+  buf.write('ftypisom', 4, 'latin1');
+  return buf;
+}
+
+/** Post a reel as the client does: rupload_igvideo, the cover through rupload_igphoto, configure_to_clips. Returns the media. */
+async function postReel(br, caption, { uploadId = String(Date.now() + Math.floor(Math.random() * 1e6)) } = {}) {
+  const entity = `fb_uploader_${uploadId}`;
+  const video = mp4Bytes();
+  const params = { upload_id: uploadId, media_type: 2, upload_media_width: 540, upload_media_height: 960, upload_media_duration_ms: 4000 };
+  const put = await br.request('POST', `/rupload_igvideo/${entity}`, { raw: video, headers: { 'content-type': 'application/octet-stream', offset: '0', 'x-entity-length': String(video.length), 'x-entity-name': entity, 'x-instagram-rupload-params': JSON.stringify(params) } });
+  if (put.status !== 200) throw new Error(`rupload_igvideo: ${put.status}`);
+  await br.request('POST', `/rupload_igphoto/${entity}`, { raw: pngBytes(), headers: { 'content-type': 'image/png', 'x-instagram-rupload-params': JSON.stringify({ upload_id: uploadId, media_type: 1 }) } });
+  const res = await br.post('/api/v1/media/configure_to_clips/', { upload_id: uploadId, caption });
+  if (res.status !== 200) throw new Error(`configure_to_clips: ${res.status}`);
+  return res.body.media;
+}
+
+module.exports = { startCloneServer, Browser, pngBytes, mp4Bytes, postReel };

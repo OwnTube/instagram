@@ -275,7 +275,6 @@ const PAGES = [
     served: 'storiesRoute',
     har: { entryPoint: 'PolarisStoriesV3Root', root: 'PolarisStoriesV3Root', pageID: 'StoriesPage', tracePolicy: 'polaris.StoriesPage', params: ['username', 'initial_media_id'] },
     data: 'local',
-    next: 'pass initial_media_id from the URL',
     sample: (f) => `/stories/${f.storyOwner}/`,
     expect: { pageID: 'StoriesPage' },
   },

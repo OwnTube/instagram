@@ -417,6 +417,18 @@ function createHomeOperations(db) {
     stories.setLike(db, pk, viewer.id, liked);
   }
 
+  /** A reel (video post) the viewer may see, by shortcode or media id, or null. */
+  function linkedClip(ref, viewer) {
+    const id = posts.resolveId(db, ref);
+    if (!id) return null;
+    try {
+      const post = posts.get(db, id, { viewerId: viewer.id });
+      return post && post.mediaType === 'video' ? post : null;
+    } catch {
+      return null;
+    }
+  }
+
   const operations = {
     PolarisStoriesV3TrayContainerQuery(vars, ctx) {
       const viewer = viewerOf(ctx);
@@ -734,12 +746,17 @@ function createHomeOperations(db) {
 
     // The Reels tab's clips: the reels (video posts) the viewer may see,
     // newest first (no recommendation ranking here); edges are
-    // XDTClipsItemDict nodes holding the media.
+    // XDTClipsItemDict nodes holding the media. A reel link (/reels/<code>/)
+    // asks for that reel first: `data.chaining_media_id` is the URL's
+    // shortcode (or the route's media id), and the first page starts with it
+    // when the viewer may see it.
     PolarisClipsHomeRootQuery(vars, ctx) {
       const viewer = viewerOf(ctx);
       const first = Math.min(Math.max(Number(vars.first) || 10, 1), 30);
+      const chaining = vars.data && vars.data.chaining_media_id != null && !vars.after ? linkedClip(String(vars.data.chaining_media_id), viewer) : null;
       const page = posts.listClips(db, viewer.id, { limit: first, cursor: vars.after || null });
-      const edges = page.items.map((p) => ({ cursor: p.id, node: { __typename: 'XDTClipsItemDict', media: present.media(db, p, viewer.id) } }));
+      const items = chaining ? [chaining, ...page.items.filter((p) => p.id !== chaining.id)].slice(0, first) : page.items;
+      const edges = items.map((p) => ({ cursor: p.id, node: { __typename: 'XDTClipsItemDict', media: present.media(db, p, viewer.id) } }));
       return {
         xdt_api__v1__clips__home__connection_v2: {
           edges,

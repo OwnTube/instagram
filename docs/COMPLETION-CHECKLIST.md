@@ -125,6 +125,20 @@ These are pending tasks; this review does not mark any page fixed.
   `/reels/<shortcode>/` has no signed-in route dispatch even though its
   document is canonicalized to `/`. Story URLs accept a numeric story suffix,
   but `storiesRoute()` always sets `initial_media_id: null`.
+  Progress, 2026-10-21:
+  - `/stories/<user>/<media id>/` keeps its id: `storiesRoute()` passes the
+    URL's `initial_media_id` (a media pk, as `initStoryPage` reads it through
+    `getReelIndexByMediaId`). Browser: the viewer opens at that story
+    (`test-artifacts/screenshots/deeplink-story-*.png`).
+  - `/reels/<shortcode>/` signed in: the Reels tab with `shortcode` set
+    (404 not-found route for a code that names no reel). The pinned entry
+    point sends it as `data.chaining_media_id`, and
+    `PolarisClipsHomeRootQuery` now starts its first page with that reel when
+    the viewer may see it (`test/reels.test.js`, `test/signed-in-route.test.js`).
+    Browser: `/reels/<older>/` opens at the older reel, the tab at the newer
+    one (`deeplink-reel-*.png`).
+  - Still open: profile tab dispatch (the tab roots are not in the pinned
+    revision), back/forward and refresh checks.
   Preserve tab, shortcode, initial story/highlight and query parameters using
   the actual client contracts. Verify direct load, refresh, in-app navigation
   and back/forward navigation. A missing route must not look like a successful

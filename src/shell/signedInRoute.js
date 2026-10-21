@@ -157,15 +157,18 @@ function profileRoute(user) {
  * id is the stories page's own name (`StoriesPage`, as its external-link
  * logging names it). `owner` is the user object in the shape the page
  * carries for the viewer (src/shell/personalize.js viewerObject).
+ * `initialMediaId` is the URL's optional story item.
  */
-function storiesRoute(user, owner) {
+function storiesRoute(user, owner, initialMediaId = null) {
   const pk = String(user.pk);
   return {
     entryPoint: 'PolarisStoriesMediaRoot',
     root: 'PolarisStoriesMediaRoot',
     answers: ['PolarisStoriesMediaRoot.entrypoint', 'PolarisStoriesMediaRoot.react'],
     props: { user_id: pk, user: owner, is_media_inactive: false, show_qr_modal: false },
-    params: { username: user.username, initial_media_id: null },
+    // The story item to open at (a media pk: initStoryPage finds its index
+    // with getReelIndexByMediaId), from the URL, else the reel's first.
+    params: { username: user.username, initial_media_id: initialMediaId },
     routePath: '/stories/{username}/{?initial_media_id}/',
     tracePolicy: 'polaris.StoriesPage',
     pageID: 'StoriesPage',
@@ -235,13 +238,15 @@ function directInboxRoute(threadKey = null) {
  * builder `/reels/{?shortcode}/` (no default params); page id `reelsTab`, the
  * id the client's page checks use; trace policy `polaris.reelsTab`.
  */
-function reelsRoute() {
+function reelsRoute(shortcode = null) {
   return {
     entryPoint: 'PolarisClipsTabRoot',
     root: 'PolarisClipsTabRoot',
     answers: ['PolarisClipsTabRoot.entrypoint', 'PolarisClipsTabRoot.react'],
     props: {},
-    params: { shortcode: null },
+    // A reel link's shortcode: the viewer's entry point asks for that reel
+    // first (PolarisClipsViewerDefaultContent: `chaining_media_id`).
+    params: { shortcode },
     routePath: '/reels/{?shortcode}/',
     tracePolicy: 'polaris.reelsTab',
     pageID: 'reelsTab',
