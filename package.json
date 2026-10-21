@@ -40,7 +40,8 @@
     "client:pack": "node scripts/client-bundle.js pack",
     "verify:pinned-restart": "node scripts/pinned-restart-check.js",
     "pages": "node scripts/page-coverage.js",
-    "journey:deeplinks": "node scripts/deeplink-journey.js"
+    "journey:deeplinks": "node scripts/deeplink-journey.js",
+    "check:reels-layout": "node scripts/reels-layout.js"
   },
   "engines": {
     "node": ">=22.13.0"

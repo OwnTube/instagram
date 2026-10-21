@@ -12,7 +12,22 @@
  *
  * Content is local and real: B publishes a photo post and a story, A follows B.
  *
- *   CHROMIUM_BIN=... node scripts/route-screens.js <label>
+ * Each page gets a verdict from what the browser shows, not only from the
+ * server's status:
+ *  - WORKING: a signed-in page answered 200 that renders in the signed-in
+ *    chrome, without login markup or the client's "isn't available" page,
+ *    without uncaught exceptions or failed requests; an anonymous page
+ *    (visited signed out) answered 200 that shows its expected text;
+ *  - UNAVAILABLE: the server says it does not serve the page (501), and the
+ *    client's "isn't available" page shows in the signed-in chrome;
+ *  - DEGRADED: served in a lesser form the server names
+ *    (x-clone-page-degraded, e.g. the mobile Reels viewer);
+ *  - NOT FOUND (expected): a URL naming nothing shows the not-found page, 404;
+ *  - WRONG: anything else.
+ * Exit status: 0 only with no WRONG, no upstream or external request, and no
+ * UNAVAILABLE or DEGRADED page (unless --allow-unavailable).
+ *
+ *   CHROMIUM_BIN=... node scripts/route-screens.js <label> [--allow-unavailable]
  *
  * Output: test-artifacts/screenshots/routes-<label>-<n>-<route>.png and
  *         test-artifacts/reports/routes-<label>.json
@@ -26,13 +41,41 @@ const { DatabaseSync } = require('node:sqlite');
 const { launchChromium, openSession, captureScreenshot, watchExternal } = require('./lib/browser');
 const { sunsetPng, evaluate, sleep } = require('./lib/scenario');
 const { Browser } = require('../test/clone-helpers');
-const { PAGES } = require('../src/pages/registry');
+const { PAGES, matchPage } = require('../src/pages/registry');
 
 const ROOT = path.join(__dirname, '..');
 const SCRATCH = path.join(ROOT, '.scratch', 'route-screens');
 const SHOTS = path.join(ROOT, 'test-artifacts', 'screenshots');
 const REPORTS = path.join(ROOT, 'test-artifacts', 'reports');
-const label = (process.argv[2] || 'run').replace(/[^a-z0-9_-]/gi, '');
+const label = (process.argv.slice(2).find((a) => !a.startsWith('--')) || 'run').replace(/[^a-z0-9_-]/gi, '');
+const allowUnavailable = process.argv.includes('--allow-unavailable');
+const NOT_AVAILABLE = /Sorry, this page isn't available/;
+const NOT_FOUND_URLS = ['/no..such..account/', '/no_such_user_here/'];
+
+/** The verdict for one rendered route (see the header). */
+function verdictFor({ route, page, server, row, text }) {
+  const shown = (re) => re.test(text);
+  const problems = [];
+  if (row.pageExceptions.length) problems.push(`${row.pageExceptions.length} uncaught exception(s)`);
+  if (row.failedRequests.length) problems.push(`${row.failedRequests.length} failed request(s)`);
+  if (NOT_FOUND_URLS.includes(route)) {
+    return row.documentStatus === 404 && shown(NOT_AVAILABLE) && row.signedInChrome ? ['NOT FOUND', 'expected'] : ['WRONG', `expected the not-found page, got ${row.documentStatus}`];
+  }
+  if (!page) return ['WRONG', 'no registry page'];
+  if (page.access === 'anonymous') {
+    if (row.documentStatus !== 200) return ['WRONG', `status ${row.documentStatus}`];
+    if (page.expect.text && !text.includes(page.expect.text)) return ['WRONG', `"${page.expect.text}" not shown`];
+    return problems.length ? ['WRONG', problems.join(', ')] : ['WORKING', 'anonymous page'];
+  }
+  if (row.loginMarkupVisible) return ['WRONG', 'login markup for a signed-in viewer'];
+  if (!row.signedInChrome && page.expect.chrome !== false) return ['WRONG', 'no signed-in chrome'];
+  if (row.documentStatus === 501) return shown(NOT_AVAILABLE) ? ['UNAVAILABLE', server.unavailable || ''] : ['WRONG', '501 without the not-available page'];
+  if (row.documentStatus !== 200) return ['WRONG', `status ${row.documentStatus}`];
+  if (shown(NOT_AVAILABLE)) return ['WRONG', 'answered 200 but shows the not-available page'];
+  if (problems.length) return ['WRONG', problems.join(', ')];
+  if (server.degraded) return ['DEGRADED', server.degraded];
+  return ['WORKING', ''];
+}
 
 async function main() {
   fs.rmSync(SCRATCH, { recursive: true, force: true });
@@ -70,7 +113,9 @@ async function main() {
     const thread = await A.post('/api/v1/direct_v2/threads/broadcast/text/', { recipient_users: JSON.stringify([[String(b.pk)]]), text: 'route screens', client_context: `screens-${tag}` });
     // Every page of the registry with a sample URL, then two URLs that name nothing.
     const fixtures = { username: b.username, postCode: code, storyOwner: b.username, threadId: String(thread.body.payload.thread_id) };
-    const routes = [...PAGES.map((p) => p.sample && p.sample(fixtures)).filter(Boolean), '/no..such..account/', '/no_such_user_here/'];
+    const sampled = PAGES.filter((p) => p.sample && p.sample(fixtures));
+    const routes = [...sampled.filter((p) => p.access === 'signed-in').map((p) => p.sample(fixtures)), ...NOT_FOUND_URLS, ...sampled.filter((p) => p.access === 'anonymous').map((p) => p.sample(fixtures))];
+    const nav = { accept: 'text/html', 'sec-fetch-site': 'none', 'sec-fetch-mode': 'navigate', 'sec-fetch-dest': 'document' };
     session = await openSession(browserWsUrl);
     watchExternal(session, base);
     await session.cdp.send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false });
@@ -78,14 +123,22 @@ async function main() {
     let n = 0;
     for (const route of routes) {
       n += 1;
+      const page = matchPage(new URL(route, base).pathname)?.page || null;
+      const anonymous = Boolean(page && page.access === 'anonymous') && !NOT_FOUND_URLS.includes(route);
+      // Anonymous pages are seen signed out.
+      if (anonymous) await session.cdp.send('Network.clearBrowserCookies');
+      // What the server says about the page (headers the browser does not expose to the page).
+      const head = await (anonymous ? new Browser(base) : A).get(route, { headers: nav });
+      const server = { unavailable: head.headers.get('x-clone-page-unavailable'), degraded: head.headers.get('x-clone-page-degraded') };
       session.requests.clear();
       session.consoleMessages.length = 0;
+      session.exceptions.length = 0;
       await session.cdp.send('Page.navigate', { url: `${base}${route}` });
       await sleep(7000);
       const info = JSON.parse(
         (await evaluate(
           session,
-          `JSON.stringify({ path: location.pathname, text: (document.body ? document.body.innerText : '').split('\\n').map((s) => s.trim()).filter(Boolean).slice(0, 8), login: /Log into Instagram|Log in\\b/.test(document.body ? document.body.innerText : ''), profileLink: Boolean(document.querySelector('a[href="/${a.username}/"]')) })`
+          `JSON.stringify({ path: location.pathname, text: (document.body ? document.body.innerText : '').split('\\n').map((s) => s.trim()).filter(Boolean).slice(0, 8), login: /Log into Instagram|Log in\\b/.test(document.body ? document.body.innerText : ''), fullText: (document.body ? document.body.innerText : '').slice(0, 5000), profileLink: Boolean(document.querySelector('a[href="/${a.username}/"]')) })`
         )) || '{}'
       );
       const requests = [...session.requests.values()];
@@ -101,10 +154,14 @@ async function main() {
         text: info.text,
         failedRequests: requests.filter((r) => r.status >= 400).map((r) => `${r.status} ${r.url.replace(base, '').slice(0, 160)}`),
         consoleErrors: session.consoleMessages.filter((m) => m.level === 'error').map((m) => m.text.slice(0, 200)).slice(0, 10),
+        pageExceptions: session.exceptions.map((e) => e.text.split('\n')[0].slice(0, 200)).slice(0, 10),
         screenshot: path.relative(ROOT, path.join(SHOTS, file)),
       };
+      [row.verdict, row.detail] = verdictFor({ route, page, server, row, text: info.fullText || '' });
+      row.page = page ? page.id : null;
+      delete info.fullText;
       rows.push(row);
-      console.log(`${route.padEnd(28)} doc ${String(row.documentStatus).padEnd(4)} ${row.signedInChrome ? 'signed-in chrome' : 'no signed-in chrome'}${row.loginMarkupVisible ? ', LOGIN MARKUP' : ''}; failed ${row.failedRequests.length}; console errors ${row.consoleErrors.length}; "${(info.text || []).slice(0, 2).join(' / ').slice(0, 70)}"`);
+      console.log(`${row.verdict.padEnd(11)} ${(row.page || '-').padEnd(22)} ${route.padEnd(30)} doc ${String(row.documentStatus).padEnd(4)} ${row.detail}`);
     }
   } finally {
     child.kill('SIGKILL');
@@ -115,7 +172,11 @@ async function main() {
   fs.writeFileSync(path.join(REPORTS, `routes-${label}.json`), JSON.stringify(report, null, 1));
   console.log(`browser requests to other hosts: ${report.externalRequests}; upstream attempts: ${report.upstreamAttempts}`);
   console.log(`report: ${path.relative(ROOT, path.join(REPORTS, `routes-${label}.json`))}`);
-  process.exit(report.upstreamAttempts === 0 && report.externalRequests === 0 ? 0 : 1);
+  const count = (v) => rows.filter((r) => r.verdict === v).length;
+  console.log(`pages: ${count('WORKING')} working, ${count('DEGRADED')} degraded, ${count('UNAVAILABLE')} unavailable, ${count('WRONG')} wrong, ${count('NOT FOUND')} not-found URLs as expected`);
+  const failed = report.upstreamAttempts > 0 || report.externalRequests > 0 || count('WRONG') > 0 || (!allowUnavailable && count('UNAVAILABLE') + count('DEGRADED') > 0);
+  if (failed) console.log(`route screens FAILED${!allowUnavailable && count('UNAVAILABLE') + count('DEGRADED') ? ' (unavailable and degraded pages count as failures; --allow-unavailable checks the rest)' : ''}`);
+  process.exit(failed ? 1 : 0);
 }
 
 main().catch((error) => {

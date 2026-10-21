@@ -174,6 +174,28 @@ These are pending tasks; this review does not mark any page fixed.
   Establish the native page/layout first; apply only a scoped style fix if
   a measured mismatch remains.
 
+  Progress, 2026-10-21:
+  - Contracts traced from the HAR's own bundle (revision 1051138993):
+    - `PolarisClipsTabDesktopContainerQuery` and `PolarisClipsTabDesktopPaginationQuery`
+      select `xdt_api__v1__clips__home__connection_v2` with the variables
+      after, before, data, first and last (the mobile tab's connection);
+    - `PolarisClipsTabDesktopContainerSeedMediaQuery` selects `xig_fetch_media(id: $mediaId)`.
+    All three are now answered locally (`test/reels.test.js`: pages, a linked reel first and not
+    repeated, the seed by media id, a seed the viewer may not see).
+  - Route: `reelsRoute()` is the recorded desktop route definition
+    (PolarisClipsTabDesktopRoot.entrypoint, PolarisClipsTabDesktopContainer.react,
+    props `{media_id, page_logging}`, `hideFooter`, `footerVariant: 'none'`, the canonical route name).
+    The current snapshot lacks those answers, so `/reels/` is served as the mobile viewer, marked
+    `x-clone-page-degraded`, and the route audit and route screens count it as a failure.
+  - Blocked on acquisition: the desktop answer names its scripts as `csr:` indices, which
+    resolve only against that revision's document. The HAR has none, so the
+    1051138993 pass must stage `/` first.
+  - Measured now (`npm run check:reels-layout`, `reels-layout-*.png`):
+    - at 1366x768 the video element is 1351x768 with object-fit cover, so 68% of a 9:16 reel is cropped;
+    - at 1440x900, 65%; at 1920x1080, 68%;
+    - at 390x844, 18% (phone viewer, passes).
+    The check fails until the desktop page is served.
+
 - [ ] **6. Connect the missing pages to functionality already implemented.**
   Reuse `src/clone/routes/accounts.js` for profile form data and saving edits;
   `src/clone/routes/content.js` already exposes an Explore grid endpoint;
@@ -200,6 +222,20 @@ These are pending tasks; this review does not mark any page fixed.
   screenshots at 1366x768, 1440x900, 1920x1080 and a mobile viewport such as
   390x844. Compare against the corresponding captured native layout; a
   screenshot or a successful media API test alone does not prove correct sizing.
+
+  Progress, 2026-10-21:
+  - `node scripts/route-screens.js <label>` gives each rendered page a verdict and exits 1 on
+    any of: WRONG (wrong status, login markup or no signed-in chrome for a signed-in viewer,
+    the not-available page under a 200, uncaught exceptions, failed requests, an anonymous
+    page without its expected text); UNAVAILABLE; DEGRADED (unless `--allow-unavailable`);
+    an upstream or external request.
+    Anonymous pages are visited signed out; not-found URLs must show the not-found page with 404.
+    Current run (`routes-strict`): 6 working, 1 degraded (Reels), 12 unavailable, password reset
+    WRONG (no document), 2 not-found URLs as expected.
+  - `scripts/route-audit.js` counts DEGRADED like UNAVAILABLE.
+  - `scripts/reels-layout.js` (`npm run check:reels-layout`) is the Reels frame check: the video
+    box, the picture after object-fit, the 9:16 aspect, the window height, half the width on desktop,
+    Like/Comment/Share on screen, sideways scroll, and the server's degraded flag, at all four sizes.
 
 Done for this priority means every required page is listed, captured at the
 chosen revision, served by the correct native route, usable through direct

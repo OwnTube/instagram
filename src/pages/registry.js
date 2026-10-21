@@ -276,7 +276,8 @@ const PAGES = [
     har: { entryPoint: 'PolarisStoriesV3Root', root: 'PolarisStoriesV3Root', pageID: 'StoriesPage', tracePolicy: 'polaris.StoriesPage', params: ['username', 'initial_media_id'] },
     data: 'local',
     sample: (f) => `/stories/${f.storyOwner}/`,
-    expect: { pageID: 'StoriesPage' },
+    // The story viewer covers the window: no navigation chrome.
+    expect: { pageID: 'StoriesPage', chrome: false },
   },
   {
     id: 'stories_highlight',
@@ -432,7 +433,7 @@ const PAGES = [
 
   // --- Anonymous documents (served from the snapshot to everyone) ----------
   { id: 'login', kind: 'page', patterns: ['/accounts/login/'], builder: 'XPolarisLoginControllerRouteBuilder', access: 'anonymous', served: null, har: null, data: 'local', sample: () => '/accounts/login/', expect: { text: 'Log in' } },
-  { id: 'signup', kind: 'page', patterns: ['/accounts/emailsignup/'], builder: 'XPolarisEmailSignupControllerRouteBuilder', access: 'anonymous', served: null, har: null, data: 'local', sample: () => '/accounts/emailsignup/', expect: { text: 'Sign up' } },
+  { id: 'signup', kind: 'page', patterns: ['/accounts/emailsignup/'], builder: 'XPolarisEmailSignupControllerRouteBuilder', access: 'anonymous', served: null, har: null, data: 'local', sample: () => '/accounts/emailsignup/', expect: { text: 'Get started on Instagram' } },
   { id: 'password_reset', kind: 'page', patterns: ['/accounts/password/reset/'], builder: 'XPolarisAccountRecoveryPasswordResetControllerRouteBuilder', access: 'anonymous', served: null, har: null, data: 'local', sample: () => '/accounts/password/reset/', expect: { text: 'Trouble logging in' } },
 ];
 
