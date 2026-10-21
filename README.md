@@ -122,6 +122,26 @@ Deliberately **not** done:
 
 ---
 
+### Live Direct messages
+
+The client's realtime sockets (`gateway.instagram.com/ws/*`,
+`edge-chat.*`) are pointed by the runtime at this server's
+`/__clone/realtime/<host><path>`, which `src/realtime/` answers over a plain
+WebSocket upgrade:
+
+- the DGW gateway framing (`dgw.js`), whose byte layout is checked against the
+  client's own codec;
+- on the `lightspeed` stream, the client's message sync (`lightspeed.js`).
+  When a message is stored or a thread is read, every member's open stream
+  gets a new-message or read-receipt delta, built for that viewer;
+- MQTT on `edge-chat` (`mqtt.js`), which is acknowledged only.
+
+Only signed-in browsers are accepted, and the session is re-checked on every
+delivery. The client derives the gateway host from the page's domain, so one
+bundle patch (`dgw-gateway-for-this-origin`) makes it open the gateway on
+this origin. `REALTIME_DEBUG=1` logs socket opens and the shape (never the
+contents) of sync traffic.
+
 ## 3. Configuration
 
 All settings are environment variables with sensible defaults (`src/config.js`);
@@ -291,7 +311,7 @@ evictions) and the most recent resource-loading failures with their causes.
 ### Tests
 
 ```bash
-npm test              # every suite (364 tests at the last count)
+npm test              # every suite (400 tests at the last count)
 npm run test:backend  # migrations, auth/CSRF/isolation, API, crypto
 npm run test:loader   # loader rewriting + cache regression
 ```

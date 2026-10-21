@@ -8,7 +8,8 @@
  *     so a call the client builds with a full host still reaches our backend
  *     (and our session) instead of Instagram;
  *   - beacons and requests to Meta telemetry hosts are dropped;
- *   - realtime sockets to Meta's edge are refused, because we do not run one;
+ *   - realtime sockets to Meta's edge are pointed at this server's own endpoint
+ *     (/__clone/realtime/<host><path>, src/realtime/), keeping path and query;
  *   - absolute URLs to Instagram's static CDN (scripts the Bootloader inserts,
  *     stylesheets, fonts, images, fetches) are sent through this origin's
  *     /__ig asset proxy, which keeps them on disk, so the page never loads code
@@ -30,7 +31,7 @@
   var TELEMETRY_HOSTS = /(^|\.)(facebook\.com|facebook\.net|fbcdn\.net|graph\.instagram\.com)$/i;
   var REALTIME_HOSTS = /(^|\.)(edge-chat\.instagram\.com|edge-chat\.facebook\.com|gateway\.instagram\.com)$/i;
   var ASSET_HOSTS = /^(?:static|scontent)\.cdninstagram\.com$/i;
-  var stats = { rewritten: 0, dropped: 0, refusedSockets: 0, assets: 0 };
+  var stats = { rewritten: 0, dropped: 0, realtimeSockets: 0, assets: 0 };
 
   /** An absolute static-CDN URL mapped onto the local asset proxy, else null. */
   function assetPath(raw) {
@@ -226,13 +227,13 @@
   var RealSocket = window.WebSocket;
   if (RealSocket) {
     var Guarded = function (url, protocols) {
-      var host = '';
+      var target = null;
       try {
-        host = new URL(String(url), location.href).hostname;
+        target = new URL(String(url), location.href);
       } catch (e) {}
-      if (REALTIME_HOSTS.test(host)) {
-        stats.refusedSockets += 1;
-        url = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/__clone/realtime-unavailable';
+      if (target && REALTIME_HOSTS.test(target.hostname)) {
+        stats.realtimeSockets += 1;
+        url = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/__clone/realtime/' + target.hostname + target.pathname + target.search;
       }
       return protocols === undefined ? new RealSocket(url) : new RealSocket(url, protocols);
     };

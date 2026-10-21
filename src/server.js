@@ -85,6 +85,33 @@ if (backendInstance) {
   app.use(cloneInstance.router);
 }
 
+/**
+ * The client's realtime socket (redirected here by the runtime) arrives as an
+ * HTTP upgrade, which Express never sees; every server this app creates
+ * answers it (start() and the tests both go through app.listen).
+ */
+const realtime = cloneInstance
+  ? require('./realtime').createRealtime({ db: backendInstance.db, viewerFor: cloneInstance.viewerFor, debug: process.env.REALTIME_DEBUG === '1' })
+  : null;
+app.listen = function listen(...args) {
+  const server = require('node:http').createServer(this);
+  // Upgraded sockets leave the server's own connection tracking, so close()
+  // would otherwise wait on every open realtime socket.
+  const upgraded = new Set();
+  const close = server.close.bind(server);
+  server.close = (callback) => {
+    for (const socket of upgraded) socket.destroy();
+    return close(callback);
+  };
+  server.on('upgrade', (req, socket, head) => {
+    upgraded.add(socket);
+    socket.on('close', () => upgraded.delete(socket));
+    socket.on('error', () => {});
+    if (!realtime || !realtime.handleUpgrade(req, socket, head)) socket.end('HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');
+  });
+  return server.listen(...args);
+};
+
 const pinnedUnavailable = (res) => res.status(503).type('text/plain').send(`Pinned client unavailable: ${pinned.error}\n`);
 const notPinned = (res, what) =>
   res.status(404).type('text/plain').send(`Not in the pinned client snapshot ${pinned.id} (revision ${pinned.revision}): ${what}\n`);

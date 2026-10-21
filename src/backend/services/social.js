@@ -13,6 +13,7 @@ const { notFound, forbidden, conflict, badRequest } = require('../lib/errors');
 const { paginate } = require('../lib/pagination');
 const posts = require('./posts');
 const visibility = require('./visibility');
+const events = require('../lib/events');
 
 const COMMENT_SELECT = `SELECT c.*, u.username AS author_username, u.pk AS author_pk, u.avatar_url AS author_avatar_url,
        u.display_name AS author_display_name FROM comments c JOIN users u ON u.id = c.author_id`;
@@ -679,12 +680,14 @@ const messages = {
       db.exec('ROLLBACK');
       throw error;
     }
+    events.emit('message', { db, conversationId, messageId: id, senderId });
     return this.get(db, id, senderId);
   },
 
   markSeen(db, conversationId, userId) {
     this.requireMembership(db, conversationId, userId);
     db.prepare('UPDATE conversation_members SET last_seen_at = ? WHERE conversation_id = ? AND user_id = ?').run(nowIso(), conversationId, userId);
+    events.emit('seen', { db, conversationId, userId });
     return { conversationId, seen: true };
   },
 

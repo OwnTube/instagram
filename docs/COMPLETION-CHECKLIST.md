@@ -38,7 +38,8 @@ Active client: `rev1050722040-20261017T170808Z` (revision 1050722040).
 | Search | yes | search suites | genuine-search check | |
 | Explore `/explore/` | no | - | - | **Blocked**: the client never names its root module; no genuine route definition is stored |
 | Notifications | yes | activity suites | genuine-activity check | |
-| Direct inbox, threads, send | yes | direct suites | yes | Not live: the realtime transport is not reproduced, so new messages need a reload (task: do last, per user) |
+| Direct inbox, threads, send | yes | direct suites | yes | — |
+| Live Direct (no refresh): a new message appears in the open thread, in the sender's other tabs and in the inbox row (unread dot, Direct badge); "Seen" updates live | yes (`src/realtime/`: DGW gateway + LS sync deltas; `DGWEnvUtil` patch so the gateway opens on this origin) | `test/realtime.test.js` (frame and LS bytes checked against the client's own codec and decoder; members-only delivery; session end closes the stream) | yes (`probe-live-message-thread`, `probe-live-inbox-row`, `probe-live-inbox-page`, `probe-live-seen`; video `test-artifacts/videos/live-direct-messages.mp4`) | Typing indicators and presence are acknowledged but not sent. Emoji in messages render as broken images (separate bug) |
 | Share a post to Direct (share sheet Send), shared-post card, open from the thread | yes | `test/direct-share.test.js` | yes (`probe-sweep-share2`, `probe-share-thread`, `probe-share-open-post`) | A shared post the viewer can no longer see reads as a placeholder |
 | Notes: share, tray, audience | yes | `test/notes.test.js` | yes (`probe-notes-after-reload`, `probe-notes-mutual`) | |
 | Notes: delete from the tray | yes (server) | `test/notes.test.js` | no | The tray popover module `PolarisInboxTrayItemPopover.react` is not in the snapshot; queued for the next acquisition pass |

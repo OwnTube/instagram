@@ -65,6 +65,21 @@ const PATCHES = [
       'M&&C.submitResult===0&&C.redirectURI.length>0?(a({type:"ResetFormAfterSubmitSuccess"}),r("goForceFullPageRedirectTo")(C.redirectURI)):M&&C.submitResult===0?(a({type:"ResetFormAfterSubmitSuccess"}),J({',
     why: 'Skip the confirmation-code page when the server signed the user in and named where to go.',
   },
+  /*
+   * Live Direct messages. The client's message stream (WMI over the DGW
+   * gateway) picks its gateway from the page's own domain and knows only
+   * Meta's, so on this origin it has no endpoint and never connects. Resolve it
+   * as on instagram.com; the runtime then points the gateway socket at this
+   * server's realtime endpoint (src/realtime/), like the client's other
+   * realtime sockets.
+   */
+  {
+    id: 'dgw-gateway-for-this-origin',
+    module: 'DGWEnvUtil',
+    find: 'o=m(n,t.getPath())',
+    replace: 'o=m("www.instagram.com",t.getPath())',
+    why: 'Pick the instagram.com gateway (wss://gateway.instagram.com/ws); the runtime redirects that host here.',
+  },
 ];
 
 /** Locate each `__d("Name",` definition: start offsets keyed by module name. */

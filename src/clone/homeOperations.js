@@ -182,6 +182,45 @@ function sharedPostContent(db, postId, viewerId) {
   };
 }
 
+const MESSAGE_SELECT = `SELECT m.pk, m.body, m.shared_post_id, m.client_context, m.created_at, u.pk AS sender_pk, u.username AS sender_username
+  FROM messages m JOIN users u ON u.id = m.sender_id`;
+
+/** One stored message as a SlideMessage node, as `viewer` sees it. */
+function slideMessage(db, m, threadPk, senders, viewer) {
+  let snippet = m.body;
+  let content = { __typename: 'SlideMessageText', text_body: m.body };
+  if (m.shared_post_id) {
+    content = sharedPostContent(db, m.shared_post_id, viewer && viewer.id);
+    const author = content.xma.header_title_text;
+    const mine = viewer && String(viewer.pk) === String(m.sender_pk);
+    snippet = author ? `${mine ? 'You' : m.sender_username} sent a post by ${author}.` : `${mine ? 'You' : m.sender_username} sent an attachment.`;
+  }
+  return {
+    __typename: 'SlideMessage',
+    id: String(m.pk),
+    sender_fbid: String(m.sender_pk),
+    sender: senders.get(String(m.sender_pk)) || null,
+    timestamp_ms: ms(m.created_at),
+    igd_snippet: snippet,
+    text_body: m.shared_post_id ? null : m.body,
+    // SlideMessage content types the client names are TEXT and a few
+    // XMA kinds; none names a post share, so a share has none.
+    content_type: m.shared_post_id ? null : 'TEXT',
+    content,
+    message_id: String(m.pk),
+    // The sending client's own id for the message (its optimistic copy is
+    // keyed by it), when it gave one.
+    offline_threading_id: m.client_context ?? null,
+    thread_fbid: String(threadPk),
+    is_reported: false,
+    is_ai_generated: false,
+    igd_is_forwarded: false,
+    reactions: [],
+    msg_reactions: [],
+    mentions: [],
+  };
+}
+
 /**
  * A conversation's newest messages as a SlideMessage connection (newest first,
  * the order of Direct's thread item lists). `senders` maps a member's pk to
@@ -190,46 +229,36 @@ function sharedPostContent(db, postId, viewerId) {
  */
 function slideMessages(db, conversationId, first, threadPk, senders = new Map(), viewer = null) {
   const rows = db
-    .prepare(
-      `SELECT m.pk, m.body, m.shared_post_id, m.created_at, u.pk AS sender_pk, u.username AS sender_username FROM messages m JOIN users u ON u.id = m.sender_id
-       WHERE m.conversation_id = ? AND m.deleted_at IS NULL ORDER BY m.created_at DESC, m.pk DESC LIMIT ?`
-    )
+    .prepare(`${MESSAGE_SELECT} WHERE m.conversation_id = ? AND m.deleted_at IS NULL ORDER BY m.created_at DESC, m.pk DESC LIMIT ?`)
     .all(conversationId, first + 1);
-  const edges = rows.slice(0, first).map((m) => {
-    let snippet = m.body;
-    let content = { __typename: 'SlideMessageText', text_body: m.body };
-    if (m.shared_post_id) {
-      content = sharedPostContent(db, m.shared_post_id, viewer && viewer.id);
-      const author = content.xma.header_title_text;
-      const mine = viewer && String(viewer.pk) === String(m.sender_pk);
-      snippet = author ? `${mine ? 'You' : m.sender_username} sent a post by ${author}.` : `${mine ? 'You' : m.sender_username} sent an attachment.`;
-    }
-    return {
-      node: {
-        __typename: 'SlideMessage',
-        id: String(m.pk),
-        sender_fbid: String(m.sender_pk),
-        sender: senders.get(String(m.sender_pk)) || null,
-        timestamp_ms: ms(m.created_at),
-        igd_snippet: snippet,
-        text_body: m.shared_post_id ? null : m.body,
-        // SlideMessage content types the client names are TEXT and a few
-        // XMA kinds; none names a post share, so a share has none.
-        content_type: m.shared_post_id ? null : 'TEXT',
-        content,
-        message_id: String(m.pk),
-        thread_fbid: String(threadPk),
-        is_reported: false,
-        is_ai_generated: false,
-        igd_is_forwarded: false,
-        reactions: [],
-        msg_reactions: [],
-        mentions: [],
-      },
-      cursor: String(m.pk),
-    };
-  });
+  const edges = rows.slice(0, first).map((m) => ({ node: slideMessage(db, m, threadPk, senders, viewer), cursor: String(m.pk) }));
   return { edges, page_info: { end_cursor: edges.length ? edges[edges.length - 1].cursor : null, has_next_page: rows.length > first } };
+}
+
+/** The SlideUser for each member, keyed by pk, as `viewer` sees them. */
+function threadSenders(db, viewer, members) {
+  return new Map(
+    members.map((u) => {
+      const dict = { ...present.user(db, u, viewer.id), interop_messaging_user_fbid: String(u.pk), ai_agent_type: null };
+      return [String(u.pk), { __typename: 'SlideUser', id: String(u.pk), igid: String(u.pk), name: u.display_name || u.username, user_dict: dict }];
+    })
+  );
+}
+
+/**
+ * One message (by id) as a SlideMessage node for `viewer`, a member of its
+ * conversation; null otherwise. The realtime endpoint sends it in a new-message
+ * delta, the same node a thread's message list holds.
+ */
+function slideMessageNode(db, viewer, messageId) {
+  const m = db.prepare(`${MESSAGE_SELECT.replace('SELECT ', 'SELECT m.conversation_id, ')} WHERE m.id = ? AND m.deleted_at IS NULL`).get(messageId);
+  if (!m) return null;
+  const c = db
+    .prepare('SELECT c.pk FROM conversations c JOIN conversation_members cm ON cm.conversation_id = c.id WHERE c.id = ? AND cm.user_id = ?')
+    .get(m.conversation_id, viewer.id);
+  if (!c) return null;
+  const members = db.prepare('SELECT u.* FROM conversation_members cm JOIN users u ON u.id = cm.user_id WHERE cm.conversation_id = ?').all(m.conversation_id);
+  return slideMessage(db, m, c.pk, threadSenders(db, viewer, members), viewer);
 }
 
 const THREAD_COLUMNS = `c.id, c.pk, c.created_at,
@@ -311,15 +340,7 @@ function threadEdge(db, viewer, c, { messages = 0 } = {}) {
     viewer: { id: viewerUser.id, username: viewerUser.username, full_name: viewerUser.full_name, interop_messaging_user_fbid: String(viewer.pk), profile_pic_url: viewerUser.profile_pic_url },
     is_muted: false,
   };
-  if (messages > 0) {
-    const senders = new Map(
-      members.map((u) => {
-        const dict = { ...present.user(db, u, viewer.id), interop_messaging_user_fbid: String(u.pk), ai_agent_type: null };
-        return [String(u.pk), { __typename: 'SlideUser', id: String(u.pk), igid: String(u.pk), name: u.display_name || u.username, user_dict: dict }];
-      })
-    );
-    thread.slide_messages = slideMessages(db, c.id, messages, c.pk, senders, viewer);
-  }
+  if (messages > 0) thread.slide_messages = slideMessages(db, c.id, messages, c.pk, threadSenders(db, viewer, members), viewer);
   return { node: { __typename: 'SlideThread', id: `slide_thread:${c.pk}`, as_ig_direct_thread: thread }, cursor: String(c.pk) };
 }
 
@@ -369,7 +390,9 @@ function createHomeOperations(db) {
     return {
       get_slide_mailbox_for_iris_subscription: {
         __typename: 'SlideMailbox',
-        id: `slide_mailbox:${viewer.pk}`,
+        // The client keys the mailbox "SlideMailbox:" + its EIMU (the viewer pk;
+        // IGDGetSlideMailbox), so the id is the pk.
+        id: String(viewer.pk),
         iris_inactive_subscription_uq_seq_id: null,
         threads_by_folder: { edges: mailboxThreads(db, viewer, 50, options), page_info: EMPTY_PAGE },
         pinned_threads_v2: [],
@@ -538,7 +561,9 @@ function createHomeOperations(db) {
       return {
         get_slide_mailbox_for_iris_subscription: {
           __typename: 'SlideMailbox',
-          id: `slide_mailbox:${viewer.pk}`,
+          // The client keys the mailbox "SlideMailbox:" + its EIMU (the viewer pk;
+        // IGDGetSlideMailbox), so the id is the pk.
+        id: String(viewer.pk),
           threads_by_folder: { edges, page_info: EMPTY_PAGE },
         },
       };
@@ -599,6 +624,9 @@ function createHomeOperations(db) {
     IGDInboxHeaderOffMsysQuery: slideThread,
     IGDThreadDetailQuery: slideThread,
     IGDChatTabRootOffMsysQuery: slideThread,
+    // A thread a live new-message delta names (src/realtime/), fetched to
+    // update the inbox row (IGDHandleWithFetchThreadFallback).
+    IGDSlideAsyncFetchAndInsertIGDViewerThreadQuery: slideThread,
 
     // Opening a thread marks it read up to now for the viewer (the same as
     // the v1 "seen" endpoint); the answer is the viewer's new read receipt.
@@ -752,4 +780,4 @@ function createHomeOperations(db) {
   return operations;
 }
 
-module.exports = { createHomeOperations, suggestions, mailboxThreads, shareSheetItems };
+module.exports = { createHomeOperations, suggestions, mailboxThreads, shareSheetItems, slideMessageNode };
