@@ -13,6 +13,139 @@ A route returning HTTP 200 does not count as working.
 
 Active client: `rev1050722040-20261017T170808Z` (revision 1050722040).
 
+## P0. Complete the pinned pages and fix desktop Reels
+
+Owner priority, 2026-10-21: most expected pages are missing, and the Reels
+video fills the page instead of using the proper desktop layout. Finish page
+coverage and sizing before adding unrelated features. Implement the minimum
+local API contracts each page needs to load and behave correctly as part of
+that work. A missing captured module is an acquisition task with a concrete
+next step, not evidence that the page cannot exist.
+
+Source review baseline: `9b8285b81ca32dba4d9402058484ff1ee72b6363`.
+These are pending tasks; this review does not mark any page fixed.
+
+### Why page coverage currently falls through the gaps
+
+| Evidence in the current source | Consequence |
+| --- | --- |
+| `scripts/client-acquire.js` has four anonymous `DOCUMENTS`; its default module sets start from the snapshot builder's `ROUTES` | New page roots and signed-in page bootstrap data are not comprehensively acquired. Previously captured answers and explicit `--modules` / `--set` can add coverage, but there is no complete required-page inventory driving the pass. |
+| `scripts/client-snapshot.js` defines only `home` and `profile` in `ROUTES` | The manifest cannot comprehensively report whether Direct, stories, notifications, Reels, settings, saved posts and other expected routes have their required resources. |
+| The committed manifest reports `knownMissing: []` and `scope.complete: true` for six browser checks | Those values describe the narrow registered scope; they do not establish that all pages exist. |
+| `src/server.js` dispatches some routes separately; `src/shell/templates.js` recognizes only a subset of URL patterns | Acquisition, manifest coverage and runtime navigation can disagree. Profile subpages and some content deep links have no matching signed-in dispatch. |
+| `scripts/route-audit.js` exits based only on upstream attempts; `scripts/route-screens.js` exits based only on upstream/external requests | Broken documents, wrong pages, browser errors and failed resources can be reported while the audit command still succeeds. |
+
+### Task order
+
+- [ ] **1. Make one page registry drive acquisition, building, dispatch and verification.**
+  Record each observed web route pattern, aliases, access requirements, genuine
+  entry point/root, props, parameter extraction, component bindings, bootloader
+  answers, required scripts/styles, data operations and browser assertions.
+  Populate it from the client's real route definitions and navigation links.
+  Cover home, Explore/search, profiles and their available tabs, post/reel
+  links, desktop Reels, stories/highlights, Direct/thread URLs, notifications,
+  edit profile/settings, saved pages, archive/activity and authentication
+  pages exposed by the captured web client. Distinguish pages, overlays and
+  intentional external links. Record any mobile-only or unavailable surface
+  with evidence instead of inventing a web page.
+
+- [ ] **2. Add a local HAR/capture import path and finish the capture.**
+  Import actual HTML, JavaScript, CSS and bootloader response bodies, decoding
+  HAR base64 where needed, into a staged candidate with provenance and hashes.
+  The existing `scripts/capture-authenticated.js` produces response shapes;
+  it is not a full page/module acquisition pipeline. Capture the missing
+  navigation documents and route/bootstrap answers as well as lazy resources.
+  Keep account state out of reusable client artifacts and bind local viewer
+  state through the existing personalization layer. Do not commit the raw HAR.
+  Group material by verified revision and reject cross-revision combinations.
+
+  Useful supplied evidence: `m.har` has 680 requests and contains
+  `PolarisClipsTabDesktopRoot.react`, `PolarisClipsTabDesktopContainer.react`
+  and `PolarisExploreRoot.react`. Its nine bootloader responses identify
+  revision `1051138993`, whereas the current pin is `1050722040`.
+  It contains no main Instagram HTML navigation response. Use it to recover
+  module/operation evidence and start a new candidate; it is not a complete
+  replacement snapshot and must not be spliced into the existing revision.
+
+- [ ] **3. Complete each page's resource closure before activation.**
+  Extend the existing module index (`src/runtime/moduleIndex.js`) to report
+  missing entry points, named dependencies, resource/component map entries,
+  deferred modules and `cr:` bindings per page. Include the corresponding
+  styles and exact bootloader request sets. Have the manifest list every
+  required page and its actual missing resources, including pages for which
+  no root has been captured yet. Finish capture/build/verify on a staged
+  revision, then activate it. Preserve explicit misses and revision checks.
+
+- [ ] **4. Fix URL dispatch and preserve route parameters.**
+  In `src/shell/templates.js` and `src/server.js`, add the observed routes and
+  aliases from the shared registry. Currently `profileRoute()` always chooses
+  the posts tab, multi-segment profile tabs are not recognized as profiles,
+  `reelsRoute()` always sets `shortcode: null`, and the plural
+  `/reels/<shortcode>/` has no signed-in route dispatch even though its
+  document is canonicalized to `/`. Story URLs accept a numeric story suffix,
+  but `storiesRoute()` always sets `initial_media_id: null`.
+  Preserve tab, shortcode, initial story/highlight and query parameters using
+  the actual client contracts. Verify direct load, refresh, in-app navigation
+  and back/forward navigation. A missing route must not look like a successful
+  home/login page.
+
+- [ ] **5. Restore the genuine desktop Reels page and its data operations.**
+  The current `reelsRoute()` selects `PolarisClipsTabRoot` with empty props;
+  the existing checklist records that this produces the mobile viewer.
+  Trace the supplied desktop root's route/bootstrap contract, dependencies,
+  component bindings and feature providers in its own revision. Its root
+  defers `PolarisClipsTabDesktopPage.react`; its desktop container depends on
+  `PolarisClipsTabDesktopContainerImpl.react` and desktop Relay fragments.
+  Acquire that full dependency chain and its styles instead of swapping a
+  root name in isolation.
+
+  The HAR records `PolarisClipsTabDesktopContainerQuery` and
+  `PolarisClipsTabDesktopPaginationQuery`. Neither is registered in the
+  current source, which implements `PolarisClipsHomeRootQuery` instead.
+  Implement the desktop operations with their own captured input/output
+  contracts against the existing local clip store, including pagination and
+  an empty feed. Check any seed-media operation required by a deep link.
+
+  Match the genuine desktop frame: bound the visible video by the available
+  viewport height, preserve its media aspect ratio, leave the navigation and
+  action controls usable, and retain the proper gutters. Check portrait and
+  landscape media, resizing, fullscreen exit and the mobile breakpoint.
+  Establish the native page/layout first; apply only a scoped style fix if
+  a measured mismatch remains.
+
+- [ ] **6. Connect the missing pages to functionality already implemented.**
+  Reuse `src/clone/routes/accounts.js` for profile form data and saving edits;
+  `src/clone/routes/content.js` already exposes an Explore grid endpoint;
+  `src/backend/services/social.js` already implements saved posts, story
+  archive data and settings. Capture the operations the actual page selects
+  and bridge those contracts. This avoids adding unrelated backend features
+  while the existing functionality has no reachable genuine page.
+  Include the missing home-feed save module, post options, Notes menus and
+  profile tabs in the page dependency inventory.
+
+- [ ] **7. Make page coverage and layout real release gates.**
+  Derive required browser checks from the page registry instead of only
+  `CORE_CHECKS = [login, signup, feed, engage]`. Report integrity, page/resource
+  coverage and browser verification separately. Do not label the overall
+  client complete while required pages are absent, skipped or untested.
+  Make route-audit and route-screens return failure for unexpected document
+  errors, the wrong page/root, visible login fallback for a signed-in viewer,
+  required resource/API failures, browser exceptions and failed page assertions.
+  Use seeded local accounts/content and test both empty and populated states.
+  Retain the existing offline/upstream checks.
+
+  Add a genuine Reels browser check: record the video frame's bounding box,
+  aspect ratio, control visibility and horizontal overflow. Capture milestone
+  screenshots at 1366x768, 1440x900, 1920x1080 and a mobile viewport such as
+  390x844. Compare against the corresponding captured native layout; a
+  screenshot or a successful media API test alone does not prove correct sizing.
+
+Done for this priority means every required page is listed, captured at the
+chosen revision, served by the correct native route, usable through direct
+and in-app navigation, and verified in the browser; desktop Reels must also
+pass its layout checks. Existing distribution work remains in section A.
+Live messaging remains a later task, after these page/layout priorities.
+
 ## A. Installation and distribution
 
 | Item | Src | Test | Verified | Notes |
