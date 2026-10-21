@@ -222,7 +222,7 @@ function routeAnswers(html, modules) {
 
 // Which revision each signed-in route root was last served at, and how often a
 // route could not be served signed in (its answers are not in the snapshot).
-const routeState = { served: {}, unsupported: 0, unavailable: {} };
+const routeState = { served: {}, unsupported: 0, unavailable: {}, degraded: {} };
 
 function routeWithAnswers(route, html) {
   const answers = routeAnswers(html, route.answers);
@@ -386,7 +386,7 @@ function signedInRouteFor(req, viewer = null) {
   if (!cloneInstance) return unavailable();
   if (page.id === 'reels') {
     const post = cloneInstance.postByCode(params.shortcode, viewer);
-    return post && post.mediaType === 'video' ? reelsRoute(post.code) : errorRoute(req.path);
+    return post && post.mediaType === 'video' ? reelsRoute(post.code, String(post.pk)) : errorRoute(req.path);
   }
   if (page.id === 'post') {
     const post = cloneInstance.postByCode(params.shortcode, viewer);
@@ -432,6 +432,16 @@ function sendHtml(req, res, status, html) {
   if (page) res.setHeader('x-clone-page', page.page.id);
   let route = process.env.SHELL_SIGNED_IN_HOME !== '0' && ctx.viewer ? signedInRouteFor(req, ctx.viewer) : null;
   let withAnswers = route ? routeWithAnswers(route, html) : null;
+  // A page whose snapshot lacks it but holds a lesser form of it (the mobile
+  // Reels viewer for the desktop page) is served degraded, and says so.
+  if (route && !withAnswers && route.fallback) {
+    const fallback = routeWithAnswers(route.fallback, html);
+    if (fallback) [route, withAnswers] = [route.fallback, fallback];
+  }
+  if (route && route.degraded) {
+    routeState.degraded[page ? page.page.id : req.path] = route.degraded;
+    res.setHeader('x-clone-page-degraded', route.degraded);
+  }
   // A signed-in page whose root the snapshot lacks is not served as the
   // anonymous page: it is the client's "not available" route instead.
   if (route && !withAnswers && !route.unavailable) {

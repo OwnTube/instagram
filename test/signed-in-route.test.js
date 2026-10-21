@@ -180,6 +180,8 @@ test('signed-in stories and not-found routes, from pinned answers only', async (
       assert.deepStrictEqual(route.rootView.entryPoint, { __dr: `${root}.entrypoint` }, p);
       assert.deepStrictEqual(route.params, params, p);
       assert.deepStrictEqual(route.polarisRouteConfig, { pageID }, p);
+      // Without the desktop Reels page in the snapshot, the mobile viewer is served and reported as such.
+      assert.strictEqual(Boolean(res.headers.get('x-clone-page-degraded')), p === '/reels/', p);
       const anon = await get(new Browser(s.base), p);
       assert.strictEqual(anon.status, 404, `${p} signed out: no document`);
     }
@@ -217,6 +219,35 @@ test('signed-in stories and not-found routes, from pinned answers only', async (
   });
 
   await t.test('no upstream attempt', () => assert.deepStrictEqual(s.upstream, []));
+});
+
+test('desktop Reels: PolarisClipsTabDesktopRoot as recorded, when the snapshot holds it', async (t) => {
+  const answers = {};
+  for (const m of ['PolarisFeedRoot.react', 'PolarisErrorRoot.entrypoint', 'PolarisErrorRoot.react', 'PolarisClipsTabRoot.entrypoint', 'PolarisClipsTabRoot.react', 'PolarisClipsTabDesktopRoot.entrypoint', 'PolarisClipsTabDesktopContainer.react', 'PolarisClipsTabDesktopRoot.react']) answers[`${m}|`] = answerAt(100);
+  const s = await startCloneServer({}, { snapshot: { revision: '100', documents: { '/': documentAt(100), '/accounts/emailsignup/': documentAt(100) }, answers } });
+  t.after(() => s.close());
+  const viewer = new Browser(s.base);
+  const me = await viewer.signup(s, { username: 'desk_viewer' });
+  const author = new Browser(s.base);
+  await author.signup(s, { username: 'desk_author' });
+  const reel = await postReel(author, 'desktop reel');
+  const get = (p) => viewer.get(p, { headers: { accept: 'text/html', 'sec-fetch-site': 'none' } });
+  const initialize = (html) => [...html.matchAll(/<script type="application\/json"[^>]*data-sjs>(.*?)<\/script>/g)].map((m) => JSON.parse(m[1])).flatMap((b) => b.require || []).find((r) => r[0] === 'CometPlatformRootClient' && r[1] === 'initialize')[3][0].initialRouteInfo.route;
+  for (const [p, shortcode, mediaId] of [['/reels/', null, null], [`/reels/${reel.code}/`, reel.code, String(reel.pk)]]) {
+    const res = await get(p);
+    assert.strictEqual(res.status, 200, p);
+    assert.strictEqual(res.headers.get('x-clone-page-degraded'), null, p);
+    const route = initialize(res.text);
+    assert.strictEqual(route.actorID, String(me.pk));
+    assert.deepStrictEqual(route.rootView.entryPoint, { __dr: 'PolarisClipsTabDesktopRoot.entrypoint' }, p);
+    assert.deepStrictEqual(route.rootView.resource, { __dr: 'PolarisClipsTabDesktopContainer.react' }, p);
+    assert.ok(route.rootView.allResources.some((r) => r.__dr === 'PolarisClipsTabDesktopRoot.react'), p);
+    assert.deepStrictEqual(route.rootView.props, { media_id: mediaId, page_logging: { name: 'reelsTab', params: {} } }, p);
+    assert.deepStrictEqual(route.params, { shortcode, tab: null }, p);
+    assert.deepStrictEqual(route.polarisRouteConfig, { hideFooter: true, footerVariant: 'none', shellProps: { isGlypHeaderIcon: false }, pageID: 'reelsTab' }, p);
+    assert.strictEqual(route.canonicalRouteName, 'comet.igweb.PolarisClipsTabDesktopProfiledContentRoute');
+  }
+  assert.deepStrictEqual(s.upstream, []);
 });
 
 test('signed-in post page: PolarisPostRoot with cr:2882 bound, only when the snapshot holds the desktop post root', async (t) => {

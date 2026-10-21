@@ -232,13 +232,15 @@ function directInboxRoute(threadKey = null) {
 }
 
 /**
- * The Reels tab: PolarisClipsTabRoot, whose entry point nests the clips
- * viewer's entry point (PolarisClipsViewerDefaultContent, or the following
- * tab's for `routeParams.tab === 'following'` when its gate is on). Route
- * builder `/reels/{?shortcode}/` (no default params); page id `reelsTab`, the
- * id the client's page checks use; trace policy `polaris.reelsTab`.
+ * The Reels tab as the mobile client shows it: PolarisClipsTabRoot, whose
+ * entry point nests the clips viewer's entry point
+ * (PolarisClipsViewerDefaultContent, or the following tab's for
+ * `routeParams.tab === 'following'` when its gate is on). Route builder
+ * `/reels/{?shortcode}/` (no default params); page id `reelsTab`, the id the
+ * client's page checks use; trace policy `polaris.reelsTab`. The video fills
+ * the window: it is the desktop page's fallback only (see reelsRoute).
  */
-function reelsRoute(shortcode = null) {
+function mobileReelsRoute(shortcode = null) {
   return {
     entryPoint: 'PolarisClipsTabRoot',
     root: 'PolarisClipsTabRoot',
@@ -252,6 +254,39 @@ function reelsRoute(shortcode = null) {
     pageID: 'reelsTab',
     // usePolarisIsOnReelsPage: entity_type `clip`.
     entityKeyConfig: { entity_type: { source: 'constant', value: 'clip' } },
+  };
+}
+
+/**
+ * The desktop Reels page, as Instagram's server routes `/reels/` for a
+ * signed-in desktop browser (route definition recorded in revision
+ * 1051138993): entry point PolarisClipsTabDesktopRoot.entrypoint, root
+ * PolarisClipsTabDesktopContainer.react (resources also
+ * PolarisClipsTabDesktopRoot.react), props {media_id, page_logging},
+ * route config {hideFooter, footerVariant: 'none', shellProps:
+ * {isGlypHeaderIcon: false}, pageID: 'reelsTab'}, canonical route
+ * comet.igweb.PolarisClipsTabDesktopProfiledContentRoute, entity `clip`
+ * keyed by the shortcode. `media_id` is the linked reel's pk (null on the
+ * tab): the container's seed query (xig_fetch_media) reads it.
+ *
+ * A snapshot without these answers gets the mobile tab instead
+ * (`fallback`), reported as degraded rather than as the page.
+ */
+function reelsRoute(shortcode = null, mediaId = null) {
+  return {
+    entryPoint: 'PolarisClipsTabDesktopRoot',
+    root: 'PolarisClipsTabDesktopContainer',
+    also: ['PolarisClipsTabDesktopRoot.react'],
+    answers: ['PolarisClipsTabDesktopRoot.entrypoint', 'PolarisClipsTabDesktopContainer.react', 'PolarisClipsTabDesktopRoot.react'],
+    props: { media_id: mediaId, page_logging: { name: 'reelsTab', params: {} } },
+    params: { shortcode, tab: null },
+    routePath: '/reels/{?shortcode}/',
+    tracePolicy: 'polaris.reelsTab',
+    pageID: 'reelsTab',
+    routeConfig: { hideFooter: true, footerVariant: 'none', shellProps: { isGlypHeaderIcon: false }, pageID: 'reelsTab' },
+    canonicalRouteName: 'comet.igweb.PolarisClipsTabDesktopProfiledContentRoute',
+    entityKeyConfig: { entity_type: { source: 'constant', value: 'clip' }, entity_id: { source: 'param', value: 'shortcode' } },
+    fallback: { ...mobileReelsRoute(shortcode), degraded: 'the snapshot has no desktop Reels page (PolarisClipsTabDesktopRoot); showing the mobile viewer' },
   };
 }
 
@@ -348,7 +383,7 @@ function unavailableRoute(url, pageId, reason) {
  */
 function view(spec) {
   return {
-    allResources: [{ __dr: `${spec.entryPoint}.entrypoint` }, { __dr: `${spec.root}.react` }],
+    allResources: [{ __dr: `${spec.entryPoint}.entrypoint` }, { __dr: `${spec.root}.react` }, ...(spec.also || []).map((m) => ({ __dr: m }))],
     resource: { __dr: `${spec.root}.react` },
     props: spec.props,
     entryPoint: { __dr: `${spec.entryPoint}.entrypoint` },
@@ -371,8 +406,8 @@ function toSignedInRoute(node, viewer, spec = homeRoute(), url = '/') {
   route.rootView = view(spec);
   route.hostableView = view(spec);
   route.tracePolicy = spec.tracePolicy;
-  route.canonicalRouteName = null;
-  route.polarisRouteConfig = { pageID: spec.pageID };
+  route.canonicalRouteName = spec.canonicalRouteName || null;
+  route.polarisRouteConfig = spec.routeConfig || { pageID: spec.pageID };
   route.params = spec.params;
   route.stripParams = [];
   route.routePath = spec.routePath;
@@ -526,4 +561,4 @@ function insertFeedRoot(html, answers, docDefines, toLocal, initTuple, root = FE
   return { html: html.slice(0, at) + parts.join('') + html.slice(at), inserted: tags.length, missing };
 }
 
-module.exports = { emptySSRMount, isLoginHomeInitialize, toSignedInHome, toSignedInRoute, homeRoute, profileRoute, storiesRoute, activityRoute, directInboxRoute, reelsRoute, postRoute, errorRoute, unavailableRoute, isSSRInit, disableAnonymousSSR, insertFeedRoot, parseAnswer, FEED_ROOT, LOGGED_OUT_ONLY, NO_LOCAL_SERVICE };
+module.exports = { emptySSRMount, isLoginHomeInitialize, toSignedInHome, toSignedInRoute, homeRoute, profileRoute, storiesRoute, activityRoute, directInboxRoute, reelsRoute, mobileReelsRoute, postRoute, errorRoute, unavailableRoute, isSSRInit, disableAnonymousSSR, insertFeedRoot, parseAnswer, FEED_ROOT, LOGGED_OUT_ONLY, NO_LOCAL_SERVICE };

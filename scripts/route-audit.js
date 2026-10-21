@@ -13,7 +13,8 @@
  * A signed-in page is WORKING when it is answered 200 with its own route
  * (the registry's page, under the viewer, with the expected page id) and no
  * login markup; UNAVAILABLE when the server says so (501, the client's error
- * route, with the reason); anything else is WRONG (another page, the login
+ * route, with the reason); DEGRADED when it is served in a lesser form the
+ * server names (the mobile Reels viewer for the desktop page); anything else is WRONG (another page, the login
  * page, an unexpected status). An anonymous page is WORKING when its
  * snapshot document is served. A signed-in page asked for by an anonymous
  * visitor must not be a server error.
@@ -100,6 +101,7 @@ async function main() {
         if (who === 'signed-in' && page.access === 'signed-in') {
           if (servedPage !== page.id) [verdict, detail] = ['WRONG', `dispatched as ${servedPage || 'no page'}`];
           else if (res.status === 501) [verdict, detail] = ['UNAVAILABLE', res.headers.get('x-clone-page-unavailable') || ''];
+          else if (res.headers.get('x-clone-page-degraded')) [verdict, detail] = ['DEGRADED', res.headers.get('x-clone-page-degraded')];
           else if (res.status !== 200) [verdict, detail] = ['WRONG', `status ${res.status}`];
           else if (login) [verdict, detail] = ['WRONG', 'login markup for a signed-in viewer'];
           else if (!route || route.actorID !== String(me.pk)) [verdict, detail] = ['WRONG', 'not the signed-in route'];
@@ -125,10 +127,10 @@ async function main() {
   const signedIn = rows.filter((r) => r.who === 'signed-in');
   const count = (v) => signedIn.filter((r) => r.verdict === v).length;
   const wrong = rows.filter((r) => r.verdict === 'WRONG');
-  console.log(`pages: ${count('WORKING')} working, ${count('UNAVAILABLE')} unavailable, ${count('NO SAMPLE')} without a sample URL, ${wrong.length} wrong`);
+  console.log(`pages: ${count('WORKING')} working, ${count('DEGRADED')} degraded, ${count('UNAVAILABLE')} unavailable, ${count('NO SAMPLE')} without a sample URL, ${wrong.length} wrong`);
   console.log(`upstream attempts: ${upstreamGuard.attempts.length}${upstreamGuard.attempts.map((a) => `\n  ${a.method} ${a.url}`).join('')}`);
-  const failed = wrong.length > 0 || upstreamGuard.attempts.length > 0 || (!allowUnavailable && count('UNAVAILABLE') > 0);
-  if (failed) console.log(`route audit FAILED${!allowUnavailable && count('UNAVAILABLE') ? ' (unavailable pages count as failures; --allow-unavailable checks dispatch only)' : ''}`);
+  const failed = wrong.length > 0 || upstreamGuard.attempts.length > 0 || (!allowUnavailable && count('UNAVAILABLE') + count('DEGRADED') > 0);
+  if (failed) console.log(`route audit FAILED${!allowUnavailable && count('UNAVAILABLE') + count('DEGRADED') ? ' (unavailable and degraded pages count as failures; --allow-unavailable checks dispatch only)' : ''}`);
   process.exit(failed ? 1 : 0);
 }
 
