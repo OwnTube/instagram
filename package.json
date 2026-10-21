@@ -41,7 +41,8 @@
     "verify:pinned-restart": "node scripts/pinned-restart-check.js",
     "pages": "node scripts/page-coverage.js",
     "journey:deeplinks": "node scripts/deeplink-journey.js",
-    "check:reels-layout": "node scripts/reels-layout.js"
+    "check:reels-layout": "node scripts/reels-layout.js",
+    "check:load-timing": "node scripts/load-timing.js"
   },
   "engines": {
     "node": ">=22.13.0"

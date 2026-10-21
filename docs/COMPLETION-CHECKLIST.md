@@ -203,6 +203,13 @@ These are pending tasks; this review does not mark any page fixed.
     - at 1440x900, 65%; at 1920x1080, 68%;
     - at 390x844, 18% (phone viewer, passes).
     The check fails until the desktop page is served.
+  - Revision 1051154526 (activated): `/reels/` is the desktop page for desktop browsers and the
+    mobile viewer for phone User-Agents (as Instagram's server chooses). `npm run check:reels-layout`
+    passes at all four sizes: 412x734 at 1366x768, 486x866 at 1440x900, 588x1046 at 1920x1080
+    (9:16, under 1% cropped, Like/Comment/Share on screen); 390x844 phone viewer, 18% cropped.
+  - Fixed: a `/reels/<code>/` link showed the next reel. The desktop list repeated the linked reel,
+    `filterPolarisClipsDesktopDuplicateEdges` then returned a new array every render (React #185);
+    the linked reel is now only the seed, never in the list.
 
 - [ ] **6. Connect the missing pages to functionality already implemented.**
   Reuse `src/clone/routes/accounts.js` for profile form data and saving edits;
@@ -244,6 +251,25 @@ These are pending tasks; this review does not mark any page fixed.
   - `scripts/reels-layout.js` (`npm run check:reels-layout`) is the Reels frame check: the video
     box, the picture after object-fit, the 9:16 aspect, the window height, half the width on desktop,
     Like/Comment/Share on screen, sideways scroll, and the server's degraded flag, at all four sizes.
+  - Strict run on revision 1051154526 (`routes-strict1051154526`): 8 working (Reels and Explore
+    rendered), 10 unavailable, 4 WRONG: login and password reset (their documents were not fetched in
+    that pass), Explore (`PolarisExploreRootContentRelay.react` not acquired) and the post page
+    (three GraphQL operations of the new revision not answered, so the client shows its error page).
+    These are regressions against 1050701999 and block calling the revision complete.
+
+## Performance over a real network
+
+- [ ] **Slow when hosted on a VPS behind a domain** (owner report, 2026-10-21).
+  Reproduced with `npm run check:load-timing` (`scripts/load-timing.js`: signed-in home feed in
+  Chromium with a 100 ms round trip and 20 Mbit/s down emulated). Baseline:
+  - cold: feed shown after 40.1 s; 1,923 requests, 41.7 MB transferred (1,894 static assets, 39.2 MB);
+  - reload: 4.1 s, still 1,919 requests; the 1.5 MB document and 0.7 MB of bootloader answers are
+    sent again in full every time.
+  Causes seen so far: no response compression (JS, CSS and the document go out uncompressed);
+  pinned assets cached for only 5 minutes and sent with `res.end`, so a revalidation never gets a
+  304; the number of asset requests (to be explained: which modules the home load pulls and why).
+  Next: break down the asset requests, add gzip/brotli for text responses, give content-hashed
+  pinned assets a long cache lifetime with ETags covering the applied patches, then re-measure.
 
 Done for this priority means every required page is listed, captured at the
 chosen revision, served by the correct native route, usable through direct
