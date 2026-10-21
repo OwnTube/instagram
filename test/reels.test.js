@@ -120,5 +120,24 @@ test('reels', async (t) => {
     assert.strictEqual((await ann.post('/api/v1/accounts/set_public/', {})).status, 200);
   });
 
+  await t.test('the desktop Reels page: the same connection, and its seed reel by media id', async () => {
+    const codes = (res) => res.body.data.xdt_api__v1__clips__home__connection_v2.edges.map((e) => e.node.media.code);
+    const tab = await gql(bob, 'PolarisClipsTabDesktopContainerQuery', { first: 1, data: {} });
+    const all = codes(await gql(bob, 'PolarisClipsHomeRootQuery', { first: 10, data: {} }));
+    assert.deepStrictEqual(codes(tab), all.slice(0, 1));
+    const end = tab.body.data.xdt_api__v1__clips__home__connection_v2.page_info.end_cursor;
+    assert.deepStrictEqual(codes(await gql(bob, 'PolarisClipsTabDesktopPaginationQuery', { first: 10, after: end, data: {} })), all.slice(1));
+    // A linked reel is first, and later pages do not repeat it.
+    const linked = all[all.length - 1];
+    const first = await gql(bob, 'PolarisClipsTabDesktopContainerQuery', { first: 1, data: { chaining_media_id: linked } });
+    assert.deepStrictEqual(codes(first), [linked]);
+    const next = await gql(bob, 'PolarisClipsTabDesktopPaginationQuery', { first: 10, after: first.body.data.xdt_api__v1__clips__home__connection_v2.page_info.end_cursor, data: { chaining_media_id: linked } });
+    assert.ok(!codes(next).includes(linked), 'not repeated');
+    const seed = await gql(bob, 'PolarisClipsTabDesktopContainerSeedMediaQuery', { mediaId: reel.pk });
+    assert.strictEqual(seed.body.data.xig_fetch_media.code, reel.code);
+    assert.strictEqual(seed.body.data.xig_fetch_media.media_type, 2);
+    assert.strictEqual((await gql(bob, 'PolarisClipsTabDesktopContainerSeedMediaQuery', { mediaId: '1' })).body.data.xig_fetch_media, null);
+  });
+
   await t.test('no upstream attempt', () => assert.deepStrictEqual(server.upstream, []));
 });

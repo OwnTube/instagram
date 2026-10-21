@@ -753,9 +753,11 @@ function createHomeOperations(db) {
     PolarisClipsHomeRootQuery(vars, ctx) {
       const viewer = viewerOf(ctx);
       const first = Math.min(Math.max(Number(vars.first) || 10, 1), 30);
-      const chaining = vars.data && vars.data.chaining_media_id != null && !vars.after ? linkedClip(String(vars.data.chaining_media_id), viewer) : null;
+      const chaining = vars.data && vars.data.chaining_media_id != null ? linkedClip(String(vars.data.chaining_media_id), viewer) : null;
       const page = posts.listClips(db, viewer.id, { limit: first, cursor: vars.after || null });
-      const items = chaining ? [chaining, ...page.items.filter((p) => p.id !== chaining.id)].slice(0, first) : page.items;
+      // The linked reel opens the first page and is not repeated on later ones.
+      const rest = chaining ? page.items.filter((p) => p.id !== chaining.id) : page.items;
+      const items = chaining && !vars.after ? [chaining, ...rest].slice(0, first) : rest;
       const edges = items.map((p) => ({ cursor: p.id, node: { __typename: 'XDTClipsItemDict', media: present.media(db, p, viewer.id) } }));
       return {
         xdt_api__v1__clips__home__connection_v2: {
@@ -764,6 +766,23 @@ function createHomeOperations(db) {
           page_info: { end_cursor: page.nextCursor, has_next_page: Boolean(page.nextCursor), has_previous_page: false, start_cursor: edges[0]?.cursor ?? null },
         },
       };
+    },
+
+    // The desktop Reels page (PolarisClipsTabDesktopContainer.react): its
+    // page and pagination queries select the same connection with the same
+    // variables (after, before, data, first, last).
+    PolarisClipsTabDesktopContainerQuery(vars, ctx) {
+      return operations.PolarisClipsHomeRootQuery(vars, ctx);
+    },
+    PolarisClipsTabDesktopPaginationQuery(vars, ctx) {
+      return operations.PolarisClipsHomeRootQuery(vars, ctx);
+    },
+    // Its seed query: the linked reel by media id (`xig_fetch_media(id:)`),
+    // null when the viewer may not see it.
+    PolarisClipsTabDesktopContainerSeedMediaQuery(vars, ctx) {
+      const viewer = viewerOf(ctx);
+      const clip = vars.mediaId != null ? linkedClip(String(vars.mediaId), viewer) : null;
+      return { xig_fetch_media: clip ? present.media(db, clip, viewer.id) : null };
     },
 
     // Ads injected between reels: this server serves no ads.
