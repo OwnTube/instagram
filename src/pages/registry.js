@@ -85,7 +85,7 @@ const PAGES = [
     id: 'explore_tag',
     kind: 'redirect',
     patterns: ['/explore/tags/{tag_name}/{?tab_name}/'],
-    builder: null,
+    builder: 'XPolarisExploreTagsControllerRouteBuilder',
     access: 'signed-in',
     served: null,
     // The recorded definition redirects to the keyword search page.
@@ -99,7 +99,7 @@ const PAGES = [
     id: 'explore_location',
     kind: 'page',
     patterns: ['/explore/locations/{location_id}/{?slug}/{?tab_name}/'],
-    builder: null,
+    builder: 'XPolarisExploreLocationsControllerRouteBuilder',
     access: 'signed-in',
     served: null,
     har: { entryPoint: 'PolarisExploreLocationsTopRoot.next', root: 'PolarisExploreLocationsTopTabRoot.next', pageID: 'locationPage', tracePolicy: 'polaris.locationPage', params: ['location_id', 'slug', 'tab_name'] },

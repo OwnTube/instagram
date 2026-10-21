@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-"use strict";
+'use strict';
 
 /**
  * Reels layout check, against the active pinned client with the upstream
@@ -24,23 +24,20 @@
  *   node scripts/reels-layout.js
  */
 
-const upstreamGuard = require("./lib/offline").strictOffline();
+const upstreamGuard = require('./lib/offline').strictOffline();
 
-const fs = require("node:fs");
-const path = require("node:path");
-const { spawnSync } = require("node:child_process");
-const {
-  launchChromium,
-  openSession,
-  captureScreenshot,
-} = require("./lib/browser");
-const { evaluate, sleep, sunsetPng } = require("./lib/scenario");
-const { Browser } = require("../test/clone-helpers");
+const fs = require('node:fs');
+const path = require('node:path');
+const { spawnSync } = require('node:child_process');
+const { launchChromium, openSession, captureScreenshot } = require('./lib/browser');
+const { evaluate, sleep, sunsetPng } = require('./lib/scenario');
+const { Browser } = require('../test/clone-helpers');
 
-const ROOT = path.join(__dirname, "..");
-const SCRATCH = path.join(ROOT, ".scratch", "reels-layout");
-const SHOTS = path.join(ROOT, "test-artifacts", "screenshots");
-const REPORTS = path.join(ROOT, "test-artifacts", "reports");
+const ROOT = path.join(__dirname, '..');
+const SCRATCH = path.join(ROOT, '.scratch', 'reels-layout');
+const SHOTS = path.join(ROOT, 'test-artifacts', 'screenshots');
+const REPORTS = path.join(ROOT, 'test-artifacts', 'reports');
+const PHONE_UA = 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36';
 const WINDOWS = [
   { width: 1366, height: 768, mobile: false },
   { width: 1440, height: 900, mobile: false },
@@ -73,47 +70,31 @@ const MEASURE = `(() => {
     picture: { width: Math.round(pic.width), height: Math.round(pic.height) },
     buttons: { like: button('Like'), comment: button('Comment'), share: button('Share') },
     window: [innerWidth, innerHeight],
+    phoneAgent: /Mobi/.test(navigator.userAgent),
+    servedBy: navigator.serviceWorker && navigator.serviceWorker.controller ? 'service worker' : 'network',
     pageScrolls: document.scrollingElement.scrollWidth > innerWidth,
   });
 })()`;
 
 function judge(win, m, degraded) {
   const problems = [];
-  if (!m.video) return ["no video shown"];
+  if (!m.video) return ['no video shown'];
   const aspect = m.picture.width / m.picture.height;
   // How much of the reel object-fit cuts off (cover crops to the element's shape).
-  const cropped =
-    m.video.objectFit === "cover"
-      ? 1 - Math.min(aspect, 9 / 16) / Math.max(aspect, 9 / 16)
-      : 0;
+  const cropped = m.video.objectFit === 'cover' ? 1 - Math.min(aspect, 9 / 16) / Math.max(aspect, 9 / 16) : 0;
   m.croppedFraction = Number(cropped.toFixed(3));
-  if (!win.mobile && Math.abs(aspect - 9 / 16) > 0.03)
-    problems.push(
-      `picture aspect ${aspect.toFixed(3)}, not 9:16 (${(9 / 16).toFixed(3)})`,
-    );
+  if (!win.mobile && Math.abs(aspect - 9 / 16) > 0.03) problems.push(`picture aspect ${aspect.toFixed(3)}, not 9:16 (${(9 / 16).toFixed(3)})`);
   // On a phone the viewer fills the screen; a tall phone crops a little off the reel's sides.
-  if (win.mobile && cropped > 0.25)
-    problems.push(`${Math.round(cropped * 100)}% of the reel cropped`);
-  if (m.picture.height > win.height + 1)
-    problems.push(
-      `picture ${m.picture.height}px taller than the window (${win.height}px)`,
-    );
-  if (m.pageScrolls) problems.push("the page scrolls sideways");
-  for (const [name, b] of Object.entries(m.buttons))
-    if (!b || !b.onScreen)
-      problems.push(`${name} button ${b ? "off screen" : "missing"}`);
+  if (win.mobile && cropped > 0.25) problems.push(`${Math.round(cropped * 100)}% of the reel cropped`);
+  if (m.picture.height > win.height + 1) problems.push(`picture ${m.picture.height}px taller than the window (${win.height}px)`);
+  if (m.pageScrolls) problems.push('the page scrolls sideways');
+  for (const [name, b] of Object.entries(m.buttons)) if (!b || !b.onScreen) problems.push(`${name} button ${b ? 'off screen' : 'missing'}`);
   if (!win.mobile) {
     if (degraded) problems.push(`server: ${degraded}`);
-    if (m.video.width > win.width / 2)
-      problems.push(
-        `video ${m.video.width}px wide, more than half the window (${win.width}px)`,
-      );
-    if (m.video.height > win.height + 1)
-      problems.push(`video element ${m.video.height}px taller than the window`);
+    if (m.video.width > win.width / 2) problems.push(`video ${m.video.width}px wide, more than half the window (${win.width}px)`);
+    if (m.video.height > win.height + 1) problems.push(`video element ${m.video.height}px taller than the window`);
   } else if (m.picture.width < win.width * 0.9) {
-    problems.push(
-      `picture ${m.picture.width}px across a ${win.width}px phone window`,
-    );
+    problems.push(`picture ${m.picture.width}px across a ${win.width}px phone window`);
   }
   return problems;
 }
@@ -123,67 +104,48 @@ async function main() {
   fs.mkdirSync(SCRATCH, { recursive: true });
   fs.mkdirSync(SHOTS, { recursive: true });
   fs.mkdirSync(REPORTS, { recursive: true });
-  const videoFile = path.join(SCRATCH, "reel.mp4");
-  const made = spawnSync("ffmpeg", [
-    "-loglevel",
-    "error",
-    "-f",
-    "lavfi",
-    "-i",
-    "testsrc=size=540x960:rate=24",
-    "-t",
-    "4",
-    "-c:v",
-    "libvpx-vp9",
-    "-b:v",
-    "300k",
-    "-y",
-    videoFile,
-  ]);
+  const videoFile = path.join(SCRATCH, 'reel.mp4');
+  const made = spawnSync('ffmpeg', ['-loglevel', 'error', '-f', 'lavfi', '-i', 'testsrc=size=540x960:rate=24', '-t', '4', '-c:v', 'libvpx-vp9', '-b:v', '300k', '-y', videoFile]);
   if (made.status !== 0) {
-    console.error(
-      `ffmpeg could not make the test video: ${made.error ? made.error.message : made.stderr}`,
-    );
+    console.error(`ffmpeg could not make the test video: ${made.error ? made.error.message : made.stderr}`);
     return 2;
   }
   Object.assign(process.env, {
-    BACKEND_DB: path.join(SCRATCH, "db.sqlite"),
+    BACKEND_DB: path.join(SCRATCH, 'db.sqlite'),
     CLONE_DATA_DIR: SCRATCH,
-    VERBOSE: "0",
-    BACKEND_VERBOSE: "0",
+    VERBOSE: '0',
+    BACKEND_VERBOSE: '0',
   });
-  const { app } = require("../src/server");
+  const { app } = require('../src/server');
   const server = await new Promise((resolve) => {
-    const s = app.listen(0, "127.0.0.1", () => resolve(s));
+    const s = app.listen(0, '127.0.0.1', () => resolve(s));
   });
   const base = `http://127.0.0.1:${server.address().port}`;
-  const { child, browserWsUrl } = await launchChromium(
-    path.join(SCRATCH, "profile"),
-  );
+  const { child, browserWsUrl } = await launchChromium(path.join(SCRATCH, 'profile'));
   const rows = [];
   try {
     const A = new Browser(base);
     await A.signup(null, {
-      username: "layout_viewer",
-      fullName: "Layout Viewer",
+      username: 'layout_viewer',
+      fullName: 'Layout Viewer',
     });
     const B = new Browser(base);
     const b = await B.signup(null, {
-      username: "layout_author",
-      fullName: "Layout Author",
+      username: 'layout_author',
+      fullName: 'Layout Author',
     });
     await A.post(`/api/v1/friendships/create/${b.pk}/`, {});
     const vid = fs.readFileSync(videoFile);
     const id = String(Date.now());
     const entity = `fb_uploader_${id}`;
-    await B.request("POST", `/rupload_igvideo/${entity}`, {
+    await B.request('POST', `/rupload_igvideo/${entity}`, {
       raw: vid,
       headers: {
-        "content-type": "application/octet-stream",
-        offset: "0",
-        "x-entity-length": String(vid.length),
-        "x-entity-name": entity,
-        "x-instagram-rupload-params": JSON.stringify({
+        'content-type': 'application/octet-stream',
+        offset: '0',
+        'x-entity-length': String(vid.length),
+        'x-entity-name': entity,
+        'x-instagram-rupload-params': JSON.stringify({
           upload_id: id,
           media_type: 2,
           upload_media_width: 540,
@@ -192,56 +154,53 @@ async function main() {
         }),
       },
     });
-    await B.request("POST", `/rupload_igphoto/${entity}`, {
+    await B.request('POST', `/rupload_igphoto/${entity}`, {
       raw: sunsetPng(540, 960),
       headers: {
-        "content-type": "image/png",
-        "x-instagram-rupload-params": JSON.stringify({
+        'content-type': 'image/png',
+        'x-instagram-rupload-params': JSON.stringify({
           upload_id: id,
           media_type: 1,
         }),
       },
     });
-    await B.post("/api/v1/media/configure_to_clips/", {
+    await B.post('/api/v1/media/configure_to_clips/', {
       upload_id: id,
-      caption: "layout reel",
+      caption: 'layout reel',
     });
     const degraded = (
-      await A.get("/reels/", {
+      await A.get('/reels/', {
         headers: {
-          accept: "text/html",
-          "sec-fetch-dest": "document",
-          "sec-fetch-mode": "navigate",
+          accept: 'text/html',
+          'sec-fetch-dest': 'document',
+          'sec-fetch-mode': 'navigate',
         },
       })
-    ).headers.get("x-clone-page-degraded");
+    ).headers.get('x-clone-page-degraded');
     for (const win of WINDOWS) {
       const s = await openSession(browserWsUrl);
-      await s.cdp.send("Emulation.setDeviceMetricsOverride", {
+      await s.cdp.send('Emulation.setDeviceMetricsOverride', {
         width: win.width,
         height: win.height,
         deviceScaleFactor: 1,
         mobile: win.mobile,
       });
-      if (win.mobile)
-        await s.cdp.send("Emulation.setTouchEmulationEnabled", {
-          enabled: true,
-          maxTouchPoints: 5,
-        });
+      if (win.mobile) {
+        // A phone browser: Instagram's server (and this one) chooses the page by User-Agent.
+        await s.cdp.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 });
+        await s.cdp.send('Emulation.setUserAgentOverride', { userAgent: PHONE_UA, platform: 'Linux armv8l' });
+      }
       for (const [name, value] of A.jar)
-        await s.cdp.send("Network.setCookie", {
+        await s.cdp.send('Network.setCookie', {
           name,
           value: encodeURIComponent(value),
           url: base,
         });
-      await s.cdp.send("Page.navigate", { url: `${base}/reels/` });
+      await s.cdp.send('Page.navigate', { url: `${base}/reels/` });
       await sleep(9000);
       const m = JSON.parse(await evaluate(s, MEASURE));
       const problems = judge(win, m, degraded);
-      const shot = path.join(
-        SHOTS,
-        `reels-layout-${win.width}x${win.height}.png`,
-      );
+      const shot = path.join(SHOTS, `reels-layout-${win.width}x${win.height}.png`);
       await captureScreenshot(s, shot);
       rows.push({
         window: `${win.width}x${win.height}`,
@@ -251,17 +210,17 @@ async function main() {
         screenshot: path.relative(ROOT, shot),
       });
       console.log(
-        `${problems.length ? "FAIL" : "ok  "} ${win.width}x${win.height}: video ${m.video ? `${m.video.width}x${m.video.height} at ${m.video.x},${m.video.y} (${m.video.objectFit})` : "none"}, picture ${m.picture ? `${m.picture.width}x${m.picture.height}` : "-"}${m.croppedFraction ? `, ${Math.round(m.croppedFraction * 100)}% cropped` : ""}${problems.length ? `\n       ${problems.join("\n       ")}` : ""}`,
+        `${problems.length ? 'FAIL' : 'ok  '} ${win.width}x${win.height}: video ${m.video ? `${m.video.width}x${m.video.height} at ${m.video.x},${m.video.y} (${m.video.objectFit})` : 'none'} [${m.phoneAgent ? 'phone agent' : 'desktop agent'}, ${m.servedBy}], picture ${m.picture ? `${m.picture.width}x${m.picture.height}` : '-'}${m.croppedFraction ? `, ${Math.round(m.croppedFraction * 100)}% cropped` : ''}${problems.length ? `\n       ${problems.join('\n       ')}` : ''}`,
       );
       s.ws.close();
     }
   } finally {
-    child.kill("SIGKILL");
+    child.kill('SIGKILL');
     server.closeAllConnections?.();
     server.close();
   }
   fs.writeFileSync(
-    path.join(REPORTS, "reels-layout.json"),
+    path.join(REPORTS, 'reels-layout.json'),
     JSON.stringify(
       {
         at: new Date().toISOString(),
@@ -274,7 +233,7 @@ async function main() {
   );
   console.log(`upstream attempts: ${upstreamGuard.attempts.length}`);
   const ok = rows.every((r) => r.pass) && upstreamGuard.attempts.length === 0;
-  console.log(ok ? "reels layout PASS" : "reels layout FAILED");
+  console.log(ok ? 'reels layout PASS' : 'reels layout FAILED');
   return ok ? 0 : 1;
 }
 

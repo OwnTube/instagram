@@ -24,7 +24,7 @@ const backendApp = require('./backend');
 const backendConfig = require('./backend/config');
 const { createClone, classify } = require('./clone');
 const { personalize, viewerObject } = require('./shell/personalize');
-const { parseAnswer, homeRoute, profileRoute, storiesRoute, activityRoute, directInboxRoute, reelsRoute, exploreRoute, postRoute, errorRoute, unavailableRoute } = require('./shell/signedInRoute');
+const { parseAnswer, homeRoute, profileRoute, storiesRoute, activityRoute, directInboxRoute, reelsRoute, mobileReelsRoute, exploreRoute, postRoute, errorRoute, unavailableRoute } = require('./shell/signedInRoute');
 const { matchPage } = require('./pages/registry');
 const { EMOJI_HOSTS, parseEmojiPath, emojiSvg } = require('./emoji');
 const { createPatcher } = require('./shell/bundlePatches');
@@ -374,6 +374,18 @@ function canonicalDocPath(req) {
 }
 
 /**
+ * Whether the browser asking is a phone, by its User-Agent (as Instagram's
+ * server decides which Reels page to route). The page's own InstagramUserAgent
+ * config is left as stored (is_mobile false): the client's phone-web mode
+ * needs modules and bindings this server does not hold yet, so phones get the
+ * client's narrow-window layout, with the mobile Reels viewer.
+ */
+function isPhone(req) {
+  const ua = String(req.headers['user-agent'] || '').slice(0, 512);
+  return !/iPad/.test(ua) && (/Mobi|iPhone|iPod/.test(ua) || /Android.*Mobile/.test(ua));
+}
+
+/**
  * The signed-in route for a document request (src/shell/signedInRoute.js),
  * from the page registry: the page's route when this server serves it; the
  * client's not-found route (HTTP 404) for a profile, stories or post URL
@@ -391,12 +403,15 @@ function signedInRouteFor(req, viewer = null) {
   if (page.id === 'notifications') return activityRoute();
   if (page.id === 'direct_inbox') return directInboxRoute();
   if (page.id === 'direct_thread') return /^\d{1,30}$/.test(params.thread_key) ? directInboxRoute(params.thread_key) : errorRoute(req.path);
-  if (page.id === 'reels' && !params.shortcode) return reelsRoute();
+  // Instagram's server gives phones the mobile Reels viewer and other browsers the desktop page.
+  const phone = isPhone(req);
+  if (page.id === 'reels' && !params.shortcode) return phone ? mobileReelsRoute() : reelsRoute();
   if (page.id === 'explore') return exploreRoute();
   if (!cloneInstance) return unavailable();
   if (page.id === 'reels') {
     const post = cloneInstance.postByCode(params.shortcode, viewer);
-    return post && post.mediaType === 'video' ? reelsRoute(post.code, String(post.pk)) : errorRoute(req.path);
+    if (!post || post.mediaType !== 'video') return errorRoute(req.path);
+    return phone ? mobileReelsRoute(post.code) : reelsRoute(post.code, String(post.pk));
   }
   if (page.id === 'post') {
     const post = cloneInstance.postByCode(params.shortcode, viewer);

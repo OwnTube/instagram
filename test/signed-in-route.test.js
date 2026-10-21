@@ -247,6 +247,20 @@ test('desktop Reels: PolarisClipsTabDesktopRoot as recorded, when the snapshot h
     assert.deepStrictEqual(route.polarisRouteConfig, { hideFooter: true, footerVariant: 'none', shellProps: { isGlypHeaderIcon: false }, pageID: 'reelsTab' }, p);
     assert.strictEqual(route.canonicalRouteName, 'comet.igweb.PolarisClipsTabDesktopProfiledContentRoute');
   }
+  // A phone gets the mobile Reels viewer (an iPad and a desktop the desktop page).
+  const agents = {
+    'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36': 'PolarisClipsTabRoot',
+    'Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1': 'PolarisClipsTabRoot',
+    'Mozilla/5.0 (iPad; CPU OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1': 'PolarisClipsTabDesktopRoot',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36': 'PolarisClipsTabDesktopRoot',
+  };
+  for (const [agent, root] of Object.entries(agents)) {
+    const res = await viewer.get(`/reels/${reel.code}/`, { headers: { accept: 'text/html', 'sec-fetch-site': 'none', 'user-agent': agent } });
+    const route = initialize(res.text);
+    assert.deepStrictEqual(route.rootView.entryPoint, { __dr: `${root}.entrypoint` }, agent);
+    assert.strictEqual(route.params.shortcode, reel.code, agent);
+    assert.strictEqual(res.headers.get('x-clone-page-degraded'), null, agent);
+  }
   assert.deepStrictEqual(s.upstream, []);
 });
 
