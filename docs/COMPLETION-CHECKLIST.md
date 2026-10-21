@@ -88,9 +88,17 @@ These are pending tasks; this review does not mark any page fixed.
   `/accounts/password/reset/` (throttled or refused in earlier passes) after
   the answers and assets, so a 429 there no longer costs the rest.
 
-  Next: after the cooldown, one pass for revision 1051138993 (or whatever
-  revision is current then). Then build it with the HAR staging if the
-  revisions match.
+  Pass at 18:22Z (`.cache/acquired/20261021T182226Z`), after the cooldown:
+  - Instagram now serves revision 1051154526, not the HAR's 1051138993, so
+    the HAR staging is not combined with it (the build refuses mixed revisions).
+  - Staged `/`, `/accounts/emailsignup/` and all 64 answers with no 429. These
+    include the desktop Reels, Explore, keyword search, desktop post, profile
+    posts/reels tab and Stories V3 roots and entry points (100-900 KB each).
+  - The pass stopped by design before the asset step (1609 static assets
+    missing, more than the 600 default). It is being completed with
+    `--assets-for` (static host only, sequential, stops at the first 429).
+  - `/accounts/login/` and `/accounts/password/reset/` come last and were
+    not requested.
   Import actual HTML, JavaScript, CSS and bootloader response bodies, decoding
   HAR base64 where needed, into a staged candidate with provenance and hashes.
   The existing `scripts/capture-authenticated.js` produces response shapes;
